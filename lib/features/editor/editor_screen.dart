@@ -214,6 +214,11 @@ class _EditorState extends ConsumerState<_Editor> {
       ),
     ];
 
+    final commandShortcuts = <afe.CommandShortcutEvent>[
+      ...afe.standardCommandShortcutEvents,
+      ...afe.findAndReplaceCommands(context: context),
+    ];
+
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _saveNow,
@@ -233,6 +238,7 @@ class _EditorState extends ConsumerState<_Editor> {
                 editorStyle: style,
                 blockComponentBuilders: blockBuilders,
                 characterShortcutEvents: shortcutEvents,
+                commandShortcutEvents: commandShortcuts,
                 autoFocus: true,
               ),
             ),

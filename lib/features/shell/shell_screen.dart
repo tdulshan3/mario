@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../ui/colors.dart';
 import '../../ui/widgets/resizable_panel.dart';
 import '../editor/editor_screen.dart';
+import 'keyboard_shortcuts.dart';
 import 'notebook_panel.dart';
 import 'page_panel.dart';
 import 'shell_state.dart';
@@ -18,15 +19,17 @@ class ShellScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return Scaffold(
-      appBar: const ShellToolbar(),
-      body: Row(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: const [
-          ResizablePanel(initialWidth: 200, child: NotebookPanel()),
-          ResizablePanel(initialWidth: 250, child: PagePanel()),
-          Expanded(child: _CanvasPlaceholder()),
-        ],
+    return GlobalShortcuts(
+      child: Scaffold(
+        appBar: const ShellToolbar(),
+        body: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: const [
+            ResizablePanel(initialWidth: 200, child: NotebookPanel()),
+            ResizablePanel(initialWidth: 250, child: PagePanel()),
+            Expanded(child: _CanvasPlaceholder()),
+          ],
+        ),
       ),
     );
   }

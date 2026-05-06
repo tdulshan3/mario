@@ -5,9 +5,14 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import 'package:get_it/get_it.dart';
+
 import '../../core/models/note_page.dart';
 import '../../core/models/section.dart';
+import '../../core/services/drive_service.dart';
 import '../../ui/colors.dart';
+import '../export/markdown_exporter.dart';
+import '../export/pdf_exporter.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
 import 'shell_state.dart';
@@ -459,6 +464,12 @@ class _PageListState extends ConsumerState<_PageList> {
         await ref.read(syncServiceProvider).updatePage(
               page.copyWith(title: title, updatedAt: DateTime.now()),
             );
+      case _PageAction.exportMd:
+        await MarkdownExporter(GetIt.I<DriveService>())
+            .exportPageToFile(context, page);
+      case _PageAction.exportPdf:
+        await PdfExporter(GetIt.I<DriveService>())
+            .exportPageToFile(context, page);
       case _PageAction.delete:
         final ok = await showConfirmDialog(
           context,
@@ -472,7 +483,7 @@ class _PageListState extends ConsumerState<_PageList> {
   }
 }
 
-enum _PageAction { rename, delete }
+enum _PageAction { rename, exportMd, exportPdf, delete }
 
 class _PageTile extends StatelessWidget {
   const _PageTile({
@@ -540,6 +551,10 @@ class _PageTile extends StatelessWidget {
       ),
       items: const [
         PopupMenuItem(value: _PageAction.rename, child: Text('Rename')),
+        PopupMenuItem(
+            value: _PageAction.exportMd, child: Text('Export as Markdown')),
+        PopupMenuItem(
+            value: _PageAction.exportPdf, child: Text('Export as PDF')),
         PopupMenuItem(value: _PageAction.delete, child: Text('Delete')),
       ],
     );

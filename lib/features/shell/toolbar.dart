@@ -3,10 +3,13 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
 import '../auth/auth_notifier.dart';
+import '../search/global_search.dart';
+import '../sharing/share_dialog.dart';
 import 'shell_state.dart';
 
 class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
@@ -49,17 +52,17 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
                 const Spacer(),
                 IconButton(
                   tooltip: 'Search (Ctrl+Shift+F)',
-                  onPressed: () {},
+                  onPressed: () => showGlobalSearch(context),
                   icon: const Icon(Icons.search, size: 18),
                 ),
                 IconButton(
                   tooltip: 'Share',
-                  onPressed: () {},
+                  onPressed: () => showShareDialog(context, ref),
                   icon: const Icon(Icons.ios_share, size: 18),
                 ),
                 IconButton(
                   tooltip: 'Settings',
-                  onPressed: () {},
+                  onPressed: () => context.push('/settings'),
                   icon: const Icon(Icons.settings_outlined, size: 18),
                 ),
                 IconButton(
