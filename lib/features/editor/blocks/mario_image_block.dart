@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -116,22 +117,19 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
     });
   }
 
-  Future<void> _insertLine(String line) async {
+  /// Insert all OCR'd lines as paragraphs immediately after the image, then
+  /// dismiss the panel. Single action — no per-line clicking.
+  Future<void> _insertAll() async {
     final editorState = context.read<afe.EditorState>();
-    final selection = editorState.selection;
-    if (selection != null && selection.isCollapsed) {
-      final node = editorState.getNodeAtPath(selection.end.path);
-      final delta = node?.delta;
-      if (node != null && delta != null) {
-        await safeApply(editorState, (tx) {
-          tx.insertText(node, selection.end.offset, line);
-        });
-        return;
-      }
-    }
-    // Fallback: append a new paragraph after the image.
+    final lines = _ocrLines.where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isEmpty) return;
     await safeApply(editorState, (tx) {
-      tx.insertNode(widget.node.path.next, _paragraphFrom(line));
+      var path = widget.node.path.next;
+      for (final line in lines) {
+        tx.insertNode(path, _paragraphFrom(line));
+        path = path.next;
+      }
+      tx.updateNode(widget.node, {MarioImageKeys.ocrDismissed: true});
     });
   }
 
@@ -188,64 +186,96 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
               ),
             )
           else if (!_dismissed && _ocrLines.isNotEmpty)
-            Container(
-              margin: const EdgeInsets.only(top: 8),
-              decoration: BoxDecoration(
-                color: MarioColors.primary
-                    .withValues(alpha: isDark ? 0.08 : 0.18),
-                border: Border(
-                    left: BorderSide(color: MarioColors.primary, width: 3)),
-                borderRadius: const BorderRadius.only(
-                  topRight: Radius.circular(6),
-                  bottomRight: Radius.circular(6),
-                ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(12, 8, 4, 4),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Detected text (${_ocrLines.length}) — tap to insert',
-                            style: GoogleFonts.inter(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600,
-                                color: muted),
-                          ),
-                        ),
-                        IconButton(
-                          tooltip: 'Dismiss',
-                          icon: const Icon(Icons.close, size: 14),
-                          onPressed: _dismiss,
-                          padding: EdgeInsets.zero,
-                          constraints: const BoxConstraints(
-                              maxHeight: 24, maxWidth: 24),
-                        ),
-                      ],
-                    ),
+            Focus(
+              autofocus: false,
+              onKeyEvent: (node, event) {
+                if (event is KeyDownEvent &&
+                    event.logicalKey == LogicalKeyboardKey.tab) {
+                  _insertAll();
+                  return KeyEventResult.handled;
+                }
+                return KeyEventResult.ignored;
+              },
+              child: Container(
+                margin: const EdgeInsets.only(top: 8),
+                decoration: BoxDecoration(
+                  color: MarioColors.primary
+                      .withValues(alpha: isDark ? 0.08 : 0.18),
+                  border: Border(
+                      left: BorderSide(color: MarioColors.primary, width: 3)),
+                  borderRadius: const BorderRadius.only(
+                    topRight: Radius.circular(6),
+                    bottomRight: Radius.circular(6),
                   ),
-                  for (final line in _ocrLines)
-                    InkWell(
-                      onTap: () => _insertLine(line),
-                      child: Padding(
-                        padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
-                        child: Text(
-                          line,
-                          style: GoogleFonts.inter(
-                            fontSize: 12,
-                            color: muted.withValues(alpha: 0.9),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 4, 4),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Detected text (${_ocrLines.length} lines)',
+                              style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: muted),
+                            ),
                           ),
+                          IconButton(
+                            tooltip: 'Dismiss',
+                            icon: const Icon(Icons.close, size: 14),
+                            onPressed: _dismiss,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(
+                                maxHeight: 24, maxWidth: 24),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 6),
+                      child: Text(
+                        _ocrLines.join('\n'),
+                        style: GoogleFonts.inter(
+                          fontSize: 12,
+                          height: 1.4,
+                          color: muted.withValues(alpha: 0.9),
                         ),
                       ),
                     ),
-                  Container(
-                      height: 1,
-                      color: border.withValues(alpha: 0.4),
-                      margin: const EdgeInsets.symmetric(vertical: 4)),
-                ],
+                    Container(
+                        height: 1,
+                        color: border.withValues(alpha: 0.4),
+                        margin: const EdgeInsets.symmetric(horizontal: 12)),
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(8, 4, 8, 6),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton.icon(
+                            onPressed: _insertAll,
+                            icon: const Icon(Icons.keyboard_tab, size: 14),
+                            label: Text(
+                              'Tab — Insert all',
+                              style: GoogleFonts.inter(
+                                  fontSize: 11, fontWeight: FontWeight.w600),
+                            ),
+                            style: TextButton.styleFrom(
+                              foregroundColor: MarioColors.primaryPressed,
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
         ],

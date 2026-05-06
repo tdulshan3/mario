@@ -9,21 +9,29 @@ import 'math_tokenizer.dart';
 /// Trigger character for both tokenizer and auto-calc.
 const _trigger = ' ';
 
-/// Detect `<expression>=` immediately before the cursor (no space between
-/// expression and `=`). Returns the start index of the expression or -1.
-int _findEqualsExpression(String text, int cursor) {
-  if (cursor < 2) return -1;
-  if (text[cursor - 1] != '=') return -1;
-  // Walk left until whitespace or start of string. Allow digits, letters,
-  // operators, parens, dot.
-  final allowed = RegExp(r'[0-9a-zA-Z+\-*/^().,]');
-  int i = cursor - 2;
+/// Detect `<expression>=` (with optional surrounding spaces) before the
+/// cursor. Returns the (start, equalsIndex) pair or null.
+///
+/// Tolerates `2+2 = ` and `2+2= ` alike — Word/OneNote users routinely pad
+/// the equals sign with spaces.
+({int start, int equalsIdx})? _findEqualsExpression(String text, int cursor) {
+  if (cursor < 2) return null;
+  var equalsIdx = cursor - 1;
+  while (equalsIdx >= 0 && (text[equalsIdx] == ' ' || text[equalsIdx] == '\t')) {
+    equalsIdx--;
+  }
+  if (equalsIdx < 0 || text[equalsIdx] != '=') return null;
+  final allowed = RegExp(r'[0-9a-zA-Z+\-*/^()., \t]');
+  var i = equalsIdx - 1;
   while (i >= 0 && allowed.hasMatch(text[i])) {
     i--;
   }
-  final start = i + 1;
-  if (start >= cursor - 1) return -1;
-  return start;
+  var start = i + 1;
+  while (start < equalsIdx && (text[start] == ' ' || text[start] == '\t')) {
+    start++;
+  }
+  if (start >= equalsIdx) return null;
+  return (start: start, equalsIdx: equalsIdx);
 }
 
 /// The math shortcut. Place it at the head of [characterShortcutEvents] so it
@@ -47,9 +55,9 @@ Future<bool> _handle(afe.EditorState editorState) async {
   if (cursor < 0 || cursor > plain.length) return false;
 
   // 1. Auto-calc on `<expr>=` followed by space.
-  final exprStart = _findEqualsExpression(plain, cursor);
-  if (exprStart >= 0) {
-    final expression = plain.substring(exprStart, cursor - 1);
+  final eq = _findEqualsExpression(plain, cursor);
+  if (eq != null) {
+    final expression = plain.substring(eq.start, eq.equalsIdx);
     final result = MathEvaluator.tryEvaluate(expression);
     if (result != null) {
       // Insert " <result>" after the `=`. We consume the user's space.

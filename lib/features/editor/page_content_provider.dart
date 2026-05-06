@@ -1,20 +1,20 @@
-/// pageContentProvider — loads a page's Drive JSON into an AppFlowy Document.
+/// pageContentProvider — loads a page's raw Drive JSON.
+///
+/// Returns the raw map rather than a parsed [afe.Document]. The document is
+/// owned (and disposed) by the editor State that mounts it; if we cached a
+/// Document here, navigating away from a page would dispose it and the next
+/// remount would hit "Node was used after dispose" when AppFlowy tried to
+/// subscribe to its now-defunct nodes.
 library;
 
-import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../core/services/drive_service.dart';
 
-/// Loaded by Drive file ID so a page rename doesn't bust the cache.
 final pageContentProvider =
-    FutureProvider.family<afe.Document, String>((ref, driveFileId) async {
+    FutureProvider.family<Map<String, dynamic>, String>((ref, driveFileId) async {
   final drive = GetIt.I<DriveService>();
   final raw = await drive.readPageFile(driveFileId);
-  // Page JSON wraps the AppFlowy document shape with optional metadata fields.
-  final doc = raw.containsKey('document')
-      ? raw
-      : <String, dynamic>{'document': raw};
-  return afe.Document.fromJson(Map<String, dynamic>.from(doc));
+  return raw.containsKey('document') ? raw : <String, dynamic>{'document': raw};
 });

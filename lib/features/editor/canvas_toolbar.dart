@@ -1,8 +1,10 @@
-/// CanvasToolbar — OneNote-style persistent formatting toolbar above the editor.
+/// CanvasToolbar — Word-style ribbon above the editor.
 ///
-/// Surfaces the rich-text knobs the spec calls for: bold/italic/underline/
-/// strikethrough/code, font size, text color, highlight color, and quick
-/// inserts for image / drawing / spreadsheet / math.
+/// Headings, font family/size, bold/italic/underline/strikethrough/code,
+/// sub/super-script, text color, highlight, alignment, lists, quote, divider,
+/// and quick inserts for image/table/drawing/spreadsheet/math. Persists the
+/// last non-collapsed selection so popups (color, size, font) don't drop the
+/// user's range when they steal focus.
 library;
 
 import 'dart:io';
@@ -19,7 +21,16 @@ import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
 
-const _fontSizes = [10.0, 12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 36.0, 48.0];
+const _fontSizes = [10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 28.0, 32.0, 36.0, 48.0];
+
+const _fontFamilies = <String>[
+  'Inter',
+  'Roboto',
+  'Source Sans 3',
+  'Lora',
+  'Merriweather',
+  'JetBrains Mono',
+];
 
 const _palette = <Color>[
   Color(0xFF1A1A1A),
@@ -35,15 +46,32 @@ const _palette = <Color>[
 ];
 
 class CanvasToolbar extends StatefulWidget {
-  const CanvasToolbar({super.key, required this.editorState});
+  const CanvasToolbar({
+    super.key,
+    required this.editorState,
+    required this.zoom,
+    required this.onZoomIn,
+    required this.onZoomOut,
+    required this.onZoomReset,
+    this.trailing,
+  });
 
   final afe.EditorState editorState;
+  final double zoom;
+  final VoidCallback onZoomIn;
+  final VoidCallback onZoomOut;
+  final VoidCallback onZoomReset;
+  final Widget? trailing;
 
   @override
   State<CanvasToolbar> createState() => _CanvasToolbarState();
 }
 
 class _CanvasToolbarState extends State<CanvasToolbar> {
+  /// Cached so toolbar popups (which steal focus and collapse the live
+  /// selection) can still apply formatting to the user's last visual range.
+  afe.Selection? _lastEditableSelection;
+
   @override
   void initState() {
     super.initState();
@@ -58,10 +86,21 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
 
   void _onSelectionChanged() {
     if (!mounted) return;
+    final sel = widget.editorState.selection;
+    if (sel != null && !sel.isCollapsed) {
+      _lastEditableSelection = sel;
+    }
     setState(() {});
   }
 
-  /// True when every text run in the current selection has the given key set.
+  /// Selection to format against — prefers live, falls back to cached so a
+  /// popup losing focus doesn't make the toolbar a no-op.
+  afe.Selection? _resolveSelection() {
+    final live = widget.editorState.selection;
+    if (live != null && !live.isCollapsed) return live;
+    return _lastEditableSelection;
+  }
+
   bool _isAttributeOn(String key) {
     final selection = widget.editorState.selection;
     if (selection == null) return false;
@@ -76,8 +115,8 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
       widget.editorState.toggleAttribute(key);
 
   Future<void> _formatColor(String key, Color? color) async {
-    final selection = widget.editorState.selection;
-    if (selection == null || selection.isCollapsed) return;
+    final selection = _resolveSelection();
+    if (selection == null) return;
     await widget.editorState.formatDelta(
       selection,
       {key: color == null ? null : '0x${color.toARGB32().toRadixString(16)}'},
@@ -85,18 +124,82 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
   }
 
   Future<void> _setFontSize(double size) async {
-    final selection = widget.editorState.selection;
-    if (selection == null || selection.isCollapsed) return;
+    final selection = _resolveSelection();
+    if (selection == null) return;
     await widget.editorState.formatDelta(
       selection,
       {afe.AppFlowyRichTextKeys.fontSize: size},
     );
   }
 
+  Future<void> _setFontFamily(String family) async {
+    final selection = _resolveSelection();
+    if (selection == null) return;
+    await widget.editorState.formatDelta(
+      selection,
+      {afe.AppFlowyRichTextKeys.fontFamily: family},
+    );
+  }
+
+  Future<void> _setHeading(int? level) async {
+    final selection =
+        widget.editorState.selection ?? _lastEditableSelection;
+    if (selection == null) return;
+    await widget.editorState.formatNode(selection, (node) {
+      if (level == null) {
+        return node.copyWith(
+          type: afe.ParagraphBlockKeys.type,
+          attributes: {
+            afe.ParagraphBlockKeys.delta:
+                (node.delta ?? afe.Delta()).toJson(),
+          },
+        );
+      }
+      return node.copyWith(
+        type: afe.HeadingBlockKeys.type,
+        attributes: {
+          afe.HeadingBlockKeys.level: level,
+          afe.HeadingBlockKeys.delta: (node.delta ?? afe.Delta()).toJson(),
+        },
+      );
+    });
+  }
+
+  Future<void> _setListType(String type) async {
+    final selection =
+        widget.editorState.selection ?? _lastEditableSelection;
+    if (selection == null) return;
+    await widget.editorState.formatNode(selection, (node) {
+      // Toggle: re-applying same list type reverts to paragraph.
+      final next = node.type == type ? afe.ParagraphBlockKeys.type : type;
+      return node.copyWith(
+        type: next,
+        attributes: {
+          ...node.attributes,
+          // delta key name is stable across these block types.
+          'delta': (node.delta ?? afe.Delta()).toJson(),
+        },
+      );
+    });
+  }
+
+  Future<void> _setAlign(String align) async {
+    final selection =
+        widget.editorState.selection ?? _lastEditableSelection;
+    if (selection == null) return;
+    await widget.editorState.updateNode(selection, (node) {
+      return node.copyWith(attributes: {
+        ...node.attributes,
+        afe.blockComponentAlign: align,
+      });
+    });
+  }
+
   Future<void> _insertNode(afe.Node node) async {
     if (widget.editorState.isDisposed) return;
-    final selection = widget.editorState.selection;
-    final path = selection?.end.path ?? widget.editorState.document.root.children.last.path;
+    final selection = widget.editorState.selection ?? _lastEditableSelection;
+    final path = selection?.end.path ??
+        widget.editorState.document.root.children.last.path;
     final tx = widget.editorState.transaction..insertNode(path.next, node);
     await widget.editorState.apply(tx);
   }
@@ -117,25 +220,27 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
   }
 
   Future<void> _insertTable() async {
-    // AppFlowy's standard table block ships in stableBlockComponentBuilderMap.
-    final tableNode = afe.Node(
-      type: 'table',
-      attributes: const {
-        'colsLen': 3,
-        'rowsLen': 3,
-        'colDefaultWidth': 80.0,
-        'rowDefaultHeight': 40.0,
-      },
-    );
+    // 3×3 — AppFlowy's table block requires fully-populated cell children;
+    // an empty `table` node renders nothing.
+    final tableNode = afe.TableNode.fromList<String>([
+      ['', '', ''],
+      ['', '', ''],
+      ['', '', ''],
+    ]).node;
     await _insertNode(tableNode);
+  }
+
+  Future<void> _insertDivider() async {
+    await _insertNode(afe.Node(type: 'divider'));
   }
 
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
-    final hasSelection = widget.editorState.selection != null &&
-        !widget.editorState.selection!.isCollapsed;
+    final selection = widget.editorState.selection;
+    final hasRange = (selection != null && !selection.isCollapsed) ||
+        _lastEditableSelection != null;
 
     return Container(
       decoration: BoxDecoration(
@@ -147,6 +252,15 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _HeadingDropdown(onChanged: _setHeading),
+            const _Divider(),
+            _FontFamilyDropdown(onChanged: _setFontFamily),
+            const SizedBox(width: 4),
+            _FontSizeDropdown(
+              enabled: hasRange,
+              onChanged: _setFontSize,
+            ),
+            const _Divider(),
             _ToggleButton(
               icon: Icons.format_bold,
               tooltip: 'Bold (Ctrl+B)',
@@ -179,25 +293,57 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
               onPressed: () => _toggle(afe.AppFlowyRichTextKeys.code),
             ),
             const _Divider(),
-            _FontSizeDropdown(
-              enabled: hasSelection,
-              onChanged: _setFontSize,
-            ),
-            const _Divider(),
             _ColorButton(
               icon: Icons.format_color_text,
               tooltip: 'Text color',
-              enabled: hasSelection,
+              enabled: hasRange,
               onPicked: (c) =>
                   _formatColor(afe.AppFlowyRichTextKeys.textColor, c),
             ),
             _ColorButton(
               icon: Icons.format_color_fill,
               tooltip: 'Highlight',
-              enabled: hasSelection,
+              enabled: hasRange,
               defaultColor: MarioColors.primary,
               onPicked: (c) =>
                   _formatColor(afe.AppFlowyRichTextKeys.backgroundColor, c),
+            ),
+            const _Divider(),
+            _IconAction(
+              icon: Icons.format_align_left,
+              tooltip: 'Align left',
+              onPressed: () => _setAlign('left'),
+            ),
+            _IconAction(
+              icon: Icons.format_align_center,
+              tooltip: 'Align center',
+              onPressed: () => _setAlign('center'),
+            ),
+            _IconAction(
+              icon: Icons.format_align_right,
+              tooltip: 'Align right',
+              onPressed: () => _setAlign('right'),
+            ),
+            const _Divider(),
+            _IconAction(
+              icon: Icons.format_list_bulleted,
+              tooltip: 'Bullet list',
+              onPressed: () => _setListType('bulleted_list'),
+            ),
+            _IconAction(
+              icon: Icons.format_list_numbered,
+              tooltip: 'Numbered list',
+              onPressed: () => _setListType('numbered_list'),
+            ),
+            _IconAction(
+              icon: Icons.checklist,
+              tooltip: 'Todo list',
+              onPressed: () => _setListType('todo_list'),
+            ),
+            _IconAction(
+              icon: Icons.format_quote,
+              tooltip: 'Quote',
+              onPressed: () => _setListType('quote'),
             ),
             const _Divider(),
             _IconAction(
@@ -225,8 +371,97 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
               tooltip: 'Insert math equation',
               onPressed: () => _insertNode(mathEquationNode()),
             ),
+            _IconAction(
+              icon: Icons.horizontal_rule,
+              tooltip: 'Insert divider',
+              onPressed: _insertDivider,
+            ),
+            const _Divider(),
+            _IconAction(
+              icon: Icons.zoom_out,
+              tooltip: 'Zoom out (Ctrl+-)',
+              onPressed: widget.onZoomOut,
+            ),
+            InkWell(
+              onTap: widget.onZoomReset,
+              borderRadius: BorderRadius.circular(4),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+                child: Text(
+                  '${(widget.zoom * 100).round()}%',
+                  style: GoogleFonts.inter(fontSize: 11),
+                ),
+              ),
+            ),
+            _IconAction(
+              icon: Icons.zoom_in,
+              tooltip: 'Zoom in (Ctrl+=)',
+              onPressed: widget.onZoomIn,
+            ),
+            if (widget.trailing != null) ...[
+              const _Divider(),
+              widget.trailing!,
+            ],
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _HeadingDropdown extends StatelessWidget {
+  const _HeadingDropdown({required this.onChanged});
+  final ValueChanged<int?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 96,
+      child: DropdownButton<int?>(
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        hint: Text('Style', style: GoogleFonts.inter(fontSize: 11)),
+        items: [
+          DropdownMenuItem(
+              value: null,
+              child: Text('Normal', style: GoogleFonts.inter(fontSize: 12))),
+          for (var i = 1; i <= 3; i++)
+            DropdownMenuItem(
+              value: i,
+              child: Text('Heading $i',
+                  style: GoogleFonts.inter(
+                      fontSize: 12 + (3 - i) * 1.0,
+                      fontWeight: FontWeight.w600)),
+            ),
+        ],
+        onChanged: onChanged,
+      ),
+    );
+  }
+}
+
+class _FontFamilyDropdown extends StatelessWidget {
+  const _FontFamilyDropdown({required this.onChanged});
+  final ValueChanged<String> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 120,
+      child: DropdownButton<String>(
+        isDense: true,
+        underline: const SizedBox.shrink(),
+        hint: Text('Font', style: GoogleFonts.inter(fontSize: 11)),
+        items: [
+          for (final f in _fontFamilies)
+            DropdownMenuItem(
+              value: f,
+              child: Text(f, style: GoogleFonts.inter(fontSize: 12)),
+            ),
+        ],
+        onChanged: (v) {
+          if (v != null) onChanged(v);
+        },
       ),
     );
   }
@@ -284,6 +519,8 @@ class _IconAction extends StatelessWidget {
         onPressed: onPressed,
         icon: Icon(icon, size: 16),
         visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.all(6),
+        constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
       );
 }
 
@@ -310,7 +547,7 @@ class _FontSizeDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SizedBox(
-      width: 64,
+      width: 56,
       child: DropdownButton<double>(
         isDense: true,
         underline: const SizedBox.shrink(),

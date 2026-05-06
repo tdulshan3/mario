@@ -4,6 +4,7 @@ library;
 import 'dart:async';
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -22,6 +23,7 @@ import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
 import 'canvas_toolbar.dart';
 import 'page_content_provider.dart';
+import 'word_shortcuts.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
 /// Drive JSON is fetched, then mounts the AppFlowyEditor.
@@ -48,11 +50,11 @@ class EditorScreen extends ConsumerWidget {
         ),
       ),
       error: (e, _) => _UnavailableContent(message: 'Could not load page: $e'),
-      data: (document) => _Editor(
+      data: (rawJson) => _Editor(
         key: ValueKey(fileId),
         page: page,
         driveFileId: fileId,
-        initialDocument: document,
+        rawJson: rawJson,
       ),
     );
   }
@@ -87,12 +89,12 @@ class _Editor extends ConsumerStatefulWidget {
     super.key,
     required this.page,
     required this.driveFileId,
-    required this.initialDocument,
+    required this.rawJson,
   });
 
   final NotePage page;
   final String driveFileId;
-  final afe.Document initialDocument;
+  final Map<String, dynamic> rawJson;
 
   @override
   ConsumerState<_Editor> createState() => _EditorState();
@@ -106,29 +108,67 @@ class _EditorState extends ConsumerState<_Editor> {
   DateTime? _lastSavedAt;
   static const _debounce = Duration(seconds: 2);
 
+  // Zoom — toolbar buttons, Ctrl+0 reset, Ctrl+wheel.
+  double _zoom = 1.0;
+  static const _zoomMin = 0.5;
+  static const _zoomMax = 3.0;
+  static const _zoomStep = 0.1;
+
+  // Tracks Ctrl modifier so the canvas can disable scroll-physics during
+  // Ctrl+wheel (otherwise both scroll and zoom would fire on the same event).
+  bool _ctrlDown = false;
+
+  // Independent controllers so vertical and horizontal scrollbars can be
+  // attached without sharing state with AppFlowy's internal scroller.
+  final ScrollController _vScroll = ScrollController();
+  final ScrollController _hScroll = ScrollController();
+
   @override
   void initState() {
     super.initState();
-    _editorState = afe.EditorState(document: widget.initialDocument);
+    _editorState = afe.EditorState(document: afe.Document.fromJson(widget.rawJson));
     _txSub = _editorState.transactionStream.listen(_onTransaction);
+    HardwareKeyboard.instance.addHandler(_onHardwareKey);
   }
 
   @override
   void dispose() {
     _saveTimer?.cancel();
     _txSub.cancel();
-    // AppFlowy mounts its keyboard/scroll/selection services inside an Overlay,
-    // so they unmount AFTER this State. Disposing the EditorState synchronously
-    // would tear down its selectionNotifier before those services call
-    // removeListener — Flutter throws "node was used after dispose". Defer the
-    // disposal one frame so the children finish cleaning up first.
+    HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    _vScroll.dispose();
+    _hScroll.dispose();
     final state = _editorState;
     WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
     super.dispose();
   }
 
+  bool _onHardwareKey(KeyEvent event) {
+    final ctrl = HardwareKeyboard.instance.isControlPressed;
+    if (ctrl != _ctrlDown && mounted) {
+      // Schedule outside the key-event callback to avoid setState during build.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() => _ctrlDown = ctrl);
+      });
+    }
+    return false; // never consume — let editor see the keys.
+  }
+
+  void _onPointerSignal(PointerSignalEvent event) {
+    if (event is! PointerScrollEvent) return;
+    if (!HardwareKeyboard.instance.isControlPressed) return;
+    GestureBinding.instance.pointerSignalResolver.register(event, (e) {
+      final dy = (e as PointerScrollEvent).scrollDelta.dy;
+      if (dy < 0) {
+        _zoomIn();
+      } else if (dy > 0) {
+        _zoomOut();
+      }
+    });
+  }
+
   void _onTransaction((afe.TransactionTime, afe.Transaction) event) {
-    // Only react after a transaction has been applied.
     if (event.$1 != afe.TransactionTime.after) return;
     if (!mounted) return;
     setState(() => _status = SaveStatus.dirty);
@@ -167,11 +207,26 @@ class _EditorState extends ConsumerState<_Editor> {
     _save();
   }
 
+  void _zoomIn() {
+    setState(() => _zoom = (_zoom + _zoomStep).clamp(_zoomMin, _zoomMax));
+  }
+
+  void _zoomOut() {
+    setState(() => _zoom = (_zoom - _zoomStep).clamp(_zoomMin, _zoomMax));
+  }
+
+  void _zoomReset() {
+    setState(() => _zoom = 1.0);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted =
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+    final canvasBg =
+        isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE9E9E9);
+    final paper = isDark ? const Color(0xFF242424) : Colors.white;
 
     final style = isDark
         ? afe.EditorStyle.desktop(
@@ -180,7 +235,7 @@ class _EditorState extends ConsumerState<_Editor> {
             padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
-                  fontSize: 15, color: MarioColors.onSurfaceDark, height: 1.6),
+                  fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.35),
             ),
           )
         : afe.EditorStyle.desktop(
@@ -189,7 +244,7 @@ class _EditorState extends ConsumerState<_Editor> {
             padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
-                  fontSize: 15, color: MarioColors.onSurface, height: 1.6),
+                  fontSize: 14, color: MarioColors.onSurface, height: 1.35),
             ),
           );
 
@@ -221,36 +276,127 @@ class _EditorState extends ConsumerState<_Editor> {
       ),
     ];
 
+    // Word-style shortcuts win over AppFlowy defaults where keys collide
+    // (Ctrl+E especially: AppFlowy used it for inline-code; Word uses it for
+    // align-center).
     final commandShortcuts = <afe.CommandShortcutEvent>[
-      ...afe.standardCommandShortcutEvents,
+      ...wordCommandShortcuts(),
+      ...afe.standardCommandShortcutEvents.where(
+        (e) => !_overriddenShortcutKeys.contains(e.key),
+      ),
       ...afe.findAndReplaceCommands(context: context),
     ];
+
+    final scrollPhysics = _ctrlDown
+        ? const NeverScrollableScrollPhysics()
+        : const BouncingScrollPhysics();
 
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _saveNow,
+        const SingleActivator(LogicalKeyboardKey.digit0, control: true):
+            _zoomReset,
       },
       child: Focus(
         autofocus: false,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _PageHeader(
-              page: widget.page,
+            CanvasToolbar(
+              editorState: _editorState,
+              zoom: _zoom,
+              onZoomIn: _zoomIn,
+              onZoomOut: _zoomOut,
+              onZoomReset: _zoomReset,
               trailing: VoiceDictationButton(editorState: _editorState),
             ),
-            CanvasToolbar(editorState: _editorState),
             Expanded(
-              child: afe.AppFlowyEditor(
-                editorState: _editorState,
-                editorStyle: style,
-                blockComponentBuilders: blockBuilders,
-                characterShortcutEvents: shortcutEvents,
-                commandShortcutEvents: commandShortcuts,
-                autoFocus: true,
+              child: Container(
+                color: canvasBg,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    const cardWidth = 820.0;
+                    final scaledWidth = cardWidth * _zoom;
+                    final viewport = constraints.maxWidth;
+                    // When the scaled card is narrower than the viewport, pad
+                    // the inner row so the centred card has elbow room. When
+                    // wider, the row matches the scaled width and the
+                    // horizontal scrollview moves it.
+                    final innerWidth =
+                        scaledWidth < viewport ? viewport : scaledWidth + 32;
+                    return Listener(
+                      onPointerSignal: _onPointerSignal,
+                      child: Scrollbar(
+                        controller: _vScroll,
+                        thumbVisibility: true,
+                        child: SingleChildScrollView(
+                          controller: _vScroll,
+                          physics: scrollPhysics,
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Scrollbar(
+                            controller: _hScroll,
+                            thumbVisibility: scaledWidth > viewport,
+                            notificationPredicate: (n) => n.depth == 1,
+                            child: SingleChildScrollView(
+                              controller: _hScroll,
+                              scrollDirection: Axis.horizontal,
+                              physics: scrollPhysics,
+                              child: SizedBox(
+                                width: innerWidth,
+                                child: Center(
+                                  child: SizedBox(
+                                    width: scaledWidth,
+                                    child: FittedBox(
+                                      fit: BoxFit.fitWidth,
+                                      alignment: Alignment.topCenter,
+                                      child: SizedBox(
+                                        width: cardWidth,
+                                        child: Material(
+                                          color: paper,
+                                          elevation: isDark ? 0 : 2,
+                                          borderRadius:
+                                              BorderRadius.circular(2),
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.stretch,
+                                            children: [
+                                              _PageHeader(page: widget.page),
+                                              ConstrainedBox(
+                                                constraints:
+                                                    const BoxConstraints(
+                                                        minHeight: 600),
+                                                child: afe.AppFlowyEditor(
+                                                  editorState: _editorState,
+                                                  editorStyle: style,
+                                                  blockComponentBuilders:
+                                                      blockBuilders,
+                                                  characterShortcutEvents:
+                                                      shortcutEvents,
+                                                  commandShortcutEvents:
+                                                      commandShortcuts,
+                                                  autoFocus: true,
+                                                  shrinkWrap: true,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
-            _StatusBar(status: _status, lastSavedAt: _lastSavedAt, muted: muted),
+            _StatusBar(
+                status: _status, lastSavedAt: _lastSavedAt, muted: muted),
           ],
         ),
       ),
@@ -258,10 +404,16 @@ class _EditorState extends ConsumerState<_Editor> {
   }
 }
 
+/// AppFlowy command keys whose shortcuts collide with Word equivalents we
+/// install via [wordCommandShortcuts]. Image-paste uses Ctrl+V but returns
+/// ignored, so AppFlowy's text paste remains in the chain.
+const _overriddenShortcutKeys = <String>{
+  'toggle code', // Ctrl+E — AppFlowy uses for code; Word uses for align-center
+};
+
 class _PageHeader extends StatelessWidget {
-  const _PageHeader({required this.page, this.trailing});
+  const _PageHeader({required this.page});
   final NotePage page;
-  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -269,31 +421,22 @@ class _PageHeader extends StatelessWidget {
     final muted =
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(64, 32, 64, 0),
-      child: Row(
+      padding: const EdgeInsets.fromLTRB(64, 16, 64, 0),
+      child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  page.title,
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  'Last edited ${_formatTime(page.updatedAt)}',
-                  style: GoogleFonts.inter(fontSize: 12, color: muted),
-                ),
-                const SizedBox(height: 8),
-              ],
+          Text(
+            page.title,
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 22,
+              fontWeight: FontWeight.w700,
             ),
           ),
-          if (trailing != null) trailing!,
+          const SizedBox(height: 2),
+          Text(
+            'Last edited ${_formatTime(page.updatedAt)}',
+            style: GoogleFonts.inter(fontSize: 11, color: muted),
+          ),
         ],
       ),
     );
@@ -326,12 +469,12 @@ class _StatusBar extends StatelessWidget {
     final isError = status == SaveStatus.error;
     final color = isError ? Theme.of(context).colorScheme.error : muted;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       alignment: Alignment.centerRight,
       child: Row(
         mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Icon(icon, size: 14, color: color),
+          Icon(icon, size: 13, color: color),
           const SizedBox(width: 6),
           Text(text,
               style: GoogleFonts.inter(fontSize: 11, color: color)),

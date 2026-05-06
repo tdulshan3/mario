@@ -68,8 +68,11 @@ class MathTokenizer {
   };
 
   static final RegExp _wordRe = RegExp(r'([a-zA-Z]+)$');
-  static final RegExp _supRe = RegExp(r'\^([0-9+\-=()ni])$');
-  static final RegExp _subRe = RegExp(r'_([0-9+\-=()])$');
+  // Match `^[+-]?<char>` so `2^-2 ` becomes `2⁻²` (sign and digit both
+  // mapped). Optional leading sign captured separately so we can keep the
+  // single-char form working when nobody typed a sign.
+  static final RegExp _supRe = RegExp(r'\^([+\-])?([0-9=()ni])$');
+  static final RegExp _subRe = RegExp(r'_([+\-])?([0-9=()])$');
 
   /// Find a replacement for the trailing token before [cursor] in [text].
   /// Returns null when nothing matches.
@@ -79,26 +82,32 @@ class MathTokenizer {
 
     final supMatch = _supRe.firstMatch(before);
     if (supMatch != null) {
-      final ch = supMatch.group(1)!;
-      final mapped = _superscript[ch];
-      if (mapped != null) {
+      final sign = supMatch.group(1);
+      final ch = supMatch.group(2)!;
+      final mappedCh = _superscript[ch];
+      if (mappedCh != null) {
+        final replacement =
+            sign == null ? mappedCh : '${_superscript[sign]!}$mappedCh';
         return MathToken(
           start: supMatch.start,
           length: supMatch.end - supMatch.start,
-          replacement: mapped,
+          replacement: replacement,
         );
       }
     }
 
     final subMatch = _subRe.firstMatch(before);
     if (subMatch != null) {
-      final ch = subMatch.group(1)!;
-      final mapped = _subscript[ch];
-      if (mapped != null) {
+      final sign = subMatch.group(1);
+      final ch = subMatch.group(2)!;
+      final mappedCh = _subscript[ch];
+      if (mappedCh != null) {
+        final replacement =
+            sign == null ? mappedCh : '${_subscript[sign]!}$mappedCh';
         return MathToken(
           start: subMatch.start,
           length: subMatch.end - subMatch.start,
-          replacement: mapped,
+          replacement: replacement,
         );
       }
     }

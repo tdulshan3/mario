@@ -1,0 +1,293 @@
+/// word_shortcuts — MS Word-compatible command shortcuts for the editor.
+///
+/// Adds: Ctrl+L/E/R/J align, Ctrl+Alt+1/2/3 headings, Ctrl+Shift+L/7 lists,
+/// Ctrl+]/[ font-size step, Ctrl+= subscript, Ctrl+Shift+= superscript, and
+/// Ctrl+V image-paste from system clipboard.
+library;
+
+import 'dart:io';
+
+import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pasteboard/pasteboard.dart';
+
+import 'blocks/mario_image_block.dart';
+
+/// All Word-style commands. Prepend to the editor's commandShortcutEvents so
+/// they win over AppFlowy's built-ins where keys collide (e.g. Ctrl+E was
+/// inline-code in AppFlowy; Word uses it for align-center).
+List<afe.CommandShortcutEvent> wordCommandShortcuts() => [
+      _alignCommand('left'),
+      _alignCenterCommand,
+      _alignCommand('right', key: 'mario.align.right', command: 'ctrl+r'),
+      _alignCommand('left',  key: 'mario.align.justify', command: 'ctrl+j'),
+      _headingCommand(1, 'ctrl+alt+1'),
+      _headingCommand(2, 'ctrl+alt+2'),
+      _headingCommand(3, 'ctrl+alt+3'),
+      _normalParagraphCommand,
+      _listCommand('bulleted_list', 'mario.list.bullet', 'ctrl+shift+l'),
+      _listCommand('numbered_list', 'mario.list.numbered', 'ctrl+shift+7'),
+      _listCommand('todo_list', 'mario.list.todo', 'ctrl+shift+9'),
+      _fontSizeStepCommand(1, 'mario.font.larger', 'ctrl+]'),
+      _fontSizeStepCommand(-1, 'mario.font.smaller', 'ctrl+['),
+      _toggleAttrCommand(
+        afe.AppFlowyRichTextKeys.code, 'mario.code', 'ctrl+shift+c'),
+      // Word: Ctrl+= subscript, Ctrl+Shift+= superscript. Implemented as
+      // unicode replacement of the selected text (AppFlowy's rich text doesn't
+      // ship a sub/super attribute, but unicode characters survive any export).
+      _unicodeMapCommand(_subscriptMap, 'mario.subscript', 'ctrl+='),
+      _unicodeMapCommand(_superscriptMap, 'mario.superscript', 'ctrl+shift+='),
+      _imagePasteCommand,
+    ];
+
+afe.CommandShortcutEvent _alignCommand(String align,
+    {String? key, String? command}) {
+  return afe.CommandShortcutEvent(
+    key: key ?? 'mario.align.$align',
+    command: command ?? 'ctrl+${align == 'left' ? 'l' : align[0]}',
+    getDescription: () => 'Align $align',
+    handler: (editorState) {
+      final selection = editorState.selection;
+      if (selection == null) return KeyEventResult.ignored;
+      editorState.updateNode(selection, (node) {
+        return node.copyWith(attributes: {
+          ...node.attributes,
+          afe.blockComponentAlign: align,
+        });
+      });
+      return KeyEventResult.handled;
+    },
+  );
+}
+
+final afe.CommandShortcutEvent _alignCenterCommand = afe.CommandShortcutEvent(
+  key: 'mario.align.center',
+  command: 'ctrl+e',
+  getDescription: () => 'Align center',
+  handler: (editorState) {
+    final selection = editorState.selection;
+    if (selection == null) return KeyEventResult.ignored;
+    editorState.updateNode(selection, (node) {
+      return node.copyWith(attributes: {
+        ...node.attributes,
+        afe.blockComponentAlign: 'center',
+      });
+    });
+    return KeyEventResult.handled;
+  },
+);
+
+afe.CommandShortcutEvent _headingCommand(int level, String command) {
+  return afe.CommandShortcutEvent(
+    key: 'mario.heading.$level',
+    command: command,
+    getDescription: () => 'Heading $level',
+    handler: (editorState) {
+      final selection = editorState.selection;
+      if (selection == null) return KeyEventResult.ignored;
+      editorState.formatNode(selection, (node) {
+        return node.copyWith(
+          type: afe.HeadingBlockKeys.type,
+          attributes: {
+            afe.HeadingBlockKeys.level: level,
+            afe.HeadingBlockKeys.delta: (node.delta ?? afe.Delta()).toJson(),
+          },
+        );
+      });
+      return KeyEventResult.handled;
+    },
+  );
+}
+
+final afe.CommandShortcutEvent _normalParagraphCommand =
+    afe.CommandShortcutEvent(
+  key: 'mario.heading.normal',
+  command: 'ctrl+alt+0',
+  getDescription: () => 'Normal text',
+  handler: (editorState) {
+    final selection = editorState.selection;
+    if (selection == null) return KeyEventResult.ignored;
+    editorState.formatNode(selection, (node) {
+      return node.copyWith(
+        type: afe.ParagraphBlockKeys.type,
+        attributes: {
+          afe.ParagraphBlockKeys.delta: (node.delta ?? afe.Delta()).toJson(),
+        },
+      );
+    });
+    return KeyEventResult.handled;
+  },
+);
+
+afe.CommandShortcutEvent _listCommand(String type, String key, String command) {
+  return afe.CommandShortcutEvent(
+    key: key,
+    command: command,
+    getDescription: () => 'Toggle $type',
+    handler: (editorState) {
+      final selection = editorState.selection;
+      if (selection == null) return KeyEventResult.ignored;
+      editorState.formatNode(selection, (node) {
+        final next = node.type == type ? afe.ParagraphBlockKeys.type : type;
+        return node.copyWith(
+          type: next,
+          attributes: {
+            ...node.attributes,
+            'delta': (node.delta ?? afe.Delta()).toJson(),
+          },
+        );
+      });
+      return KeyEventResult.handled;
+    },
+  );
+}
+
+afe.CommandShortcutEvent _toggleAttrCommand(
+    String attr, String key, String command) {
+  return afe.CommandShortcutEvent(
+    key: key,
+    command: command,
+    getDescription: () => 'Toggle $attr',
+    handler: (editorState) {
+      editorState.toggleAttribute(attr);
+      return KeyEventResult.handled;
+    },
+  );
+}
+
+afe.CommandShortcutEvent _fontSizeStepCommand(
+    int step, String key, String command) {
+  return afe.CommandShortcutEvent(
+    key: key,
+    command: command,
+    getDescription: () => step > 0 ? 'Increase font size' : 'Decrease font size',
+    handler: (editorState) {
+      final selection = editorState.selection;
+      if (selection == null || selection.isCollapsed) return KeyEventResult.ignored;
+      // Read current size from first node's attributes; default to 14.
+      final nodes = editorState.getNodesInSelection(selection);
+      double current = 14;
+      for (final n in nodes) {
+        final delta = n.delta;
+        if (delta == null) continue;
+        for (final op in delta.whereType<afe.TextInsert>()) {
+          final size = op.attributes?[afe.AppFlowyRichTextKeys.fontSize];
+          if (size is num) {
+            current = size.toDouble();
+            break;
+          }
+        }
+      }
+      const sizes = [
+        8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0,
+        22.0, 24.0, 28.0, 32.0, 36.0, 48.0, 60.0, 72.0,
+      ];
+      var idx = sizes.indexWhere((s) => s >= current);
+      if (idx < 0) idx = sizes.length - 1;
+      final next = sizes[(idx + step).clamp(0, sizes.length - 1)];
+      editorState.formatDelta(selection, {
+        afe.AppFlowyRichTextKeys.fontSize: next,
+      });
+      return KeyEventResult.handled;
+    },
+  );
+}
+
+const Map<String, String> _superscriptMap = {
+  '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+  '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+  '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+  'a': 'ᵃ', 'b': 'ᵇ', 'c': 'ᶜ', 'd': 'ᵈ', 'e': 'ᵉ',
+  'f': 'ᶠ', 'g': 'ᵍ', 'h': 'ʰ', 'i': 'ⁱ', 'j': 'ʲ',
+  'k': 'ᵏ', 'l': 'ˡ', 'm': 'ᵐ', 'n': 'ⁿ', 'o': 'ᵒ',
+  'p': 'ᵖ', 'r': 'ʳ', 's': 'ˢ', 't': 'ᵗ', 'u': 'ᵘ',
+  'v': 'ᵛ', 'w': 'ʷ', 'x': 'ˣ', 'y': 'ʸ', 'z': 'ᶻ',
+};
+
+const Map<String, String> _subscriptMap = {
+  '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+  '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+  '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
+  'a': 'ₐ', 'e': 'ₑ', 'h': 'ₕ', 'i': 'ᵢ', 'j': 'ⱼ',
+  'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ', 'n': 'ₙ', 'o': 'ₒ',
+  'p': 'ₚ', 'r': 'ᵣ', 's': 'ₛ', 't': 'ₜ', 'u': 'ᵤ',
+  'v': 'ᵥ', 'x': 'ₓ',
+};
+
+/// Replace every char in the selected range with its mapped variant. Acts
+/// like Word's Ctrl+= / Ctrl+Shift+= but uses unicode (sub/super) so the
+/// styling survives copy/paste and export.
+afe.CommandShortcutEvent _unicodeMapCommand(
+    Map<String, String> map, String key, String command) {
+  return afe.CommandShortcutEvent(
+    key: key,
+    command: command,
+    getDescription: () => 'Map to ${key.endsWith('subscript') ? 'subscript' : 'superscript'}',
+    handler: (editorState) {
+      final selection = editorState.selection;
+      if (selection == null || selection.isCollapsed) return KeyEventResult.ignored;
+      final normalized = selection.normalized;
+      if (normalized.start.path.equals(normalized.end.path)) {
+        final node = editorState.getNodeAtPath(normalized.start.path);
+        final delta = node?.delta;
+        if (node == null || delta == null) return KeyEventResult.ignored;
+        final plain = delta.toPlainText();
+        final start = normalized.start.offset;
+        final end = normalized.end.offset;
+        final original = plain.substring(start, end);
+        final replaced = original.split('').map((c) => map[c] ?? c).join();
+        if (replaced == original) return KeyEventResult.ignored;
+        final tx = editorState.transaction
+          ..deleteText(node, start, end - start)
+          ..insertText(node, start, replaced);
+        editorState.apply(tx);
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    },
+  );
+}
+
+/// Ctrl+V — pull image bytes from system clipboard if any, write to a temp
+/// file, and insert a Mario image block. Returns ignored so AppFlowy's text
+/// paste still runs in the same gesture (clipboards may carry both).
+final afe.CommandShortcutEvent _imagePasteCommand = afe.CommandShortcutEvent(
+  key: 'mario.paste.image',
+  command: 'ctrl+v',
+  getDescription: () => 'Paste image from clipboard',
+  handler: (editorState) {
+    if (kIsWeb) return KeyEventResult.ignored;
+    // Fire-and-forget. We can't await in a sync handler. The async path
+    // checks for image bytes and inserts only if present, so plain-text
+    // paste (handled by AppFlowy) still works when clipboard has no image.
+    () async {
+      try {
+        final bytes = await Pasteboard.image;
+        if (bytes == null || bytes.isEmpty) return;
+        if (editorState.isDisposed) return;
+        final dir = await getTemporaryDirectory();
+        final stamp = DateTime.now().microsecondsSinceEpoch;
+        final file = File('${dir.path}/mario_paste_$stamp.png');
+        await file.writeAsBytes(bytes);
+        if (editorState.isDisposed) return;
+        final selection = editorState.selection;
+        final path = selection?.end.path ??
+            editorState.document.root.children.last.path;
+        final tx = editorState.transaction
+          ..insertNode(
+            path.next,
+            afe.Node(
+              type: MarioImageKeys.type,
+              attributes: {MarioImageKeys.url: file.path},
+            ),
+          );
+        await editorState.apply(tx);
+      } catch (_) {
+        // Clipboard format mismatch / I/O failure — silently fall through.
+      }
+    }();
+    return KeyEventResult.ignored;
+  },
+);
