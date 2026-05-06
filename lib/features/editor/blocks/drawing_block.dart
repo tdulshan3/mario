@@ -16,6 +16,7 @@ import '../../drawing/drawing_canvas.dart';
 import '../../drawing/drawing_toolbar.dart';
 import '../../drawing/stroke.dart';
 import '../../drawing/stroke_painter.dart';
+import '_safe_transaction.dart';
 
 class DrawingBlockKeys {
   const DrawingBlockKeys._();
@@ -106,11 +107,11 @@ class _DrawingBlockComponentWidgetState
 
   Future<void> _save() async {
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {
         DrawingBlockKeys.strokes: strokesToJson(_controller.snapshot()),
       });
-    await editorState.apply(tx);
+    });
     if (!mounted) return;
     setState(() => _expanded = false);
   }

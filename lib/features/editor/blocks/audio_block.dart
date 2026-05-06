@@ -12,6 +12,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/services/voice_service.dart';
 import '../../../ui/colors.dart';
+import '_safe_transaction.dart';
 
 class AudioBlockKeys {
   const AudioBlockKeys._();
@@ -129,13 +130,13 @@ class _AudioBlockComponentWidgetState extends State<AudioBlockComponentWidget> {
     if (path == null) return;
 
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {
         AudioBlockKeys.path: path,
         AudioBlockKeys.transcript: _transcriptBuffer,
         AudioBlockKeys.durationMs: 0,
       });
-    await editorState.apply(tx);
+    });
   }
 
   Future<void> _ensurePlayer() async {

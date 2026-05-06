@@ -14,6 +14,7 @@ import '../../../ui/colors.dart';
 import '../../spreadsheet/sheet_data.dart';
 import '../../spreadsheet/spreadsheet_widget.dart';
 import '../../spreadsheet/xlsx_parser.dart';
+import '_safe_transaction.dart';
 
 class SpreadsheetBlockKeys {
   const SpreadsheetBlockKeys._();
@@ -88,9 +89,9 @@ class _SpreadsheetBlockComponentWidgetState
   Future<void> _persist(WorkbookData wb) async {
     setState(() => _workbook = wb);
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {SpreadsheetBlockKeys.workbook: wb.toMap()});
-    await editorState.apply(tx);
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {SpreadsheetBlockKeys.workbook: wb.toMap()});
+    });
   }
 
   Future<void> _import() async {

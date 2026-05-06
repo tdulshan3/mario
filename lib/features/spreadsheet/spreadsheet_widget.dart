@@ -29,27 +29,23 @@ class SpreadsheetWidget extends StatefulWidget {
 
 class _SpreadsheetWidgetState extends State<SpreadsheetWidget> {
   ({int row, int col})? _editing;
-  String? _draft;
 
   SheetData get _active => widget.workbook.sheets[widget.workbook.activeIndex];
 
-  void _commit() {
-    final cell = _editing;
-    final draft = _draft;
-    if (cell == null) return;
-    final updated = _active.withCell(cell.row, cell.col, draft ?? '');
+  void _commit(int row, int col, String value) {
+    if (!mounted) return;
+    final updated = _active.withCell(row, col, value);
     widget.onChanged(widget.workbook.withActiveSheet(updated));
-    setState(() {
-      _editing = null;
-      _draft = null;
-    });
+    setState(() => _editing = null);
+  }
+
+  void _cancelEdit() {
+    if (!mounted) return;
+    setState(() => _editing = null);
   }
 
   void _startEdit(int row, int col) {
-    setState(() {
-      _editing = (row: row, col: col);
-      _draft = _active.raw(row, col) ?? '';
-    });
+    setState(() => _editing = (row: row, col: col));
   }
 
   void _addRow() => widget.onChanged(
@@ -106,13 +102,11 @@ class _SpreadsheetWidgetState extends State<SpreadsheetWidget> {
                                 cols: _active.cols,
                                 sheet: _active,
                                 editing: _editing,
-                                draft: _draft,
                                 borderColor: border,
                                 headerBg: headerBg,
                                 onTap: _startEdit,
                                 onCommit: _commit,
-                                onDraftChanged: (v) =>
-                                    setState(() => _draft = v),
+                                onCancel: _cancelEdit,
                               ),
                           ],
                         ),
@@ -192,9 +186,7 @@ class _ColumnHeaderRow extends StatelessWidget {
       ),
       child: Row(
         children: [
-          SizedBox(
-              width: _headerWidth,
-              child: const SizedBox.shrink()),
+          const SizedBox(width: _headerWidth),
           for (var c = 0; c < cols; c++)
             Container(
               width: _colWidth,
@@ -220,24 +212,22 @@ class _GridRow extends StatelessWidget {
     required this.cols,
     required this.sheet,
     required this.editing,
-    required this.draft,
     required this.borderColor,
     required this.headerBg,
     required this.onTap,
     required this.onCommit,
-    required this.onDraftChanged,
+    required this.onCancel,
   });
 
   final int row;
   final int cols;
   final SheetData sheet;
   final ({int row, int col})? editing;
-  final String? draft;
   final Color borderColor;
   final Color headerBg;
   final void Function(int row, int col) onTap;
-  final VoidCallback onCommit;
-  final ValueChanged<String> onDraftChanged;
+  final void Function(int row, int col, String value) onCommit;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -250,8 +240,9 @@ class _GridRow extends StatelessWidget {
             decoration: BoxDecoration(
               color: headerBg,
               border: Border(
-                  bottom: BorderSide(color: borderColor),
-                  right: BorderSide(color: borderColor)),
+                bottom: BorderSide(color: borderColor),
+                right: BorderSide(color: borderColor),
+              ),
             ),
             alignment: Alignment.center,
             child: Text(
@@ -262,6 +253,7 @@ class _GridRow extends StatelessWidget {
           ),
           for (var c = 0; c < cols; c++)
             _Cell(
+              key: ValueKey('cell-$row-$c'),
               row: row,
               col: c,
               raw: sheet.raw(row, c) ?? '',
@@ -269,11 +261,10 @@ class _GridRow extends StatelessWidget {
                   sheet.raw(row, c) ?? '', sheet),
               isEditing:
                   editing != null && editing!.row == row && editing!.col == c,
-              draft: draft,
               borderColor: borderColor,
               onTap: () => onTap(row, c),
-              onCommit: onCommit,
-              onDraftChanged: onDraftChanged,
+              onCommit: (value) => onCommit(row, c, value),
+              onCancel: onCancel,
             ),
         ],
       ),
@@ -283,16 +274,16 @@ class _GridRow extends StatelessWidget {
 
 class _Cell extends StatelessWidget {
   const _Cell({
+    super.key,
     required this.row,
     required this.col,
     required this.raw,
     required this.displayed,
     required this.isEditing,
-    required this.draft,
     required this.borderColor,
     required this.onTap,
     required this.onCommit,
-    required this.onDraftChanged,
+    required this.onCancel,
   });
 
   final int row;
@@ -300,11 +291,10 @@ class _Cell extends StatelessWidget {
   final String raw;
   final String displayed;
   final bool isEditing;
-  final String? draft;
   final Color borderColor;
   final VoidCallback onTap;
-  final VoidCallback onCommit;
-  final ValueChanged<String> onDraftChanged;
+  final ValueChanged<String> onCommit;
+  final VoidCallback onCancel;
 
   @override
   Widget build(BuildContext context) {
@@ -317,36 +307,10 @@ class _Cell extends StatelessWidget {
         ),
       ),
       child: isEditing
-          ? Focus(
-              autofocus: true,
-              onFocusChange: (has) {
-                if (!has) onCommit();
-              },
-              child: KeyboardListener(
-                focusNode: FocusNode(),
-                onKeyEvent: (e) {
-                  if (e is KeyDownEvent &&
-                      (e.logicalKey == LogicalKeyboardKey.enter ||
-                          e.logicalKey == LogicalKeyboardKey.tab ||
-                          e.logicalKey == LogicalKeyboardKey.escape)) {
-                    onCommit();
-                  }
-                },
-                child: TextField(
-                  autofocus: true,
-                  controller: TextEditingController(text: draft ?? raw)
-                    ..selection = TextSelection.collapsed(
-                        offset: (draft ?? raw).length),
-                  onChanged: onDraftChanged,
-                  onSubmitted: (_) => onCommit(),
-                  decoration: const InputDecoration(
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(horizontal: 6),
-                    isDense: true,
-                  ),
-                  style: GoogleFonts.inter(fontSize: 12),
-                ),
-              ),
+          ? _CellEditor(
+              initialValue: raw,
+              onCommit: onCommit,
+              onCancel: onCancel,
             )
           : InkWell(
               onTap: onTap,
@@ -362,6 +326,95 @@ class _Cell extends StatelessWidget {
                 ),
               ),
             ),
+    );
+  }
+}
+
+/// Owns the FocusNode + controller so they're disposed when editing ends.
+/// (The previous implementation built them fresh on every Cell rebuild,
+/// which left dangling listeners and fired "used after dispose" exceptions.)
+class _CellEditor extends StatefulWidget {
+  const _CellEditor({
+    required this.initialValue,
+    required this.onCommit,
+    required this.onCancel,
+  });
+
+  final String initialValue;
+  final ValueChanged<String> onCommit;
+  final VoidCallback onCancel;
+
+  @override
+  State<_CellEditor> createState() => _CellEditorState();
+}
+
+class _CellEditorState extends State<_CellEditor> {
+  late final TextEditingController _controller;
+  late final FocusNode _focusNode;
+  bool _committed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = TextEditingController(text: widget.initialValue)
+      ..selection = TextSelection.collapsed(offset: widget.initialValue.length);
+    _focusNode = FocusNode();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _focusNode.requestFocus();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    _focusNode.dispose();
+    super.dispose();
+  }
+
+  void _commit() {
+    if (_committed) return;
+    _committed = true;
+    widget.onCommit(_controller.text);
+  }
+
+  void _cancel() {
+    if (_committed) return;
+    _committed = true;
+    widget.onCancel();
+  }
+
+  KeyEventResult _handleKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      _cancel();
+      return KeyEventResult.handled;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.enter ||
+        event.logicalKey == LogicalKeyboardKey.tab) {
+      _commit();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Focus(
+      focusNode: _focusNode,
+      onKeyEvent: _handleKey,
+      onFocusChange: (has) {
+        if (!has) _commit();
+      },
+      child: TextField(
+        controller: _controller,
+        onSubmitted: (_) => _commit(),
+        decoration: const InputDecoration(
+          border: InputBorder.none,
+          contentPadding: EdgeInsets.symmetric(horizontal: 6),
+          isDense: true,
+        ),
+        style: GoogleFonts.inter(fontSize: 12),
+      ),
     );
   }
 }

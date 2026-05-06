@@ -1,7 +1,6 @@
 /// Share dialog — invite collaborators to a notebook by email + role.
 library;
 
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
@@ -9,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/models/collaborator.dart';
 import '../../core/models/notebook.dart';
+import '../../core/services/mario_firestore.dart';
 import '../shell/shell_state.dart';
 
 void showShareDialog(BuildContext context, WidgetRef ref) {
@@ -47,13 +47,11 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
     setState(() => _saving = true);
     final messenger = ScaffoldMessenger.of(context);
     try {
-      final db = GetIt.I<FirebaseFirestore>();
-      final ref = db.collection('notebooks').doc(widget.notebook.id);
+      final db = GetIt.I<MarioFirestore>();
+      final docPath = 'notebooks/${widget.notebook.id}';
       final collaborator = Collaborator(uid: '', email: email, role: _role);
-      await ref.set({
-        'collaborators': FieldValue.arrayUnion([collaborator.toMap()]),
-        'invitedEmails': FieldValue.arrayUnion([email]),
-      }, SetOptions(merge: true));
+      await db.arrayUnion(docPath, 'collaborators', [collaborator.toMap()]);
+      await db.arrayUnion(docPath, 'invitedEmails', [email]);
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(content: Text('Invited $email')));
       Navigator.of(context).pop();

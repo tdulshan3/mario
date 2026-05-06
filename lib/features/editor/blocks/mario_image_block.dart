@@ -16,6 +16,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/services/ocr_service.dart';
 import '../../../ui/colors.dart';
+import '_safe_transaction.dart';
 
 class MarioImageKeys {
   const MarioImageKeys._();
@@ -98,23 +99,21 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
     if (!mounted) return;
 
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {
         MarioImageKeys.ocrLines: lines,
         MarioImageKeys.ocrDismissed: false,
       });
-    await editorState.apply(tx);
+    });
     if (!mounted) return;
     setState(() => _ocrRunning = false);
   }
 
   Future<void> _dismiss() async {
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {
-        MarioImageKeys.ocrDismissed: true,
-      });
-    await editorState.apply(tx);
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {MarioImageKeys.ocrDismissed: true});
+    });
   }
 
   Future<void> _insertLine(String line) async {
@@ -124,16 +123,16 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
       final node = editorState.getNodeAtPath(selection.end.path);
       final delta = node?.delta;
       if (node != null && delta != null) {
-        final tx = editorState.transaction
-          ..insertText(node, selection.end.offset, line);
-        await editorState.apply(tx);
+        await safeApply(editorState, (tx) {
+          tx.insertText(node, selection.end.offset, line);
+        });
         return;
       }
     }
     // Fallback: append a new paragraph after the image.
-    final tx = editorState.transaction;
-    tx.insertNode(widget.node.path.next, _paragraphFrom(line));
-    await editorState.apply(tx);
+    await safeApply(editorState, (tx) {
+      tx.insertNode(widget.node.path.next, _paragraphFrom(line));
+    });
   }
 
   bool _isLocalFile(String src) {

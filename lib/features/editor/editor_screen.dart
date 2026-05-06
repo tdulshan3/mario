@@ -20,6 +20,7 @@ import 'blocks/drawing_block.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
+import 'canvas_toolbar.dart';
 import 'page_content_provider.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
@@ -116,7 +117,13 @@ class _EditorState extends ConsumerState<_Editor> {
   void dispose() {
     _saveTimer?.cancel();
     _txSub.cancel();
-    _editorState.dispose();
+    // AppFlowy mounts its keyboard/scroll/selection services inside an Overlay,
+    // so they unmount AFTER this State. Disposing the EditorState synchronously
+    // would tear down its selectionNotifier before those services call
+    // removeListener — Flutter throws "node was used after dispose". Defer the
+    // disposal one frame so the children finish cleaning up first.
+    final state = _editorState;
+    WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
     super.dispose();
   }
 
@@ -232,6 +239,7 @@ class _EditorState extends ConsumerState<_Editor> {
               page: widget.page,
               trailing: VoiceDictationButton(editorState: _editorState),
             ),
+            CanvasToolbar(editorState: _editorState),
             Expanded(
               child: afe.AppFlowyEditor(
                 editorState: _editorState,

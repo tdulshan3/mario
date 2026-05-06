@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../../ui/colors.dart';
+import '_safe_transaction.dart';
 
 class MathBlockKeys {
   const MathBlockKeys._();
@@ -82,9 +83,9 @@ class _MathBlockComponentWidgetState extends State<MathBlockComponentWidget> {
 
   Future<void> _commit() async {
     final editorState = context.read<afe.EditorState>();
-    final tx = editorState.transaction
-      ..updateNode(widget.node, {MathBlockKeys.formula: _controller.text});
-    await editorState.apply(tx);
+    await safeApply(editorState, (tx) {
+      tx.updateNode(widget.node, {MathBlockKeys.formula: _controller.text});
+    });
     if (!mounted) return;
     setState(() => _editing = false);
   }
