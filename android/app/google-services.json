@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "812481623494",
+    "project_id": "mario-aa9aa",
+    "storage_bucket": "mario-aa9aa.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:812481623494:android:1e64d172f344594a31aec7",
+        "android_client_info": {
+          "package_name": "com.marionote.app.mario"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAnhYCxdscU5k-8bPDHiQ0_OothdiuzrOo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

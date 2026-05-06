@@ -1,0 +1,77 @@
+name: mario
+description: "Mario — your notes, your world."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State / DI / routing
+  flutter_riverpod: ^2.5.1
+  go_router: ^14.0.0
+  get_it: ^7.7.0
+
+  # Firebase
+  firebase_core: ^3.3.0
+  cloud_firestore: ^5.2.0
+  firebase_auth: ^5.1.0
+  firebase_storage: ^12.1.0
+
+  # Google APIs
+  googleapis: ^13.2.0
+  googleapis_auth: ^1.6.0
+  google_fonts: ^6.2.1
+
+  # Editor
+  appflowy_editor: ^3.2.0
+
+  # Math
+  flutter_math_fork: ^0.7.2
+  math_expressions: ^2.6.0
+
+  # Drawing
+  perfect_freehand: ^2.0.2
+
+  # Spreadsheet
+  excel: ^4.0.3
+
+  # Voice
+  speech_to_text: ^7.0.0
+  record: ^5.1.2
+  just_audio: ^0.9.39
+
+  # Storage / local
+  drift: ^2.18.0
+  sqlite3_flutter_libs: ^0.5.24
+  path_provider: ^2.1.3
+  shared_preferences: ^2.3.1
+  flutter_secure_storage: ^9.2.2
+
+  # AI (Anthropic API)
+  http: ^1.2.2
+
+  # UI / system
+  window_manager: ^0.3.9
+  tray_manager: ^0.2.2
+  url_launcher: ^6.3.0
+  file_picker: ^8.1.2
+  pdf: ^3.11.1
+  intl: ^0.19.0
+  flutter_markdown: ^0.7.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.18.0
+  build_runner: ^2.4.11
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/logo/
