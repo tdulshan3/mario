@@ -37,7 +37,10 @@ class MarioImageBlockBuilder extends afe.BlockComponentBuilder {
     return MarioImageBlockWidget(
       key: node.key,
       node: node,
+      showActions: showActions(node),
       configuration: configuration,
+      actionBuilder: (context, state) =>
+          actionBuilder(blockComponentContext, state),
     );
   }
 
@@ -59,8 +62,17 @@ class MarioImageBlockWidget extends afe.BlockComponentStatefulWidget {
   State<MarioImageBlockWidget> createState() => _MarioImageBlockWidgetState();
 }
 
-class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
+class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
+    with afe.SelectableMixin, afe.BlockComponentConfigurable {
   bool _ocrRunning = false;
+  final GlobalKey _imageKey = GlobalKey();
+  RenderBox? get _renderBox => context.findRenderObject() as RenderBox?;
+
+  @override
+  afe.BlockComponentConfiguration get configuration => widget.configuration;
+
+  @override
+  afe.Node get node => widget.node;
 
   String get _src =>
       (widget.node.attributes[MarioImageKeys.url] as String?) ?? '';
@@ -123,12 +135,15 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
     final editorState = context.read<afe.EditorState>();
     final lines = _ocrLines.where((l) => l.trim().isNotEmpty).toList();
     if (lines.isEmpty) return;
+    // insertNodes inserts the whole list at one path in a single op, so we
+    // don't have to walk path.next ourselves — the loop version dropped all
+    // but the first because each insertNode above the previous shifted the
+    // expected target path.
     await safeApply(editorState, (tx) {
-      var path = widget.node.path.next;
-      for (final line in lines) {
-        tx.insertNode(path, _paragraphFrom(line));
-        path = path.next;
-      }
+      tx.insertNodes(
+        widget.node.path.next,
+        [for (final line in lines) _paragraphFrom(line)],
+      );
       tx.updateNode(widget.node, {MarioImageKeys.ocrDismissed: true});
     });
   }
@@ -157,7 +172,10 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
 
-    return Padding(
+    final editorState = context.read<afe.EditorState>();
+
+    Widget content = Padding(
+      key: _imageKey,
       padding: const EdgeInsets.symmetric(vertical: 8),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -281,7 +299,96 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget> {
         ],
       ),
     );
+
+    // Make the block selectable — the editor's Backspace/Delete handlers
+    // remove a node when its block selection is active.
+    content = afe.BlockSelectionContainer(
+      node: widget.node,
+      delegate: this,
+      listenable: editorState.selectionNotifier,
+      remoteSelection: editorState.remoteSelections,
+      blockColor: editorState.editorStyle.selectionColor,
+      supportTypes: const [afe.BlockSelectionType.block],
+      child: content,
+    );
+
+    // Drag handle / + button on hover so the user can move (and delete) the
+    // block via the same gutter affordance every other AppFlowy block has.
+    if (widget.showActions && widget.actionBuilder != null) {
+      content = afe.BlockComponentActionWrapper(
+        node: widget.node,
+        actionBuilder: widget.actionBuilder!,
+        child: content,
+      );
+    }
+
+    return content;
   }
+
+  // SelectableMixin — minimal implementation that mirrors AppFlowy's stock
+  // image block. Each method points the editor at our wrapped image bounds so
+  // block-level selection, cursor placement, and "delete this node" all work.
+
+  @override
+  afe.Position start() => afe.Position(path: widget.node.path, offset: 0);
+
+  @override
+  afe.Position end() => afe.Position(path: widget.node.path, offset: 1);
+
+  @override
+  afe.Position getPositionInOffset(Offset start) => end();
+
+  @override
+  bool get shouldCursorBlink => false;
+
+  @override
+  afe.CursorStyle get cursorStyle => afe.CursorStyle.cover;
+
+  @override
+  Rect getBlockRect({bool shiftWithBaseOffset = false}) {
+    final box = _imageKey.currentContext?.findRenderObject();
+    if (box is RenderBox) return Offset.zero & box.size;
+    return Rect.zero;
+  }
+
+  @override
+  Rect? getCursorRectInPosition(
+    afe.Position position, {
+    bool shiftWithBaseOffset = false,
+  }) {
+    final box = _renderBox;
+    if (box == null) return null;
+    return Rect.fromLTWH(-box.size.width / 2, 0, box.size.width, box.size.height);
+  }
+
+  @override
+  List<Rect> getRectsInSelection(
+    afe.Selection selection, {
+    bool shiftWithBaseOffset = false,
+  }) {
+    final box = _renderBox;
+    if (box == null) return const [];
+    final imageBox = _imageKey.currentContext?.findRenderObject();
+    if (imageBox is RenderBox) {
+      return [imageBox.localToGlobal(Offset.zero, ancestor: box) & imageBox.size];
+    }
+    return [Offset.zero & box.size];
+  }
+
+  @override
+  afe.Selection getSelectionInRange(Offset start, Offset end) =>
+      afe.Selection.single(
+        path: widget.node.path,
+        startOffset: 0,
+        endOffset: 1,
+      );
+
+  @override
+  Offset localToGlobal(
+    Offset offset, {
+    bool shiftWithBaseOffset = false,
+  }) =>
+      _renderBox!.localToGlobal(offset);
 }
 
 afe.Node _paragraphFrom(String text) => afe.paragraphNode(text: text);

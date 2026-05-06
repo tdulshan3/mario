@@ -2,6 +2,7 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/gestures.dart';
@@ -118,9 +119,8 @@ class _EditorState extends ConsumerState<_Editor> {
   // Ctrl+wheel (otherwise both scroll and zoom would fire on the same event).
   bool _ctrlDown = false;
 
-  // Independent controllers so vertical and horizontal scrollbars can be
-  // attached without sharing state with AppFlowy's internal scroller.
-  final ScrollController _vScroll = ScrollController();
+  // Horizontal scroll controller for the outer scrollview (vertical scrolling
+  // happens inside AppFlowy's own scroll service, so no _vScroll needed).
   final ScrollController _hScroll = ScrollController();
 
   @override
@@ -136,7 +136,6 @@ class _EditorState extends ConsumerState<_Editor> {
     _saveTimer?.cancel();
     _txSub.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
-    _vScroll.dispose();
     _hScroll.dispose();
     final state = _editorState;
     WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
@@ -235,7 +234,8 @@ class _EditorState extends ConsumerState<_Editor> {
             padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
-                  fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.35),
+                  fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.2),
+              lineHeight: 1.2,
             ),
           )
         : afe.EditorStyle.desktop(
@@ -244,9 +244,16 @@ class _EditorState extends ConsumerState<_Editor> {
             padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
-                  fontSize: 14, color: MarioColors.onSurface, height: 1.35),
+                  fontSize: 14, color: MarioColors.onSurface, height: 1.2),
+              lineHeight: 1.2,
             ),
           );
+
+    // Tight per-block padding overrides AppFlowy's default 4px vertical
+    // (8px between adjacent paragraphs); 1px gives a Word-like density.
+    final tightConfig = afe.BlockComponentConfiguration(
+      padding: (_) => const EdgeInsets.symmetric(vertical: 1),
+    );
 
     final blockBuilders = <String, afe.BlockComponentBuilder>{
       ...afe.standardBlockComponentBuilderMap,
@@ -256,6 +263,12 @@ class _EditorState extends ConsumerState<_Editor> {
       SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
       AudioBlockKeys.type: AudioBlockComponentBuilder(),
     };
+    // Apply tight padding to every standard block builder (paragraphs, lists,
+    // headings, quotes…). The custom Mario blocks own their own padding so we
+    // leave them alone.
+    for (final entry in afe.standardBlockComponentBuilderMap.entries) {
+      blockBuilders[entry.key]?.configuration = tightConfig;
+    }
 
     final standardSpaceHandlers = afe.standardCharacterShortcutEvents
         .where((e) => e.character != '/');
@@ -287,101 +300,88 @@ class _EditorState extends ConsumerState<_Editor> {
       ...afe.findAndReplaceCommands(context: context),
     ];
 
-    final scrollPhysics = _ctrlDown
-        ? const NeverScrollableScrollPhysics()
-        : const BouncingScrollPhysics();
-
     return CallbackShortcuts(
       bindings: {
         const SingleActivator(LogicalKeyboardKey.keyS, control: true): _saveNow,
         const SingleActivator(LogicalKeyboardKey.digit0, control: true):
             _zoomReset,
       },
-      child: Focus(
-        autofocus: false,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            CanvasToolbar(
-              editorState: _editorState,
-              zoom: _zoom,
-              onZoomIn: _zoomIn,
-              onZoomOut: _zoomOut,
-              onZoomReset: _zoomReset,
-              trailing: VoiceDictationButton(editorState: _editorState),
-            ),
-            Expanded(
-              child: Container(
-                color: canvasBg,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    const cardWidth = 820.0;
-                    final scaledWidth = cardWidth * _zoom;
-                    final viewport = constraints.maxWidth;
-                    // When the scaled card is narrower than the viewport, pad
-                    // the inner row so the centred card has elbow room. When
-                    // wider, the row matches the scaled width and the
-                    // horizontal scrollview moves it.
-                    final innerWidth =
-                        scaledWidth < viewport ? viewport : scaledWidth + 32;
-                    return Listener(
-                      onPointerSignal: _onPointerSignal,
-                      child: Scrollbar(
-                        controller: _vScroll,
-                        thumbVisibility: true,
-                        child: SingleChildScrollView(
-                          controller: _vScroll,
-                          physics: scrollPhysics,
-                          padding: const EdgeInsets.symmetric(vertical: 8),
-                          child: Scrollbar(
-                            controller: _hScroll,
-                            thumbVisibility: scaledWidth > viewport,
-                            notificationPredicate: (n) => n.depth == 1,
-                            child: SingleChildScrollView(
-                              controller: _hScroll,
-                              scrollDirection: Axis.horizontal,
-                              physics: scrollPhysics,
-                              child: SizedBox(
-                                width: innerWidth,
-                                child: Center(
-                                  child: SizedBox(
-                                    width: scaledWidth,
-                                    child: FittedBox(
-                                      fit: BoxFit.fitWidth,
-                                      alignment: Alignment.topCenter,
-                                      child: SizedBox(
-                                        width: cardWidth,
-                                        child: Material(
-                                          color: paper,
-                                          elevation: isDark ? 0 : 2,
-                                          borderRadius:
-                                              BorderRadius.circular(2),
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.stretch,
-                                            children: [
-                                              _PageHeader(page: widget.page),
-                                              ConstrainedBox(
-                                                constraints:
-                                                    const BoxConstraints(
-                                                        minHeight: 600),
-                                                child: afe.AppFlowyEditor(
-                                                  editorState: _editorState,
-                                                  editorStyle: style,
-                                                  blockComponentBuilders:
-                                                      blockBuilders,
-                                                  characterShortcutEvents:
-                                                      shortcutEvents,
-                                                  commandShortcutEvents:
-                                                      commandShortcuts,
-                                                  autoFocus: true,
-                                                  shrinkWrap: true,
-                                                ),
-                                              ),
-                                            ],
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          CanvasToolbar(
+            editorState: _editorState,
+            zoom: _zoom,
+            onZoomIn: _zoomIn,
+            onZoomOut: _zoomOut,
+            onZoomReset: _zoomReset,
+            trailing: VoiceDictationButton(editorState: _editorState),
+          ),
+          Expanded(
+            child: Container(
+              color: canvasBg,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  const cardWidth = 820.0;
+                  final scaledWidth = cardWidth * _zoom;
+                  final viewportW = constraints.maxWidth;
+                  final viewportH = constraints.maxHeight;
+                  final outerWidth =
+                      math.max(scaledWidth + 32, viewportW);
+                  final cardHeight = viewportH - 16;
+                  // Outer scroll only does work when the scaled card overflows
+                  // horizontally. Otherwise it'd intercept stray dx deltas
+                  // from trackpads and block AppFlowy's vertical scroll.
+                  final hasHorizontalOverflow = scaledWidth > viewportW;
+                  final outerPhysics = hasHorizontalOverflow
+                      ? const ClampingScrollPhysics()
+                      : const NeverScrollableScrollPhysics();
+                  return Listener(
+                    onPointerSignal: _onPointerSignal,
+                    child: Scrollbar(
+                      controller: _hScroll,
+                      thumbVisibility: hasHorizontalOverflow,
+                      scrollbarOrientation: ScrollbarOrientation.bottom,
+                      child: SingleChildScrollView(
+                        controller: _hScroll,
+                        scrollDirection: Axis.horizontal,
+                        physics: outerPhysics,
+                        child: SizedBox(
+                          width: outerWidth,
+                          height: viewportH,
+                          child: Center(
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Transform.scale(
+                                scale: _zoom,
+                                alignment: Alignment.topCenter,
+                                child: SizedBox(
+                                  width: cardWidth,
+                                  height: cardHeight,
+                                  child: Material(
+                                    color: paper,
+                                    elevation: isDark ? 0 : 2,
+                                    borderRadius: BorderRadius.circular(2),
+                                    clipBehavior: Clip.antiAlias,
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.stretch,
+                                      children: [
+                                        _PageHeader(page: widget.page),
+                                        Expanded(
+                                          child: afe.AppFlowyEditor(
+                                            editorState: _editorState,
+                                            editorStyle: style,
+                                            blockComponentBuilders:
+                                                blockBuilders,
+                                            characterShortcutEvents:
+                                                shortcutEvents,
+                                            commandShortcutEvents:
+                                                commandShortcuts,
+                                            autoFocus: true,
                                           ),
                                         ),
-                                      ),
+                                      ],
                                     ),
                                   ),
                                 ),
@@ -390,15 +390,15 @@ class _EditorState extends ConsumerState<_Editor> {
                           ),
                         ),
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  );
+                },
               ),
             ),
-            _StatusBar(
-                status: _status, lastSavedAt: _lastSavedAt, muted: muted),
-          ],
-        ),
+          ),
+          _StatusBar(
+              status: _status, lastSavedAt: _lastSavedAt, muted: muted),
+        ],
       ),
     );
   }

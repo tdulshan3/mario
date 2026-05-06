@@ -18,27 +18,33 @@ import 'blocks/mario_image_block.dart';
 /// All Word-style commands. Prepend to the editor's commandShortcutEvents so
 /// they win over AppFlowy's built-ins where keys collide (e.g. Ctrl+E was
 /// inline-code in AppFlowy; Word uses it for align-center).
+// AppFlowy's key parser only recognises the long-form labels in
+// `keyToCodeMapping` (e.g. 'digit 1', 'bracket right', 'equal'). Short
+// punctuation/digit forms ('1', '[', '=') aren't in the map, and the mapping
+// uses non-null assertion — any Ctrl+<key> press would crash if any keybinding
+// in the list contains such an unmapped label. So spell them out.
 List<afe.CommandShortcutEvent> wordCommandShortcuts() => [
       _alignCommand('left'),
       _alignCenterCommand,
       _alignCommand('right', key: 'mario.align.right', command: 'ctrl+r'),
-      _alignCommand('left',  key: 'mario.align.justify', command: 'ctrl+j'),
-      _headingCommand(1, 'ctrl+alt+1'),
-      _headingCommand(2, 'ctrl+alt+2'),
-      _headingCommand(3, 'ctrl+alt+3'),
+      _alignCommand('left', key: 'mario.align.justify', command: 'ctrl+j'),
+      _headingCommand(1, 'ctrl+alt+digit 1'),
+      _headingCommand(2, 'ctrl+alt+digit 2'),
+      _headingCommand(3, 'ctrl+alt+digit 3'),
       _normalParagraphCommand,
       _listCommand('bulleted_list', 'mario.list.bullet', 'ctrl+shift+l'),
-      _listCommand('numbered_list', 'mario.list.numbered', 'ctrl+shift+7'),
-      _listCommand('todo_list', 'mario.list.todo', 'ctrl+shift+9'),
-      _fontSizeStepCommand(1, 'mario.font.larger', 'ctrl+]'),
-      _fontSizeStepCommand(-1, 'mario.font.smaller', 'ctrl+['),
+      _listCommand('numbered_list', 'mario.list.numbered', 'ctrl+shift+digit 7'),
+      _listCommand('todo_list', 'mario.list.todo', 'ctrl+shift+digit 9'),
+      _fontSizeStepCommand(1, 'mario.font.larger', 'ctrl+bracket right'),
+      _fontSizeStepCommand(-1, 'mario.font.smaller', 'ctrl+bracket left'),
       _toggleAttrCommand(
-        afe.AppFlowyRichTextKeys.code, 'mario.code', 'ctrl+shift+c'),
+          afe.AppFlowyRichTextKeys.code, 'mario.code', 'ctrl+shift+c'),
       // Word: Ctrl+= subscript, Ctrl+Shift+= superscript. Implemented as
       // unicode replacement of the selected text (AppFlowy's rich text doesn't
       // ship a sub/super attribute, but unicode characters survive any export).
-      _unicodeMapCommand(_subscriptMap, 'mario.subscript', 'ctrl+='),
-      _unicodeMapCommand(_superscriptMap, 'mario.superscript', 'ctrl+shift+='),
+      _unicodeMapCommand(_subscriptMap, 'mario.subscript', 'ctrl+equal'),
+      _unicodeMapCommand(
+          _superscriptMap, 'mario.superscript', 'ctrl+shift+equal'),
       _smartPasteCommand,
     ];
 
@@ -104,7 +110,7 @@ afe.CommandShortcutEvent _headingCommand(int level, String command) {
 final afe.CommandShortcutEvent _normalParagraphCommand =
     afe.CommandShortcutEvent(
   key: 'mario.heading.normal',
-  command: 'ctrl+alt+0',
+  command: 'ctrl+alt+digit 0',
   getDescription: () => 'Normal text',
   handler: (editorState) {
     final selection = editorState.selection;
@@ -274,18 +280,43 @@ final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
     () async {
       try {
         if (!kIsWeb) {
+          // 1. Raw image bytes (screenshot, "Copy image" from a browser).
           final bytes = await Pasteboard.image;
           if (bytes != null && bytes.isNotEmpty) {
             if (editorState.isDisposed) return;
             await _insertClipboardImage(editorState, bytes);
             return;
           }
+          // 2. File copy from a file manager — the clipboard carries paths,
+          // not bytes. Insert each image file as a Mario image block; if any
+          // images consumed, skip the markdown/text path so we don't paste
+          // the path string as text.
+          final files = await Pasteboard.files();
+          final imagePaths = files.where(_isImagePath).toList();
+          if (imagePaths.isNotEmpty) {
+            if (editorState.isDisposed) return;
+            await _insertImagePaths(editorState, imagePaths);
+            return;
+          }
         }
         final text = await Pasteboard.text;
-        if (text != null && text.isNotEmpty && _looksLikeMarkdown(text)) {
-          if (editorState.isDisposed) return;
-          await _insertMarkdown(editorState, text);
-          return;
+        if (text != null && text.isNotEmpty) {
+          // 3. A bare image-file path on the clipboard (some apps paste paths
+          // as text). Recognise it and insert the image instead of the path.
+          if (!kIsWeb) {
+            final trimmed = text.trim();
+            final candidate = _pathFromTextClipboard(trimmed);
+            if (candidate != null && _isImagePath(candidate)) {
+              if (editorState.isDisposed) return;
+              await _insertImagePaths(editorState, [candidate]);
+              return;
+            }
+          }
+          if (_looksLikeMarkdown(text)) {
+            if (editorState.isDisposed) return;
+            await _insertMarkdown(editorState, text);
+            return;
+          }
         }
       } catch (_) {
         // fall through to default paste
@@ -297,6 +328,51 @@ final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
     return KeyEventResult.handled;
   },
 );
+
+const _imageExtensions = <String>{
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif',
+};
+
+bool _isImagePath(String path) {
+  final lower = path.toLowerCase();
+  return _imageExtensions.any(lower.endsWith);
+}
+
+/// Accept either a plain path or a `file://` URI; reject anything else.
+String? _pathFromTextClipboard(String text) {
+  if (text.isEmpty) return null;
+  if (text.contains('\n')) return null;
+  if (text.startsWith('file://')) {
+    final uri = Uri.tryParse(text);
+    return uri?.toFilePath();
+  }
+  if (text.startsWith('/') || text.startsWith('~/')) {
+    return text.startsWith('~/')
+        ? '${Platform.environment['HOME']}${text.substring(1)}'
+        : text;
+  }
+  return null;
+}
+
+Future<void> _insertImagePaths(
+    afe.EditorState editorState, List<String> paths) async {
+  if (editorState.isDisposed) return;
+  final selection = editorState.selection;
+  final basePath = selection?.end.path ??
+      editorState.document.root.children.last.path;
+  final tx = editorState.transaction
+    ..insertNodes(
+      basePath.next,
+      [
+        for (final p in paths)
+          afe.Node(
+            type: MarioImageKeys.type,
+            attributes: {MarioImageKeys.url: p},
+          ),
+      ],
+    );
+  await editorState.apply(tx);
+}
 
 Future<void> _insertClipboardImage(
     afe.EditorState editorState, Uint8List bytes) async {
