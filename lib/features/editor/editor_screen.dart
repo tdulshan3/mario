@@ -16,6 +16,7 @@ import '../../ui/colors.dart';
 import '../math/math_shortcut.dart';
 import 'blocks/drawing_block.dart';
 import 'blocks/math_block.dart';
+import 'blocks/spreadsheet_block.dart';
 import 'page_content_provider.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
@@ -186,6 +187,7 @@ class _EditorState extends ConsumerState<_Editor> {
       ...afe.standardBlockComponentBuilderMap,
       MathBlockKeys.type: MathBlockComponentBuilder(),
       DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
+      SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
     };
 
     final standardSpaceHandlers = afe.standardCharacterShortcutEvents
@@ -198,6 +200,7 @@ class _EditorState extends ConsumerState<_Editor> {
           ...afe.standardSelectionMenuItems,
           mathSelectionMenuItem,
           drawingSelectionMenuItem,
+          spreadsheetSelectionMenuItem,
         ],
         style: isDark
             ? afe.SelectionMenuStyle.dark
