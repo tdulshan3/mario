@@ -4,6 +4,8 @@ library;
 import 'package:flutter/widgets.dart';
 import 'package:window_manager/window_manager.dart';
 
+import 'tray_linux.dart';
+
 Future<void> configureLinuxWindow() async {
   await windowManager.ensureInitialized();
   const opts = WindowOptions(
@@ -17,4 +19,5 @@ Future<void> configureLinuxWindow() async {
     await windowManager.show();
     await windowManager.focus();
   });
+  await setupLinuxTray();
 }

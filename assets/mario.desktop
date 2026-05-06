@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Mario
+Comment=Your notes, your world.
+Exec=mario
+Icon=mario
+Terminal=false
+Categories=Office;Utility;
+StartupWMClass=mario
