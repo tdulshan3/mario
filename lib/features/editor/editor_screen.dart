@@ -17,6 +17,7 @@ import '../math/math_shortcut.dart';
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
 import 'blocks/drawing_block.dart';
+import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
 import 'page_content_provider.dart';
@@ -187,6 +188,7 @@ class _EditorState extends ConsumerState<_Editor> {
 
     final blockBuilders = <String, afe.BlockComponentBuilder>{
       ...afe.standardBlockComponentBuilderMap,
+      MarioImageKeys.type: MarioImageBlockBuilder(),
       MathBlockKeys.type: MathBlockComponentBuilder(),
       DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
       SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
