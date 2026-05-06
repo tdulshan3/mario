@@ -13,6 +13,8 @@ import 'core/services/auth_service.dart';
 import 'core/services/drive_service.dart';
 import 'core/services/ocr_service.dart';
 import 'core/services/sync_service.dart';
+import 'core/services/voice_service.dart';
+import 'features/voice/voice_service_impl.dart';
 import 'firebase_options.dart';
 import 'platform/web/auth_service_web.dart';
 import 'platform/web/ocr_service_web.dart';
@@ -60,4 +62,5 @@ void _registerServices() {
   getIt.registerSingleton<SyncService>(
     SyncService(getIt<FirebaseFirestore>(), getIt<DriveService>()),
   );
+  getIt.registerSingleton<VoiceService>(VoiceServiceImpl());
 }

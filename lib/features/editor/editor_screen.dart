@@ -14,6 +14,8 @@ import '../../core/models/note_page.dart';
 import '../../core/services/drive_service.dart';
 import '../../ui/colors.dart';
 import '../math/math_shortcut.dart';
+import '../voice/voice_dictation.dart';
+import 'blocks/audio_block.dart';
 import 'blocks/drawing_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
@@ -188,6 +190,7 @@ class _EditorState extends ConsumerState<_Editor> {
       MathBlockKeys.type: MathBlockComponentBuilder(),
       DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
       SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
+      AudioBlockKeys.type: AudioBlockComponentBuilder(),
     };
 
     final standardSpaceHandlers = afe.standardCharacterShortcutEvents
@@ -201,6 +204,7 @@ class _EditorState extends ConsumerState<_Editor> {
           mathSelectionMenuItem,
           drawingSelectionMenuItem,
           spreadsheetSelectionMenuItem,
+          audioSelectionMenuItem,
         ],
         style: isDark
             ? afe.SelectionMenuStyle.dark
@@ -217,7 +221,10 @@ class _EditorState extends ConsumerState<_Editor> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            _PageHeader(page: widget.page),
+            _PageHeader(
+              page: widget.page,
+              trailing: VoiceDictationButton(editorState: _editorState),
+            ),
             Expanded(
               child: afe.AppFlowyEditor(
                 editorState: _editorState,
@@ -236,8 +243,9 @@ class _EditorState extends ConsumerState<_Editor> {
 }
 
 class _PageHeader extends StatelessWidget {
-  const _PageHeader({required this.page});
+  const _PageHeader({required this.page, this.trailing});
   final NotePage page;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -246,22 +254,30 @@ class _PageHeader extends StatelessWidget {
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
     return Padding(
       padding: const EdgeInsets.fromLTRB(64, 32, 64, 0),
-      child: Column(
+      child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            page.title,
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 28,
-              fontWeight: FontWeight.w700,
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  page.title,
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Last edited ${_formatTime(page.updatedAt)}',
+                  style: GoogleFonts.inter(fontSize: 12, color: muted),
+                ),
+                const SizedBox(height: 8),
+              ],
             ),
           ),
-          const SizedBox(height: 4),
-          Text(
-            'Last edited ${_formatTime(page.updatedAt)}',
-            style: GoogleFonts.inter(fontSize: 12, color: muted),
-          ),
-          const SizedBox(height: 8),
+          if (trailing != null) trailing!,
         ],
       ),
     );
