@@ -42,6 +42,13 @@ endif()
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_14)
   target_compile_options(${TARGET} PRIVATE -Wall -Werror)
+  # Newer Clang (>=20) raises deprecation diagnostics that older Flutter
+  # plugins (tray_manager's app_indicator_new, flutter_secure_storage_linux's
+  # bundled json.hpp) still trip — keep the warnings, but don't fail the
+  # build on them.
+  target_compile_options(${TARGET} PRIVATE
+    -Wno-error=deprecated-declarations
+    -Wno-error=deprecated-literal-operator)
   target_compile_options(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O3>")
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endfunction()
