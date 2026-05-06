@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
 import '../../ui/widgets/resizable_panel.dart';
+import '../editor/editor_screen.dart';
 import 'notebook_panel.dart';
 import 'page_panel.dart';
 import 'shell_state.dart';
@@ -64,34 +65,7 @@ class _CanvasPlaceholder extends ConsumerWidget {
                 style: GoogleFonts.inter(color: muted, fontSize: 14),
               ),
             )
-          : Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 40),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    page.title,
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Last edited ${_formatTime(page.updatedAt)}',
-                    style: GoogleFonts.inter(fontSize: 12, color: muted),
-                  ),
-                  const SizedBox(height: 32),
-                  Text(
-                    'Canvas comes online in Sprint 3 — AppFlowy editor will mount here.',
-                    style: GoogleFonts.inter(fontSize: 14, color: muted),
-                  ),
-                ],
-              ),
-            ),
+          : EditorScreen(key: ValueKey(page.id), page: page),
     );
   }
-
-  String _formatTime(DateTime t) =>
-      '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
 }
