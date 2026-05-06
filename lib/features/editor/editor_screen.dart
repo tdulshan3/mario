@@ -14,6 +14,7 @@ import '../../core/models/note_page.dart';
 import '../../core/services/drive_service.dart';
 import '../../ui/colors.dart';
 import '../math/math_shortcut.dart';
+import 'blocks/drawing_block.dart';
 import 'blocks/math_block.dart';
 import 'page_content_provider.dart';
 
@@ -184,6 +185,7 @@ class _EditorState extends ConsumerState<_Editor> {
     final blockBuilders = <String, afe.BlockComponentBuilder>{
       ...afe.standardBlockComponentBuilderMap,
       MathBlockKeys.type: MathBlockComponentBuilder(),
+      DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
     };
 
     final standardSpaceHandlers = afe.standardCharacterShortcutEvents
@@ -195,6 +197,7 @@ class _EditorState extends ConsumerState<_Editor> {
         [
           ...afe.standardSelectionMenuItems,
           mathSelectionMenuItem,
+          drawingSelectionMenuItem,
         ],
         style: isDark
             ? afe.SelectionMenuStyle.dark
