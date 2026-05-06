@@ -405,10 +405,10 @@ class _EditorState extends ConsumerState<_Editor> {
 }
 
 /// AppFlowy command keys whose shortcuts collide with Word equivalents we
-/// install via [wordCommandShortcuts]. Image-paste uses Ctrl+V but returns
-/// ignored, so AppFlowy's text paste remains in the chain.
+/// install via [wordCommandShortcuts].
 const _overriddenShortcutKeys = <String>{
   'toggle code', // Ctrl+E — AppFlowy uses for code; Word uses for align-center
+  'paste the content', // Ctrl+V — replaced by smart paste (image+markdown+rich)
 };
 
 class _PageHeader extends StatelessWidget {

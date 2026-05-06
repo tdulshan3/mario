@@ -39,7 +39,7 @@ List<afe.CommandShortcutEvent> wordCommandShortcuts() => [
       // ship a sub/super attribute, but unicode characters survive any export).
       _unicodeMapCommand(_subscriptMap, 'mario.subscript', 'ctrl+='),
       _unicodeMapCommand(_superscriptMap, 'mario.superscript', 'ctrl+shift+='),
-      _imagePasteCommand,
+      _smartPasteCommand,
     ];
 
 afe.CommandShortcutEvent _alignCommand(String align,
@@ -250,44 +250,101 @@ afe.CommandShortcutEvent _unicodeMapCommand(
   );
 }
 
-/// Ctrl+V — pull image bytes from system clipboard if any, write to a temp
-/// file, and insert a Mario image block. Returns ignored so AppFlowy's text
-/// paste still runs in the same gesture (clipboards may carry both).
-final afe.CommandShortcutEvent _imagePasteCommand = afe.CommandShortcutEvent(
-  key: 'mario.paste.image',
+/// Patterns that strongly suggest a string is markdown source:
+/// ATX headings, list bullets, ordered lists, fences, blockquotes, hr,
+/// inline bold/italic/code/link. Multiline so anchors match per-line.
+final RegExp _markdownPattern = RegExp(
+  r'(^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^\s*>\s|^\s*```|^---+\s*$|\*\*[^*\n]+\*\*|__[^_\n]+__|`[^`\n]+`|\[[^\]\n]+\]\([^)\n]+\))',
+  multiLine: true,
+);
+
+bool _looksLikeMarkdown(String text) => _markdownPattern.hasMatch(text);
+
+/// Ctrl+V — combined image + markdown + default paste. Always returns
+/// handled so AppFlowy's default paste doesn't fire in parallel; we replay
+/// it ourselves in the fallback branch when the clipboard isn't markdown or
+/// image content. Pasting from a `.md` file gives plain markdown text +
+/// (often) HTML; AppFlowy's default prefers HTML, which strips the markdown
+/// structure. We bias to markdown when the text looks like markdown source.
+final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
+  key: 'mario.paste.smart',
   command: 'ctrl+v',
-  getDescription: () => 'Paste image from clipboard',
+  getDescription: () => 'Smart paste (image / markdown / rich)',
   handler: (editorState) {
-    if (kIsWeb) return KeyEventResult.ignored;
-    // Fire-and-forget. We can't await in a sync handler. The async path
-    // checks for image bytes and inserts only if present, so plain-text
-    // paste (handled by AppFlowy) still works when clipboard has no image.
     () async {
       try {
-        final bytes = await Pasteboard.image;
-        if (bytes == null || bytes.isEmpty) return;
-        if (editorState.isDisposed) return;
-        final dir = await getTemporaryDirectory();
-        final stamp = DateTime.now().microsecondsSinceEpoch;
-        final file = File('${dir.path}/mario_paste_$stamp.png');
-        await file.writeAsBytes(bytes);
-        if (editorState.isDisposed) return;
-        final selection = editorState.selection;
-        final path = selection?.end.path ??
-            editorState.document.root.children.last.path;
-        final tx = editorState.transaction
-          ..insertNode(
-            path.next,
-            afe.Node(
-              type: MarioImageKeys.type,
-              attributes: {MarioImageKeys.url: file.path},
-            ),
-          );
-        await editorState.apply(tx);
+        if (!kIsWeb) {
+          final bytes = await Pasteboard.image;
+          if (bytes != null && bytes.isNotEmpty) {
+            if (editorState.isDisposed) return;
+            await _insertClipboardImage(editorState, bytes);
+            return;
+          }
+        }
+        final text = await Pasteboard.text;
+        if (text != null && text.isNotEmpty && _looksLikeMarkdown(text)) {
+          if (editorState.isDisposed) return;
+          await _insertMarkdown(editorState, text);
+          return;
+        }
       } catch (_) {
-        // Clipboard format mismatch / I/O failure — silently fall through.
+        // fall through to default paste
       }
+      if (editorState.isDisposed) return;
+      // Replay AppFlowy's default rich-clipboard paste (HTML or plain text).
+      afe.handlePaste(editorState);
     }();
-    return KeyEventResult.ignored;
+    return KeyEventResult.handled;
   },
 );
+
+Future<void> _insertClipboardImage(
+    afe.EditorState editorState, Uint8List bytes) async {
+  final dir = await getTemporaryDirectory();
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  final file = File('${dir.path}/mario_paste_$stamp.png');
+  await file.writeAsBytes(bytes);
+  if (editorState.isDisposed) return;
+  final selection = editorState.selection;
+  final path = selection?.end.path ??
+      editorState.document.root.children.last.path;
+  final tx = editorState.transaction
+    ..insertNode(
+      path.next,
+      afe.Node(
+        type: MarioImageKeys.type,
+        attributes: {MarioImageKeys.url: file.path},
+      ),
+    );
+  await editorState.apply(tx);
+}
+
+Future<void> _insertMarkdown(
+    afe.EditorState editorState, String markdown) async {
+  final doc = afe.markdownToDocument(markdown);
+  final children = doc.root.children;
+  if (children.isEmpty) return;
+  final selection = editorState.selection;
+  // Mirror AppFlowy's _pasteMarkdown logic: replace empty current paragraph
+  // in-place; otherwise insert after it.
+  var path = selection?.end.path.next ??
+      editorState.document.root.children.last.path.next;
+  if (selection != null) {
+    final node = editorState.document.nodeAtPath(selection.end.path);
+    final delta = node?.delta;
+    if (delta != null && delta.toPlainText().isEmpty) {
+      path = selection.end.path;
+    }
+  }
+  final tx = editorState.transaction..insertNodes(path, children);
+  // Caret at end of last inserted node.
+  var afterPath = path;
+  for (var i = 0; i < children.length - 1; i++) {
+    afterPath = afterPath.next;
+  }
+  final offset = children.last.delta?.length ?? 0;
+  tx.afterSelection = afe.Selection.collapsed(
+    afe.Position(path: afterPath, offset: offset),
+  );
+  await editorState.apply(tx);
+}
