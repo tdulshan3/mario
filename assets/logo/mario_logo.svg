@@ -1,4 +1,4 @@
-fix<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
   <rect width="256" height="256" rx="56" fill="#FFDE7A"/>
   <path d="M58 196 V60 H92 L128 130 L164 60 H198 V196 H170 V112 L138 174 H118 L86 112 V196 Z" fill="#FFFFFF"/>
   <g fill="#FFFFFF">
