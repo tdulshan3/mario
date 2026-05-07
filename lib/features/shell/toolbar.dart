@@ -1,13 +1,16 @@
-/// ShellToolbar — top bar with logo, current notebook name, and action icons.
+/// ShellToolbar — top bar with logo, "Mario" brand + current notebook name,
+/// global search, share, settings, and a window-close button. Doubles as the
+/// drag-to-move area now that the OS title bar is hidden.
 library;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:window_manager/window_manager.dart';
 
 import '../../ui/colors.dart';
-import '../auth/auth_notifier.dart';
 import '../search/global_search.dart';
 import '../sharing/share_dialog.dart';
 import 'shell_state.dart';
@@ -28,7 +31,15 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
         .firstOrNull;
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
-    return Container(
+    final muted =
+        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+
+    final useWindowControls = !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.linux ||
+            defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.macOS);
+
+    final bar = Container(
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: border)),
       ),
@@ -36,46 +47,143 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
         bottom: false,
         child: SizedBox(
           height: 52,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: Row(
-              children: [
-                _LogoMark(),
-                const SizedBox(width: 12),
-                Text(
-                  currentName ?? 'Mario',
-                  style: GoogleFonts.spaceGrotesk(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                  ),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final w = constraints.maxWidth;
+              // Breakpoints — collapse from least- to most-essential as width
+              // shrinks. Desktop min window is 800px so most users see all.
+              final showBrand = w >= 360;
+              final showNotebookName = currentName != null && w >= 560;
+              final showSearch = w >= 420;
+              final showShare = w >= 640;
+              final showSettings = w >= 480;
+              return Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    _LogoMark(),
+                    if (showBrand) ...[
+                      const SizedBox(width: 12),
+                      Text(
+                        'Mario',
+                        style: GoogleFonts.spaceGrotesk(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                    if (showNotebookName) ...[
+                      const SizedBox(width: 8),
+                      Text('•',
+                          style:
+                              GoogleFonts.inter(fontSize: 13, color: muted)),
+                      const SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          currentName,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.spaceGrotesk(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w500,
+                            color: muted,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const Spacer(),
+                    if (showSearch)
+                      IconButton(
+                        tooltip: 'Search (Ctrl+Shift+F)',
+                        onPressed: () => showGlobalSearch(context),
+                        icon: const Icon(Icons.search, size: 18),
+                      ),
+                    if (showShare)
+                      IconButton(
+                        tooltip: 'Share',
+                        onPressed: () => showShareDialog(context, ref),
+                        icon: const Icon(Icons.ios_share, size: 18),
+                      ),
+                    if (showSettings)
+                      IconButton(
+                        tooltip: 'Settings',
+                        onPressed: () => context.push('/settings'),
+                        icon: const Icon(Icons.settings_outlined, size: 18),
+                      ),
+                    // Overflow menu picks up anything we hid above so the
+                    // user can still reach those actions on narrow widths.
+                    if (!showSearch || !showShare || !showSettings)
+                      _OverflowMenu(
+                        showSearch: !showSearch,
+                        showShare: !showShare,
+                        showSettings: !showSettings,
+                        onSearch: () => showGlobalSearch(context),
+                        onShare: () => showShareDialog(context, ref),
+                        onSettings: () => context.push('/settings'),
+                      ),
+                    if (useWindowControls)
+                      IconButton(
+                        tooltip: 'Close',
+                        onPressed: () => windowManager.close(),
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                  ],
                 ),
-                const Spacer(),
-                IconButton(
-                  tooltip: 'Search (Ctrl+Shift+F)',
-                  onPressed: () => showGlobalSearch(context),
-                  icon: const Icon(Icons.search, size: 18),
-                ),
-                IconButton(
-                  tooltip: 'Share',
-                  onPressed: () => showShareDialog(context, ref),
-                  icon: const Icon(Icons.ios_share, size: 18),
-                ),
-                IconButton(
-                  tooltip: 'Settings',
-                  onPressed: () => context.push('/settings'),
-                  icon: const Icon(Icons.settings_outlined, size: 18),
-                ),
-                IconButton(
-                  tooltip: 'Sign out',
-                  onPressed: () =>
-                      ref.read(authNotifierProvider.notifier).signOut(),
-                  icon: const Icon(Icons.logout, size: 18),
-                ),
-              ],
-            ),
+              );
+            },
           ),
         ),
       ),
+    );
+
+    return useWindowControls ? DragToMoveArea(child: bar) : bar;
+  }
+}
+
+enum _OverflowAction { search, share, settings }
+
+class _OverflowMenu extends StatelessWidget {
+  const _OverflowMenu({
+    required this.showSearch,
+    required this.showShare,
+    required this.showSettings,
+    required this.onSearch,
+    required this.onShare,
+    required this.onSettings,
+  });
+
+  final bool showSearch;
+  final bool showShare;
+  final bool showSettings;
+  final VoidCallback onSearch;
+  final VoidCallback onShare;
+  final VoidCallback onSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    return PopupMenuButton<_OverflowAction>(
+      tooltip: 'More',
+      icon: const Icon(Icons.more_vert, size: 18),
+      itemBuilder: (_) => [
+        if (showSearch)
+          const PopupMenuItem(
+              value: _OverflowAction.search, child: Text('Search')),
+        if (showShare)
+          const PopupMenuItem(
+              value: _OverflowAction.share, child: Text('Share')),
+        if (showSettings)
+          const PopupMenuItem(
+              value: _OverflowAction.settings, child: Text('Settings')),
+      ],
+      onSelected: (a) {
+        switch (a) {
+          case _OverflowAction.search:
+            onSearch();
+          case _OverflowAction.share:
+            onShare();
+          case _OverflowAction.settings:
+            onSettings();
+        }
+      },
     );
   }
 }

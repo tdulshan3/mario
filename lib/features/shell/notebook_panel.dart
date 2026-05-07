@@ -7,13 +7,16 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/models/notebook.dart';
 import '../../ui/colors.dart';
+import '../../ui/widgets/panel_header.dart';
 import '../auth/auth_notifier.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
 import 'shell_state.dart';
 
 class NotebookPanel extends ConsumerWidget {
-  const NotebookPanel({super.key});
+  const NotebookPanel({super.key, this.onCollapse});
+
+  final VoidCallback? onCollapse;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -30,18 +33,7 @@ class NotebookPanel extends ConsumerWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text(
-              'Notebooks',
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                letterSpacing: 1.2,
-                color: muted,
-              ),
-            ),
-          ),
+          PanelHeader(title: 'Notebooks', onCollapse: onCollapse),
           Expanded(
             child: notebooksAsync.when(
               loading: () => const Center(
@@ -90,7 +82,7 @@ class NotebookPanel extends ConsumerWidget {
             ),
           ),
           Padding(
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 8),
             child: TextButton.icon(
               onPressed: () => _create(context, ref),
               icon: const Icon(Icons.add, size: 16),
@@ -98,6 +90,10 @@ class NotebookPanel extends ConsumerWidget {
               style: TextButton.styleFrom(
                 alignment: Alignment.centerLeft,
                 minimumSize: const Size.fromHeight(36),
+                padding: EdgeInsets.symmetric(vertical: 20, horizontal: 10),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8), // Adjust corner radius
+                ),
               ),
             ),
           ),
@@ -196,18 +192,18 @@ class _NotebookTile extends StatelessWidget {
           borderRadius: BorderRadius.circular(6),
           onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 10),
             child: Row(
               children: [
                 Container(
-                  width: 10,
-                  height: 10,
+                  height: 24,
+                  width: 4,
                   decoration: BoxDecoration(
                     color: notebook.color,
                     borderRadius: BorderRadius.circular(2),
                   ),
                 ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     notebook.name,

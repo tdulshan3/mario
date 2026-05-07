@@ -13,7 +13,7 @@ Future<void> configureLinuxWindow() async {
     minimumSize: Size(800, 600),
     center: true,
     title: 'Mario',
-    titleBarStyle: TitleBarStyle.normal,
+    titleBarStyle: TitleBarStyle.hidden,
   );
   await windowManager.waitUntilReadyToShow(opts, () async {
     await windowManager.show();

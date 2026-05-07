@@ -15,6 +15,9 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/models/note_page.dart';
 import '../../core/services/drive_service.dart';
 import '../../ui/colors.dart';
+import '../drawing/drawing_canvas.dart';
+import '../drawing/drawing_toolbar.dart';
+import '../drawing/stroke.dart';
 import '../math/math_shortcut.dart';
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
@@ -22,6 +25,7 @@ import 'blocks/drawing_block.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
+import 'canvas_drawing_layer.dart';
 import 'canvas_toolbar.dart';
 import 'page_content_provider.dart';
 import 'word_shortcuts.dart';
@@ -123,12 +127,22 @@ class _EditorState extends ConsumerState<_Editor> {
   // happens inside AppFlowy's own scroll service, so no _vScroll needed).
   final ScrollController _hScroll = ScrollController();
 
+  // Freehand drawing on the canvas. Strokes persist alongside the document
+  // JSON in the page file (top-level `strokes` key) so they round-trip
+  // through Drive autosave.
+  late DrawingController _drawingController;
+  bool _drawMode = false;
+
   @override
   void initState() {
     super.initState();
     _editorState = afe.EditorState(document: afe.Document.fromJson(widget.rawJson));
     _txSub = _editorState.transactionStream.listen(_onTransaction);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
+    _drawingController = DrawingController(
+      initial: strokesFromJson(widget.rawJson['strokes'] as List?),
+    );
+    _drawingController.addListener(_onStrokesChanged);
   }
 
   @override
@@ -136,10 +150,23 @@ class _EditorState extends ConsumerState<_Editor> {
     _saveTimer?.cancel();
     _txSub.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
+    _drawingController.removeListener(_onStrokesChanged);
+    _drawingController.dispose();
     _hScroll.dispose();
     final state = _editorState;
     WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
     super.dispose();
+  }
+
+  void _onStrokesChanged() {
+    if (!mounted) return;
+    setState(() => _status = SaveStatus.dirty);
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_debounce, _save);
+  }
+
+  void _toggleDraw() {
+    setState(() => _drawMode = !_drawMode);
   }
 
   bool _onHardwareKey(KeyEvent event) {
@@ -185,6 +212,7 @@ class _EditorState extends ConsumerState<_Editor> {
         ...json,
         'title': widget.page.title,
         'updatedAt': DateTime.now().toIso8601String(),
+        'strokes': strokesToJson(_drawingController.snapshot()),
       };
       await drive.updatePageFile(widget.driveFileId, payload);
       if (!mounted) return;
@@ -315,8 +343,18 @@ class _EditorState extends ConsumerState<_Editor> {
             onZoomIn: _zoomIn,
             onZoomOut: _zoomOut,
             onZoomReset: _zoomReset,
+            drawMode: _drawMode,
+            onToggleDraw: _toggleDraw,
             trailing: VoiceDictationButton(editorState: _editorState),
           ),
+          if (_drawMode)
+            DrawingToolbar(
+              controller: _drawingController,
+              onCollapse: _toggleDraw,
+              onExport: () {},
+              onSave: _toggleDraw,
+              collapsed: false,
+            ),
           Expanded(
             child: Container(
               color: canvasBg,
@@ -352,36 +390,66 @@ class _EditorState extends ConsumerState<_Editor> {
                           child: Center(
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: 8),
-                              child: Transform.scale(
-                                scale: _zoom,
-                                alignment: Alignment.topCenter,
-                                child: SizedBox(
-                                  width: cardWidth,
-                                  height: cardHeight,
-                                  child: Material(
-                                    color: paper,
-                                    elevation: isDark ? 0 : 2,
-                                    borderRadius: BorderRadius.circular(2),
-                                    clipBehavior: Clip.antiAlias,
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        _PageHeader(page: widget.page),
-                                        Expanded(
-                                          child: afe.AppFlowyEditor(
-                                            editorState: _editorState,
-                                            editorStyle: style,
-                                            blockComponentBuilders:
-                                                blockBuilders,
-                                            characterShortcutEvents:
-                                                shortcutEvents,
-                                            commandShortcutEvents:
-                                                commandShortcuts,
-                                            autoFocus: true,
+                              // Outer SizedBox is the *post-scale* width so
+                              // the parent's hit-test region covers the whole
+                              // visually-zoomed card. OverflowBox then hands
+                              // the unscaled child its natural cardWidth
+                              // constraints inside that wider region.
+                              child: SizedBox(
+                                width: scaledWidth,
+                                height: cardHeight,
+                                child: OverflowBox(
+                                  minWidth: 0,
+                                  maxWidth: cardWidth,
+                                  minHeight: 0,
+                                  maxHeight: cardHeight,
+                                  alignment: Alignment.topCenter,
+                                  child: Transform.scale(
+                                    scale: _zoom,
+                                    alignment: Alignment.topCenter,
+                                    child: SizedBox(
+                                      width: cardWidth,
+                                      height: cardHeight,
+                                      child: Stack(
+                                        children: [
+                                          Material(
+                                            color: paper,
+                                            elevation: isDark ? 0 : 2,
+                                            borderRadius:
+                                                BorderRadius.circular(2),
+                                            clipBehavior: Clip.antiAlias,
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.stretch,
+                                              children: [
+                                                _PageHeader(page: widget.page),
+                                                Expanded(
+                                                  child: afe.AppFlowyEditor(
+                                                    editorState: _editorState,
+                                                    editorStyle: style,
+                                                    blockComponentBuilders:
+                                                        blockBuilders,
+                                                    characterShortcutEvents:
+                                                        shortcutEvents,
+                                                    commandShortcutEvents:
+                                                        commandShortcuts,
+                                                    autoFocus: true,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
                                           ),
-                                        ),
-                                      ],
+                                          // Drawing surface on top — strokes
+                                          // always visible; pointer capture
+                                          // only when draw mode is on.
+                                          Positioned.fill(
+                                            child: CanvasDrawingLayer(
+                                              controller: _drawingController,
+                                              active: _drawMode,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),

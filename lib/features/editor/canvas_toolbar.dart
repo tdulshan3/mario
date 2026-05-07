@@ -53,6 +53,8 @@ class CanvasToolbar extends StatefulWidget {
     required this.onZoomIn,
     required this.onZoomOut,
     required this.onZoomReset,
+    required this.drawMode,
+    required this.onToggleDraw,
     this.trailing,
   });
 
@@ -61,6 +63,8 @@ class CanvasToolbar extends StatefulWidget {
   final VoidCallback onZoomIn;
   final VoidCallback onZoomOut;
   final VoidCallback onZoomReset;
+  final bool drawMode;
+  final VoidCallback onToggleDraw;
   final Widget? trailing;
 
   @override
@@ -247,11 +251,13 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
         border: Border(bottom: BorderSide(color: border)),
       ),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+      // Wrap (not Row+horizontal scroll) so the ribbon flows onto multiple
+      // lines on narrow windows instead of getting cut off / requiring scroll.
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 2,
+        runSpacing: 2,
+        children: [
             _HeadingDropdown(onChanged: _setHeading),
             const _Divider(),
             _FontFamilyDropdown(onChanged: _setFontFamily),
@@ -356,9 +362,17 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
               tooltip: 'Insert table',
               onPressed: _insertTable,
             ),
-            _IconAction(
+            _ToggleButton(
               icon: Icons.draw_outlined,
-              tooltip: 'Insert drawing',
+              tooltip: widget.drawMode
+                  ? 'Exit drawing mode'
+                  : 'Draw on canvas',
+              active: widget.drawMode,
+              onPressed: widget.onToggleDraw,
+            ),
+            _IconAction(
+              icon: Icons.gesture,
+              tooltip: 'Insert drawing block',
               onPressed: () => _insertNode(drawingNode()),
             ),
             _IconAction(
@@ -404,7 +418,6 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
             ],
           ],
         ),
-      ),
     );
   }
 }
@@ -596,6 +609,10 @@ class _ColorButton extends StatelessWidget {
         itemBuilder: (_) => [
           PopupMenuItem(
             value: null,
+            // PopupMenuButton.onSelected only fires for non-null values, and
+            // colored swatches below pop with a null result via Navigator —
+            // so we wire "None" through PopupMenuItem.onTap directly.
+            onTap: () => onPicked(null),
             child: Row(children: [
               Icon(Icons.format_color_reset,
                   size: 14, color: Theme.of(context).colorScheme.onSurface),

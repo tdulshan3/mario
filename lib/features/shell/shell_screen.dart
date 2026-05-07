@@ -1,4 +1,5 @@
-/// ShellScreen — three-panel OneNote-style layout (notebooks | sections+pages | canvas).
+/// ShellScreen — four-panel OneNote-style layout (notebooks | sections | pages | canvas).
+/// Each side panel is wrapped in a CollapsiblePanel so the user can hide them.
 library;
 
 import 'package:flutter/material.dart';
@@ -6,11 +7,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
-import '../../ui/widgets/resizable_panel.dart';
+import '../../ui/widgets/collapsible_panel.dart';
 import '../editor/editor_screen.dart';
 import 'keyboard_shortcuts.dart';
 import 'notebook_panel.dart';
 import 'page_panel.dart';
+import 'section_panel.dart';
 import 'shell_state.dart';
 import 'toolbar.dart';
 
@@ -24,10 +26,26 @@ class ShellScreen extends ConsumerWidget {
         appBar: const ShellToolbar(),
         body: Row(
           crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: const [
-            ResizablePanel(initialWidth: 200, child: NotebookPanel()),
-            ResizablePanel(initialWidth: 250, child: PagePanel()),
-            Expanded(child: _CanvasPlaceholder()),
+          children: [
+            CollapsiblePanel(
+              title: 'Notebooks',
+              initialWidth: 200,
+              builder: (_, onCollapse) =>
+                  NotebookPanel(onCollapse: onCollapse),
+            ),
+            CollapsiblePanel(
+              title: 'Sections',
+              initialWidth: 200,
+              builder: (_, onCollapse) =>
+                  SectionPanel(onCollapse: onCollapse),
+            ),
+            CollapsiblePanel(
+              title: 'Pages',
+              initialWidth: 240,
+              builder: (_, onCollapse) =>
+                  PagePanel(onCollapse: onCollapse),
+            ),
+            const Expanded(child: _CanvasPlaceholder()),
           ],
         ),
       ),
