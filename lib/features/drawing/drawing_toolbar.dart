@@ -47,6 +47,8 @@ class DrawingToolbar extends StatelessWidget {
           border: Border(bottom: BorderSide(color: divider)),
         ),
         child: Wrap(
+          alignment: WrapAlignment.start,
+          runAlignment: WrapAlignment.start,
           crossAxisAlignment: WrapCrossAlignment.center,
           spacing: 4,
           runSpacing: 4,

@@ -59,38 +59,49 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
               final showSettings = w >= 480;
               return Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
+                // Outer row splits into two parts: an Expanded brand/name
+                // group on the left (which absorbs any slack from a short
+                // notebook name), and the icon strip on the right. Without
+                // the Expanded wrap, a Flexible+Spacer pair would leave the
+                // unused space at the *end* of the row — pushing icons
+                // toward center instead of pinning them to the right edge.
                 child: Row(
                   children: [
-                    _LogoMark(),
-                    if (showBrand) ...[
-                      const SizedBox(width: 12),
-                      Text(
-                        'Mario',
-                        style: GoogleFonts.spaceGrotesk(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w700,
-                        ),
+                    Expanded(
+                      child: Row(
+                        children: [
+                          _LogoMark(),
+                          if (showBrand) ...[
+                            const SizedBox(width: 12),
+                            Text(
+                              'Mario',
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                          if (showNotebookName) ...[
+                            const SizedBox(width: 8),
+                            Text('•',
+                                style: GoogleFonts.inter(
+                                    fontSize: 13, color: muted)),
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                currentName,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.spaceGrotesk(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w500,
+                                  color: muted,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       ),
-                    ],
-                    if (showNotebookName) ...[
-                      const SizedBox(width: 8),
-                      Text('•',
-                          style:
-                              GoogleFonts.inter(fontSize: 13, color: muted)),
-                      const SizedBox(width: 8),
-                      Flexible(
-                        child: Text(
-                          currentName,
-                          overflow: TextOverflow.ellipsis,
-                          style: GoogleFonts.spaceGrotesk(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w500,
-                            color: muted,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const Spacer(),
+                    ),
                     if (showSearch)
                       IconButton(
                         tooltip: 'Search (Ctrl+Shift+F)',

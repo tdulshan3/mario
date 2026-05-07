@@ -13,6 +13,7 @@ import 'package:provider/provider.dart';
 import '../../../core/services/voice_service.dart';
 import '../../../ui/colors.dart';
 import '_safe_transaction.dart';
+import 'block_context_menu.dart';
 
 class AudioBlockKeys {
   const AudioBlockKeys._();
@@ -162,9 +163,10 @@ class _AudioBlockComponentWidgetState extends State<AudioBlockComponentWidget> {
         ? MarioColors.surfaceVariantDark
         : MarioColors.surfaceVariant;
 
+    Widget content;
     if (_path.isEmpty) {
       // New block: prompt user to record.
-      return Padding(
+      content = Padding(
         padding: const EdgeInsets.symmetric(vertical: 8),
         child: Container(
           padding: const EdgeInsets.all(12),
@@ -209,23 +211,21 @@ class _AudioBlockComponentWidgetState extends State<AudioBlockComponentWidget> {
           ),
         ),
       );
-    }
-
-    _ensurePlayer();
-    final player = _player;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: bg,
-          border: Border.all(color: border),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+    } else {
+      _ensurePlayer();
+      final player = _player;
+      content = Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: bg,
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
             Row(
               children: [
                 IconButton(
@@ -274,17 +274,20 @@ class _AudioBlockComponentWidgetState extends State<AudioBlockComponentWidget> {
                 ),
               ],
             ),
-            if (_transcript.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                _transcript,
-                style: GoogleFonts.inter(fontSize: 12, color: muted),
-              ),
+              if (_transcript.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _transcript,
+                  style: GoogleFonts.inter(fontSize: 12, color: muted),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
-    );
+      );
+    }
+
+    return BlockContextMenu(node: widget.node, child: content);
   }
 
   String _format(Duration d) {

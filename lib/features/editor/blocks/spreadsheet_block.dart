@@ -15,6 +15,7 @@ import '../../spreadsheet/sheet_data.dart';
 import '../../spreadsheet/spreadsheet_widget.dart';
 import '../../spreadsheet/xlsx_parser.dart';
 import '_safe_transaction.dart';
+import 'block_context_menu.dart';
 
 class SpreadsheetBlockKeys {
   const SpreadsheetBlockKeys._();
@@ -145,51 +146,56 @@ class _SpreadsheetBlockComponentWidgetState
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: border),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                border: Border(bottom: BorderSide(color: border)),
-              ),
-              child: Row(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      'Spreadsheet',
-                      style: GoogleFonts.spaceGrotesk(
-                          fontSize: 12, fontWeight: FontWeight.w600),
+    return BlockContextMenu(
+      node: widget.node,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  border: Border(bottom: BorderSide(color: border)),
+                ),
+                child: Row(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        'Spreadsheet',
+                        style: GoogleFonts.spaceGrotesk(
+                            fontSize: 12, fontWeight: FontWeight.w600),
+                      ),
                     ),
-                  ),
-                  const Spacer(),
-                  IconButton(
-                    tooltip: 'Import .xlsx',
-                    icon: const Icon(Icons.file_upload_outlined, size: 16),
-                    onPressed: _import,
-                  ),
-                  IconButton(
-                    tooltip: 'Export .xlsx',
-                    icon: const Icon(Icons.download_outlined, size: 16),
-                    onPressed: _export,
-                  ),
-                ],
+                    const Spacer(),
+                    IconButton(
+                      tooltip: 'Import .xlsx',
+                      icon:
+                          const Icon(Icons.file_upload_outlined, size: 16),
+                      onPressed: _import,
+                    ),
+                    IconButton(
+                      tooltip: 'Export .xlsx',
+                      icon: const Icon(Icons.download_outlined, size: 16),
+                      onPressed: _export,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            SpreadsheetWidget(
-              workbook: _workbook,
-              onChanged: _persist,
-            ),
-          ],
+              SpreadsheetWidget(
+                workbook: _workbook,
+                onChanged: _persist,
+              ),
+            ],
+          ),
         ),
       ),
     );

@@ -68,6 +68,7 @@ dependencies:
   flutter_markdown: ^0.7.3
   firedart: ^0.9.8
   pasteboard: ^0.4.0
+  desktop_drop: ^0.7.1
 
 dev_dependencies:
   flutter_test:

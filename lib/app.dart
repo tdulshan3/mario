@@ -36,6 +36,12 @@ final _routerProvider = Provider<GoRouter>((ref) {
     initialLocation: '/login',
     redirect: (context, state) {
       final auth = ref.read(authStateProvider);
+      // Auth still resolving (e.g. silent refresh on Linux). Keep the user
+      // parked at /login — the login screen renders a spinner — and let the
+      // refresh listener re-trigger the redirect once a value lands.
+      if (!auth.hasValue) {
+        return state.matchedLocation == '/login' ? null : '/login';
+      }
       final loggedIn = auth.valueOrNull != null;
       final goingToLogin = state.matchedLocation == '/login';
       if (!loggedIn && !goingToLogin) return '/login';

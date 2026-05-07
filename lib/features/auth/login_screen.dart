@@ -12,7 +12,12 @@ class LoginScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final auth = ref.watch(authNotifierProvider);
+    final stream = ref.watch(authStateProvider);
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    // While the platform's auth stream hasn't emitted yet (e.g. Linux is
+    // doing a silent token refresh), don't flash the sign-in CTA — the
+    // router will whisk us away to the shell as soon as restore resolves.
+    final restoring = !stream.hasValue;
     return Scaffold(
       body: Center(
         child: ConstrainedBox(
@@ -45,25 +50,52 @@ class LoginScreen extends ConsumerWidget {
                   ),
                 ),
                 const SizedBox(height: 40),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    onPressed: auth.isLoading
-                        ? null
-                        : () => ref.read(authNotifierProvider.notifier).signIn(),
-                    icon: auth.isLoading
-                        ? const SizedBox(
-                            width: 18,
-                            height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                              color: Color(0xFF1A1A1A),
-                            ),
-                          )
-                        : const Icon(Icons.login, size: 18),
-                    label: const Text('Sign in with Google'),
+                if (restoring)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        const SizedBox(width: 12),
+                        Text(
+                          'Restoring session…',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            color: isDark
+                                ? MarioColors.onSurfaceMutedDark
+                                : MarioColors.onSurfaceMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      onPressed: auth.isLoading
+                          ? null
+                          : () => ref
+                              .read(authNotifierProvider.notifier)
+                              .signIn(),
+                      icon: auth.isLoading
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF1A1A1A),
+                              ),
+                            )
+                          : const Icon(Icons.login, size: 18),
+                      label: const Text('Sign in with Google'),
+                    ),
                   ),
-                ),
                 if (auth.hasError) ...[
                   const SizedBox(height: 16),
                   Text(

@@ -18,6 +18,7 @@ import 'package:provider/provider.dart';
 import '../../../core/services/ocr_service.dart';
 import '../../../ui/colors.dart';
 import '_safe_transaction.dart';
+import 'block_context_menu.dart';
 
 class MarioImageKeys {
   const MarioImageKeys._();
@@ -312,17 +313,9 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
       child: content,
     );
 
-    // Drag handle / + button on hover so the user can move (and delete) the
-    // block via the same gutter affordance every other AppFlowy block has.
-    if (widget.showActions && widget.actionBuilder != null) {
-      content = afe.BlockComponentActionWrapper(
-        node: widget.node,
-        actionBuilder: widget.actionBuilder!,
-        child: content,
-      );
-    }
-
-    return content;
+    // Right-click anywhere on the image to get a Word/OneDrive-style
+    // context menu (Move up / Move down / Duplicate / Delete).
+    return BlockContextMenu(node: widget.node, child: content);
   }
 
   // SelectableMixin — minimal implementation that mirrors AppFlowy's stock

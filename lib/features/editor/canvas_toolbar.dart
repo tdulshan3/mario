@@ -254,6 +254,10 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
       // Wrap (not Row+horizontal scroll) so the ribbon flows onto multiple
       // lines on narrow windows instead of getting cut off / requiring scroll.
       child: Wrap(
+        // Pin the ribbon to the start so it never floats to center on
+        // wide windows or after a page swap rebuilds the editor.
+        alignment: WrapAlignment.start,
+        runAlignment: WrapAlignment.start,
         crossAxisAlignment: WrapCrossAlignment.center,
         spacing: 2,
         runSpacing: 2,

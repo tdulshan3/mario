@@ -2,9 +2,11 @@
 library;
 
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -133,6 +135,45 @@ class _EditorState extends ConsumerState<_Editor> {
   late DrawingController _drawingController;
   bool _drawMode = false;
 
+  // True while the OS drag carries files over the canvas, so we can paint
+  // a drop-zone highlight to confirm the drop will be accepted.
+  bool _dragOver = false;
+
+  static const _imageExtensions = <String>{
+    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif',
+  };
+
+  bool _isImagePath(String p) {
+    final dot = p.lastIndexOf('.');
+    if (dot < 0) return false;
+    return _imageExtensions.contains(p.substring(dot).toLowerCase());
+  }
+
+  Future<void> _onFilesDropped(List<String> paths) async {
+    final imagePaths = <String>[];
+    for (final p in paths) {
+      if (!_isImagePath(p)) continue;
+      if (!await File(p).exists()) continue;
+      imagePaths.add(p);
+    }
+    if (imagePaths.isEmpty || _editorState.isDisposed) return;
+    final selection = _editorState.selection;
+    final basePath = selection?.end.path ??
+        _editorState.document.root.children.last.path;
+    final tx = _editorState.transaction
+      ..insertNodes(
+        basePath.next,
+        [
+          for (final p in imagePaths)
+            afe.Node(
+              type: MarioImageKeys.type,
+              attributes: {MarioImageKeys.url: p},
+            ),
+        ],
+      );
+    await _editorState.apply(tx);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -183,14 +224,27 @@ class _EditorState extends ConsumerState<_Editor> {
 
   void _onPointerSignal(PointerSignalEvent event) {
     if (event is! PointerScrollEvent) return;
-    if (!HardwareKeyboard.instance.isControlPressed) return;
+    final ctrl = HardwareKeyboard.instance.isControlPressed;
+    // In draw mode the canvas Listener swallows hit-tests, so the editor's
+    // own Scrollable never sees the wheel event — we forward it manually.
+    if (!ctrl && !_drawMode) return;
     GestureBinding.instance.pointerSignalResolver.register(event, (e) {
       final dy = (e as PointerScrollEvent).scrollDelta.dy;
-      if (dy < 0) {
-        _zoomIn();
-      } else if (dy > 0) {
-        _zoomOut();
+      if (ctrl) {
+        if (dy < 0) {
+          _zoomIn();
+        } else if (dy > 0) {
+          _zoomOut();
+        }
+        return;
       }
+      final scrollController =
+          _editorState.service.scrollService?.scrollController;
+      if (scrollController == null || !scrollController.hasClients) return;
+      final pos = scrollController.position;
+      final next =
+          (pos.pixels + dy).clamp(pos.minScrollExtent, pos.maxScrollExtent);
+      pos.jumpTo(next);
     });
   }
 
@@ -356,10 +410,25 @@ class _EditorState extends ConsumerState<_Editor> {
               collapsed: false,
             ),
           Expanded(
-            child: Container(
-              color: canvasBg,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
+            child: DropTarget(
+              onDragEntered: (_) => setState(() => _dragOver = true),
+              onDragExited: (_) => setState(() => _dragOver = false),
+              onDragDone: (details) {
+                setState(() => _dragOver = false);
+                _onFilesDropped(
+                    [for (final f in details.files) f.path]);
+              },
+              child: Container(
+                color: canvasBg,
+                foregroundDecoration: _dragOver
+                    ? BoxDecoration(
+                        border: Border.all(
+                            color: MarioColors.primary, width: 3),
+                        color: MarioColors.primary.withValues(alpha: 0.08),
+                      )
+                    : null,
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
                   const cardWidth = 820.0;
                   final scaledWidth = cardWidth * _zoom;
                   final viewportW = constraints.maxWidth;
@@ -462,6 +531,7 @@ class _EditorState extends ConsumerState<_Editor> {
                   );
                 },
               ),
+              ),
             ),
           ),
           _StatusBar(
@@ -551,3 +621,4 @@ class _StatusBar extends StatelessWidget {
     );
   }
 }
+

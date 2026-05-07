@@ -17,6 +17,7 @@ import '../../drawing/drawing_toolbar.dart';
 import '../../drawing/stroke.dart';
 import '../../drawing/stroke_painter.dart';
 import '_safe_transaction.dart';
+import 'block_context_menu.dart';
 
 class DrawingBlockKeys {
   const DrawingBlockKeys._();
@@ -159,43 +160,46 @@ class _DrawingBlockComponentWidgetState
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Container(
-        decoration: BoxDecoration(
-          border: Border.all(color: border),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            DrawingToolbar(
-              controller: _controller,
-              collapsed: !_expanded,
-              onCollapse: _toggleExpanded,
-              onExport: _exportPng,
-              onSave: _save,
-            ),
-            if (_expanded)
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Center(
-                  child: DrawingCanvas(
-                    controller: _controller,
-                    size: _size,
-                    boundaryKey: _boundary,
-                  ),
-                ),
-              )
-            else
-              _CollapsedPreview(
-                strokes: _controller.snapshot(),
-                size: _size,
-                onTap: _toggleExpanded,
-                muted: muted,
+    return BlockContextMenu(
+      node: widget.node,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Container(
+          decoration: BoxDecoration(
+            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              DrawingToolbar(
+                controller: _controller,
+                collapsed: !_expanded,
+                onCollapse: _toggleExpanded,
+                onExport: _exportPng,
+                onSave: _save,
               ),
-          ],
+              if (_expanded)
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Center(
+                    child: DrawingCanvas(
+                      controller: _controller,
+                      size: _size,
+                      boundaryKey: _boundary,
+                    ),
+                  ),
+                )
+              else
+                _CollapsedPreview(
+                  strokes: _controller.snapshot(),
+                  size: _size,
+                  onTap: _toggleExpanded,
+                  muted: muted,
+                ),
+            ],
+          ),
         ),
       ),
     );

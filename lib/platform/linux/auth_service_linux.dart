@@ -19,7 +19,12 @@ class AuthServiceLinux implements AuthService {
     required this.googleClientSecret,
     required this.firebaseApiKey,
     required this.firedartStore,
-  });
+  }) {
+    // Kick off a silent restore so a returning user lands on the shell
+    // instead of the login screen. authStateChanges() awaits this before
+    // emitting, so the router stays in "loading" until restore resolves.
+    _restoreFuture = _tryRestoreSession();
+  }
 
   final String googleClientId;
   final String googleClientSecret;
@@ -40,18 +45,51 @@ class AuthServiceLinux implements AuthService {
   GoogleOAuthTokens? _googleTokens;
   MarioUser? _current;
   Future<MarioUser?>? _signInInFlight;
+  late final Future<void> _restoreFuture;
   final _stateController = StreamController<MarioUser?>.broadcast();
 
   @override
   MarioUser? get currentUser => _current;
 
-  /// Subscribers see the latest known state immediately, then any subsequent
-  /// changes — so the router redirect doesn't get stuck thinking the user is
-  /// logged out after a successful sign-in.
+  /// Subscribers wait for the silent-restore attempt to finish before seeing
+  /// the first value, so a returning user never flashes through the login
+  /// screen. Subsequent changes flow through `_stateController`.
   @override
   Stream<MarioUser?> authStateChanges() async* {
+    await _restoreFuture;
     yield _current;
     yield* _stateController.stream;
+  }
+
+  Future<void> _tryRestoreSession() async {
+    try {
+      final storedRefresh = await _storage.read(key: _refreshKey);
+      if (storedRefresh == null || storedRefresh.isEmpty) return;
+      final flow = GoogleOAuthFlow(
+        clientId: googleClientId,
+        clientSecret: googleClientSecret,
+        scopes: _scopes,
+        openBrowser: (_) async {},
+      );
+      final tokens = await flow.refresh(storedRefresh);
+      if (tokens == null) return;
+      _googleTokens = tokens;
+      if (tokens.refreshToken != null) {
+        await _storage.write(key: _refreshKey, value: tokens.refreshToken);
+      }
+      final googleIdToken = tokens.idToken;
+      if (googleIdToken == null) return;
+      final firebase = await _exchangeForFirebaseSession(googleIdToken);
+      _current = MarioUser(
+        uid: firebase.uid,
+        email: firebase.email,
+        displayName: firebase.displayName,
+        photoUrl: firebase.photoUrl,
+      );
+    } catch (_) {
+      // Restore failed (no network, expired refresh token, etc). Fall
+      // through; the user will see the login screen and can sign in.
+    }
   }
 
   @override

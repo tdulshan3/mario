@@ -9,6 +9,7 @@ import 'package:provider/provider.dart';
 
 import '../../../ui/colors.dart';
 import '_safe_transaction.dart';
+import 'block_context_menu.dart';
 
 class MathBlockKeys {
   const MathBlockKeys._();
@@ -160,19 +161,22 @@ class _MathBlockComponentWidgetState extends State<MathBlockComponentWidget> {
             ),
           );
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Container(
-        decoration: BoxDecoration(
-          color: bg,
-          border: Border(
-              left: BorderSide(color: MarioColors.primary, width: 3)),
-          borderRadius: const BorderRadius.only(
-            topRight: Radius.circular(6),
-            bottomRight: Radius.circular(6),
+    return BlockContextMenu(
+      node: widget.node,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Container(
+          decoration: BoxDecoration(
+            color: bg,
+            border: Border(
+                left: BorderSide(color: MarioColors.primary, width: 3)),
+            borderRadius: const BorderRadius.only(
+              topRight: Radius.circular(6),
+              bottomRight: Radius.circular(6),
+            ),
           ),
+          child: body,
         ),
-        child: body,
       ),
     );
   }
