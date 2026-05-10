@@ -1,0 +1,11 @@
+# makepkg working trees
+pkg/
+src/
+
+# Build artifacts
+*.pkg.tar.zst
+*.pkg.tar.zst.sig
+mario-*-x86_64.tar.gz
+
+# Locally-generated placeholder icon
+mario.png

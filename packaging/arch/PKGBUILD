@@ -1,0 +1,71 @@
+# Maintainer: Thushara Dulshan <135942637+tdulshan3@users.noreply.github.com>
+pkgname=mario
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="Mario — a Flutter desktop notes app with rich text, math, drawing, and Drive sync"
+arch=('x86_64')
+url="https://github.com/tdulshan3/mario"
+license=('custom')
+depends=(
+  'gtk3'
+  'glib2'
+  'xdg-utils'
+  'libsecret'
+  'libnotify'
+)
+optdepends=(
+  'imagemagick: regenerate the placeholder icon'
+)
+options=('!strip' '!debug')
+install="${pkgname}.install"
+
+# For an AUR upload, replace the source line with the GitHub release URL:
+#   source=("${pkgname}-${pkgver}.tar.gz::https://github.com/tdulshan3/mario/releases/download/v${pkgver}/mario-${pkgver}-x86_64.tar.gz"
+#           "mario.desktop"
+#           "mario.sh")
+# and fill the sha256sums for the tarball. For local builds we point at the
+# tarball produced by build_release.sh in the same directory.
+source=(
+  "mario-${pkgver}-x86_64.tar.gz"
+  "mario.desktop"
+  "mario.sh"
+  "mario.png"
+)
+sha256sums=(
+  'SKIP'
+  'SKIP'
+  'SKIP'
+  'SKIP'
+)
+
+package() {
+  # Flutter bundle lives at /opt/mario; matches the path baked into
+  # mario.sh + mario.desktop (Icon= field).
+  install -d "${pkgdir}/opt/${pkgname}"
+  cp -a "${srcdir}/bundle/." "${pkgdir}/opt/${pkgname}/"
+
+  # Make sure the main binary is executable (tar can drop bits depending on
+  # how the archive was produced).
+  chmod 0755 "${pkgdir}/opt/${pkgname}/${pkgname}"
+
+  # Launcher in $PATH.
+  install -Dm0755 "${srcdir}/mario.sh" "${pkgdir}/usr/bin/${pkgname}"
+
+  # Desktop entry.
+  install -Dm0644 "${srcdir}/mario.desktop" \
+    "${pkgdir}/usr/share/applications/${pkgname}.desktop"
+
+  # Hicolor icon, if the tarball shipped one.
+  if [ -f "${srcdir}/bundle/data/flutter_assets/assets/icon.png" ]; then
+    install -Dm0644 \
+      "${srcdir}/bundle/data/flutter_assets/assets/icon.png" \
+      "${pkgdir}/usr/share/icons/hicolor/256x256/apps/${pkgname}.png"
+  elif [ -f "${srcdir}/mario.png" ]; then
+    install -Dm0644 "${srcdir}/mario.png" \
+      "${pkgdir}/usr/share/icons/hicolor/256x256/apps/${pkgname}.png"
+  fi
+
+  # License placeholder so namcap stops complaining; replace with a real
+  # LICENSE file when the project picks one.
+  install -Dm0644 /dev/null "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}
