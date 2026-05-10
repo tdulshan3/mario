@@ -5,6 +5,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
@@ -13,6 +14,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:webview_cef/webview_cef.dart';
 
 import '../../core/models/note_page.dart';
 import '../../core/services/drive_service.dart';
@@ -30,6 +32,7 @@ import 'blocks/spreadsheet_block.dart';
 import 'canvas_drawing_layer.dart';
 import 'canvas_toolbar.dart';
 import 'page_content_provider.dart';
+import 'paste_html_bridge.dart';
 import 'word_shortcuts.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
@@ -91,6 +94,10 @@ class _UnavailableContent extends StatelessWidget {
 
 enum SaveStatus { idle, dirty, saving, saved, error }
 
+/// Key under which the verbatim paste-HTML source is stashed in the page's
+/// Drive payload, so the preview-pane override survives page navigation.
+const String _rawHtmlOverrideKey = 'rawHtmlOverride';
+
 class _Editor extends ConsumerStatefulWidget {
   const _Editor({
     super.key,
@@ -139,6 +146,12 @@ class _EditorState extends ConsumerState<_Editor> {
   // a drop-zone highlight to confirm the drop will be accepted.
   bool _dragOver = false;
 
+  // HTML preview pane — toggled from the toolbar. _previewHtml is fed by
+  // _updatePreview (called on each transaction while preview is on) so the
+  // pane re-renders without rebuilding the editor.
+  bool _previewMode = false;
+  final ValueNotifier<String> _previewHtml = ValueNotifier<String>('');
+
   static const _imageExtensions = <String>{
     '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif',
   };
@@ -154,7 +167,13 @@ class _EditorState extends ConsumerState<_Editor> {
     for (final p in paths) {
       if (!_isImagePath(p)) continue;
       if (!await File(p).exists()) continue;
-      imagePaths.add(p);
+      // Copy into the persistent image dir so the Drive reference survives
+      // the user moving / deleting / renaming the original file.
+      try {
+        imagePaths.add(await persistImageFile(p));
+      } catch (_) {
+        imagePaths.add(p);
+      }
     }
     if (imagePaths.isEmpty || _editorState.isDisposed) return;
     final selection = _editorState.selection;
@@ -184,19 +203,83 @@ class _EditorState extends ConsumerState<_Editor> {
       initial: strokesFromJson(widget.rawJson['strokes'] as List?),
     );
     _drawingController.addListener(_onStrokesChanged);
+    // Restore this page's stashed paste-HTML override (or clear if the page
+    // has none — would otherwise leak from the previously-mounted editor).
+    // Then watch the bridge so paste-detected full HTML auto-routes into the
+    // preview pane (and pops the pane open if it was closed).
+    final savedOverride = widget.rawJson[_rawHtmlOverrideKey] as String?;
+    rawHtmlOverride.value =
+        (savedOverride != null && savedOverride.isNotEmpty) ? savedOverride : null;
+    rawHtmlOverride.addListener(_onRawHtmlOverrideChanged);
+    if (rawHtmlOverride.value != null) {
+      // Auto-open preview on a page that has a stashed override — same UX as
+      // the immediate-paste flow, just rehydrated from Drive.
+      _previewMode = true;
+      _previewHtml.value = rawHtmlOverride.value!;
+    }
   }
 
   @override
   void dispose() {
+    final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
     _txSub.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
     _drawingController.removeListener(_onStrokesChanged);
     _drawingController.dispose();
     _hScroll.dispose();
+    _previewHtml.dispose();
+    rawHtmlOverride.removeListener(_onRawHtmlOverrideChanged);
     final state = _editorState;
+    // Flush a pending debounced save so paste-then-quick-switch doesn't drop
+    // unsaved work. We snapshot the doc + override *now* (while the state is
+    // alive) and fire off the Drive write without awaiting it — dispose has
+    // to stay synchronous, so the save happens as a detached task.
+    if (hadPendingSave && !state.isDisposed) {
+      _flushFinalSave(state);
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
     super.dispose();
+  }
+
+  /// Fire-and-forget Drive save using a snapshot taken before dispose. Runs
+  /// outside the widget's mounted lifecycle, so it must NOT touch context,
+  /// setState, or any State fields — only the snapshot is safe.
+  void _flushFinalSave(afe.EditorState state) {
+    final snapshot = <String, dynamic>{
+      ...state.document.toJson(),
+      'title': widget.page.title,
+      'updatedAt': DateTime.now().toIso8601String(),
+      'strokes': strokesToJson(_drawingController.snapshot()),
+      if (rawHtmlOverride.value != null && rawHtmlOverride.value!.isNotEmpty)
+        _rawHtmlOverrideKey: rawHtmlOverride.value,
+    };
+    final fileId = widget.driveFileId;
+    final drive = GetIt.I<DriveService>();
+    unawaited(drive.updatePageFile(fileId, snapshot).catchError((_) {
+      // Silent: the user has already navigated away; surfacing an error
+      // through a no-longer-mounted ScaffoldMessenger isn't useful.
+    }));
+  }
+
+  void _onRawHtmlOverrideChanged() {
+    if (!mounted) return;
+    final hasOverride = rawHtmlOverride.value != null;
+    // Auto-pop the preview pane open when paste sets an override — the user
+    // pasted a styled doc clearly intending to *see* it.
+    if (hasOverride && !_previewMode) {
+      setState(() => _previewMode = true);
+    } else if (mounted) {
+      // Override cleared (or replaced) — refresh preview content if it's open.
+      setState(() {});
+    }
+    if (_previewMode) _updatePreview();
+    // Persist the override change to Drive. Without this, paste-HTML lives
+    // only in memory and disappears on page switch (the page reloads from
+    // Drive, which never saw the paste).
+    setState(() => _status = SaveStatus.dirty);
+    _saveTimer?.cancel();
+    _saveTimer = Timer(_debounce, _save);
   }
 
   void _onStrokesChanged() {
@@ -254,6 +337,28 @@ class _EditorState extends ConsumerState<_Editor> {
     setState(() => _status = SaveStatus.dirty);
     _saveTimer?.cancel();
     _saveTimer = Timer(_debounce, _save);
+    if (_previewMode) _updatePreview();
+  }
+
+  void _updatePreview() {
+    try {
+      // Pasted-HTML override wins — render the user's verbatim source so
+      // sticky/grid/JS/animations all survive. Otherwise fall back to the
+      // round-tripped doc HTML.
+      final override = rawHtmlOverride.value;
+      if (override != null && override.isNotEmpty) {
+        _previewHtml.value = override;
+      } else {
+        _previewHtml.value = afe.documentToHTML(_editorState.document);
+      }
+    } catch (e) {
+      _previewHtml.value = '<!-- preview error: $e -->';
+    }
+  }
+
+  void _togglePreview() {
+    setState(() => _previewMode = !_previewMode);
+    if (_previewMode) _updatePreview();
   }
 
   Future<void> _save() async {
@@ -267,6 +372,8 @@ class _EditorState extends ConsumerState<_Editor> {
         'title': widget.page.title,
         'updatedAt': DateTime.now().toIso8601String(),
         'strokes': strokesToJson(_drawingController.snapshot()),
+        if (rawHtmlOverride.value != null && rawHtmlOverride.value!.isNotEmpty)
+          _rawHtmlOverrideKey: rawHtmlOverride.value,
       };
       await drive.updatePageFile(widget.driveFileId, payload);
       if (!mounted) return;
@@ -303,38 +410,49 @@ class _EditorState extends ConsumerState<_Editor> {
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final muted =
-        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
-    final canvasBg =
-        isDark ? const Color(0xFF1A1A1A) : const Color(0xFFE9E9E9);
-    final paper = isDark ? const Color(0xFF242424) : Colors.white;
+    final scheme = Theme.of(context).colorScheme;
+    final muted = scheme.onSurfaceVariant;
+    // Canvas behind the paper card: surfaceContainerHighest is the panel-bg
+    // token (slightly tinted from the base surface), which gives the Book
+    // theme its sepia surround without affecting Light/Dark.
+    final canvasBg = scheme.surfaceContainerHighest;
+    // Paper is the elevated/raised surface — pure white in Light, near-black
+    // in Dark, light cream in Book.
+    final paper = scheme.surfaceContainerHigh;
 
+    // AppFlowy applies editorStyle.padding to EVERY block (page_block_component
+    // wraps each item in `Padding(padding: editorStyle.padding)`), so any
+    // vertical value here doubles up between adjacent blocks. Keep it 0 and
+    // get top/bottom breathing room from the editor's header/footer slots.
     final style = isDark
         ? afe.EditorStyle.desktop(
             cursorColor: MarioColors.primary,
             selectionColor: MarioColors.primary.withValues(alpha: 0.25),
-            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.2),
               lineHeight: 1.2,
             ),
+            cursorWidth: 2.0,
           )
         : afe.EditorStyle.desktop(
             cursorColor: MarioColors.primaryPressed,
             selectionColor: MarioColors.primary.withValues(alpha: 0.35),
-            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 24),
+            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurface, height: 1.2),
               lineHeight: 1.2,
             ),
+            cursorWidth: 2.0,
           );
 
-    // Tight per-block padding overrides AppFlowy's default 4px vertical
-    // (8px between adjacent paragraphs); 1px gives a Word-like density.
+    // Drop AppFlowy's default 4px vertical block padding to zero so the gap
+    // between adjacent paragraphs matches wrapped-line spacing inside one
+    // paragraph (otherwise 2px of padding shows up only between blocks).
     final tightConfig = afe.BlockComponentConfiguration(
-      padding: (_) => const EdgeInsets.symmetric(vertical: 1),
+      padding: (_) => EdgeInsets.symmetric(vertical: 1),
     );
 
     final blockBuilders = <String, afe.BlockComponentBuilder>{
@@ -399,7 +517,22 @@ class _EditorState extends ConsumerState<_Editor> {
             onZoomReset: _zoomReset,
             drawMode: _drawMode,
             onToggleDraw: _toggleDraw,
-            trailing: VoiceDictationButton(editorState: _editorState),
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: Icon(
+                    _previewMode ? Icons.code_off : Icons.code,
+                    color: _previewMode ? MarioColors.primary : null,
+                  ),
+                  tooltip: _previewMode
+                      ? 'Hide HTML preview'
+                      : 'Show HTML preview',
+                  onPressed: _togglePreview,
+                ),
+                VoiceDictationButton(editorState: _editorState),
+              ],
+            ),
           ),
           if (_drawMode)
             DrawingToolbar(
@@ -410,7 +543,12 @@ class _EditorState extends ConsumerState<_Editor> {
               collapsed: false,
             ),
           Expanded(
-            child: DropTarget(
+            child: _previewMode
+                ? _HtmlPreviewPane(
+                    html: _previewHtml,
+                    isDark: isDark,
+                  )
+                : DropTarget(
               onDragEntered: (_) => setState(() => _dragOver = true),
               onDragExited: (_) => setState(() => _dragOver = false),
               onDragDone: (details) {
@@ -503,6 +641,10 @@ class _EditorState extends ConsumerState<_Editor> {
                                                     commandShortcutEvents:
                                                         commandShortcuts,
                                                     autoFocus: true,
+                                                    header: const SizedBox(
+                                                        height: 16),
+                                                    footer: const SizedBox(
+                                                        height: 24),
                                                   ),
                                                 ),
                                               ],
@@ -548,6 +690,270 @@ const _overriddenShortcutKeys = <String>{
   'toggle code', // Ctrl+E — AppFlowy uses for code; Word uses for align-center
   'paste the content', // Ctrl+V — replaced by smart paste (image+markdown+rich)
 };
+
+/// One-time CEF init — `WebviewManager().initialize()` is safe to await
+/// repeatedly but we cache the future so concurrent preview opens don't race.
+Future<void>? _cefInit;
+Future<void> _ensureCef() {
+  return _cefInit ??= WebviewManager().initialize();
+}
+
+/// Wraps documentToHTML output in a full HTML5 doc with default styling so
+/// the webview has something to render (otherwise it'd inherit no margins,
+/// no font, etc.). The body content is the AppFlowy-emitted HTML.
+String _wrapPreviewHtml(String body, {required bool isDark}) {
+  final bg = isDark ? '#1f1f1f' : '#ffffff';
+  final fg = isDark ? '#e6e6e6' : '#1a1a18';
+  return '''<!DOCTYPE html>
+<html><head>
+<meta charset="UTF-8">
+<style>
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: $bg;
+    color: $fg;
+    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    padding: 24px 32px;
+    max-width: 820px;
+    margin: 0 auto;
+  }
+  h1, h2, h3, h4 { font-weight: 600; line-height: 1.25; margin-top: 1.4em; }
+  p { margin: 0.5em 0; }
+  ul, ol { padding-left: 1.5em; }
+  blockquote { border-left: 3px solid #888; margin: 0.5em 0; padding-left: 1em; color: #888; }
+  code { font-family: ui-monospace, "Fira Code", monospace; background: rgba(127,127,127,0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
+  pre { background: rgba(127,127,127,0.1); padding: 12px; border-radius: 6px; overflow-x: auto; }
+  img { max-width: 100%; height: auto; }
+  table { border-collapse: collapse; }
+  th, td { border: 1px solid rgba(127,127,127,0.4); padding: 4px 8px; }
+  a { color: #5fa8e9; }
+</style>
+</head><body>$body</body></html>''';
+}
+
+class _HtmlPreviewPane extends StatefulWidget {
+  const _HtmlPreviewPane({required this.html, required this.isDark});
+
+  final ValueListenable<String> html;
+  final bool isDark;
+
+  @override
+  State<_HtmlPreviewPane> createState() => _HtmlPreviewPaneState();
+}
+
+class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
+  WebViewController? _controller;
+  String? _error;
+  File? _tempFile;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.html.addListener(_onHtmlChanged);
+    _setup();
+  }
+
+  @override
+  void dispose() {
+    widget.html.removeListener(_onHtmlChanged);
+    _controller?.dispose();
+    final f = _tempFile;
+    if (f != null) {
+      // Fire-and-forget — file deletion is best-effort; an OS cleanup will
+      // sweep stragglers eventually.
+      f.delete().catchError((_) => f);
+    }
+    super.dispose();
+  }
+
+  // Set by _onHtmlChanged when the listener fires before _controller is ready,
+  // so _setup can catch up after init with the latest value.
+  bool _dirtyDuringInit = false;
+
+  Future<void> _setup() async {
+    try {
+      await _ensureCef().timeout(const Duration(seconds: 15));
+      final c = WebviewManager().createWebView(
+        loading: const Center(
+          child: SizedBox(
+            width: 18,
+            height: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+      final url = await _writeTempFile(widget.html.value);
+      await c.initialize(url);
+      if (!mounted) {
+        c.dispose();
+        return;
+      }
+      setState(() => _controller = c);
+      if (_dirtyDuringInit) {
+        _dirtyDuringInit = false;
+        final url2 = await _writeTempFile(widget.html.value);
+        if (!mounted) return;
+        await c.loadUrl(url2);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = '$e');
+    }
+  }
+
+  void _onHtmlChanged() async {
+    final c = _controller;
+    if (c == null) {
+      // Controller not ready yet — flag for _setup to catch up post-init.
+      _dirtyDuringInit = true;
+      return;
+    }
+    final url = await _writeTempFile(widget.html.value);
+    if (!mounted) return;
+    c.loadUrl(url);
+  }
+
+  /// Writing to disk avoids the size & cross-origin headaches of base64
+  /// data: URIs. Per-State unique filename so two preview panes (sequential
+  /// after a page switch, or briefly overlapping during dispose) never share
+  /// a path — same-URL reuse triggered stale renders from CEF's cache layer.
+  ///
+  /// If `body` is already a full HTML document (DOCTYPE or `<html>` root),
+  /// it's written verbatim — wrapping it again would nest two `<html>` trees
+  /// and most of the user's CSS would never apply.
+  Future<String> _writeTempFile(String body) async {
+    final t = body.trimLeft().toLowerCase();
+    final isFullDoc = t.startsWith('<!doctype') || t.startsWith('<html');
+    final content =
+        isFullDoc ? body : _wrapPreviewHtml(body, isDark: widget.isDark);
+    var f = _tempFile;
+    if (f == null) {
+      final dir = Directory.systemTemp;
+      final stamp = DateTime.now().microsecondsSinceEpoch;
+      f = File('${dir.path}/mario_preview_$stamp.html');
+      _tempFile = f;
+    }
+    await f.writeAsString(content);
+    return Uri.file(f.path).toString();
+  }
+
+  Future<void> _openInBrowser() async {
+    final url = await _writeTempFile(widget.html.value);
+    final path = Uri.parse(url).toFilePath();
+    try {
+      if (Platform.isLinux) {
+        await Process.start('xdg-open', [path]);
+      } else if (Platform.isMacOS) {
+        await Process.start('open', [path]);
+      } else if (Platform.isWindows) {
+        await Process.start('cmd', ['/c', 'start', '', path]);
+      }
+    } catch (_) {
+      // ignore — user can copy the path manually
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = widget.isDark;
+    final bg = isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF7F7F7);
+    final muted =
+        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+    final border = isDark ? const Color(0xFF2C2C2C) : const Color(0xFFDADADA);
+    final controller = _controller;
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: bg,
+        border: Border(left: BorderSide(color: border)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: ValueListenableBuilder<String?>(
+              valueListenable: rawHtmlOverride,
+              builder: (context, override, _) {
+                final pinned = override != null && override.isNotEmpty;
+                return Row(
+                  children: [
+                    Text(
+                      pinned ? 'HTML preview · pinned source' : 'HTML preview',
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: pinned ? MarioColors.primary : muted,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                    const Spacer(),
+                    if (pinned)
+                      TextButton.icon(
+                        onPressed: () => rawHtmlOverride.value = null,
+                        icon: const Icon(Icons.close, size: 14),
+                        label: const Text('Unpin'),
+                        style: TextButton.styleFrom(
+                          foregroundColor: muted,
+                          textStyle: GoogleFonts.inter(fontSize: 11),
+                          padding:
+                              const EdgeInsets.symmetric(horizontal: 8),
+                          minimumSize: const Size(0, 28),
+                        ),
+                      ),
+                    TextButton.icon(
+                      onPressed: _openInBrowser,
+                      icon: const Icon(Icons.open_in_new, size: 14),
+                      label: const Text('Open in browser'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: muted,
+                        textStyle: GoogleFonts.inter(fontSize: 11),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 28),
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+          Divider(height: 1, color: border),
+          Expanded(
+            child: _error != null
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Text(
+                        'Preview unavailable: $_error\n\nClick "Open in '
+                        'browser" above to render in your default browser.',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(fontSize: 12, color: muted),
+                      ),
+                    ),
+                  )
+                : controller == null
+                    ? const Center(
+                        child: SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      )
+                    : ValueListenableBuilder<bool>(
+                        valueListenable: controller,
+                        builder: (context, ready, _) => SizedBox.expand(
+                          child: ready
+                              ? controller.webviewWidget
+                              : controller.loadingWidget,
+                        ),
+                      ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
 class _PageHeader extends StatelessWidget {
   const _PageHeader({required this.page});

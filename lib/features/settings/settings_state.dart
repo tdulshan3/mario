@@ -1,15 +1,16 @@
 /// SettingsState + SettingsNotifier — shared_preferences-backed user prefs.
 library;
 
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../../ui/theme.dart';
+
 enum CanvasWidth { narrow, medium, full }
 
 class SettingsState {
-  final ThemeMode themeMode;
+  final MarioThemeMode themeMode;
   final double fontScale;
   final CanvasWidth canvasWidth;
   final bool autoCorrectMath;
@@ -19,7 +20,7 @@ class SettingsState {
   final bool offlineMode;
 
   const SettingsState({
-    this.themeMode = ThemeMode.system,
+    this.themeMode = MarioThemeMode.system,
     this.fontScale = 1.0,
     this.canvasWidth = CanvasWidth.medium,
     this.autoCorrectMath = true,
@@ -30,7 +31,7 @@ class SettingsState {
   });
 
   SettingsState copyWith({
-    ThemeMode? themeMode,
+    MarioThemeMode? themeMode,
     double? fontScale,
     CanvasWidth? canvasWidth,
     bool? autoCorrectMath,
@@ -105,10 +106,10 @@ class SettingsNotifier extends AsyncNotifier<SettingsState> {
           ? _secure.delete(key: _kAnthropicKey)
           : _secure.write(key: _kAnthropicKey, value: key);
 
-  ThemeMode _readTheme(SharedPreferences p) {
+  MarioThemeMode _readTheme(SharedPreferences p) {
     final s = p.getString(_kThemeMode);
-    return ThemeMode.values
-        .firstWhere((m) => m.name == s, orElse: () => ThemeMode.system);
+    return MarioThemeMode.values
+        .firstWhere((m) => m.name == s, orElse: () => MarioThemeMode.system);
   }
 
   CanvasWidth _readWidth(SharedPreferences p) {

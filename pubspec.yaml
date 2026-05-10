@@ -70,6 +70,10 @@ dependencies:
   pasteboard: ^0.4.0
   desktop_drop: ^0.7.1
 
+  # HTML preview pane — embedded Chromium via CEF. Linux/Win/macOS desktop
+  # only; first build downloads ~150MB of CEF binaries.
+  webview_cef: ^0.2.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

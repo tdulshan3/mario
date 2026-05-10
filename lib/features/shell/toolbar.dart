@@ -10,7 +10,6 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
 
-import '../../ui/colors.dart';
 import '../search/global_search.dart';
 import '../sharing/share_dialog.dart';
 import 'shell_state.dart';
@@ -29,10 +28,9 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
         .where((n) => n.id == selection.notebookId)
         .map((n) => n.name)
         .firstOrNull;
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final border = isDark ? MarioColors.borderDark : MarioColors.border;
-    final muted =
-        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+    final scheme = Theme.of(context).colorScheme;
+    final border = scheme.outlineVariant;
+    final muted = scheme.onSurfaceVariant;
 
     final useWindowControls = !kIsWeb &&
         (defaultTargetPlatform == TargetPlatform.linux ||
@@ -41,6 +39,7 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
 
     final bar = Container(
       decoration: BoxDecoration(
+        color: scheme.surface,
         border: Border(bottom: BorderSide(color: border)),
       ),
       child: SafeArea(
@@ -202,12 +201,20 @@ class _OverflowMenu extends StatelessWidget {
 class _LogoMark extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Container(
       width: 28,
       height: 28,
       decoration: BoxDecoration(
-        color: MarioColors.primary,
-        borderRadius: BorderRadius.circular(6),
+        color: scheme.primary,
+        borderRadius: BorderRadius.circular(8),
+        boxShadow: [
+          BoxShadow(
+            color: scheme.primary.withValues(alpha: 0.3),
+            blurRadius: 6,
+            offset: const Offset(0, 1),
+          ),
+        ],
       ),
       alignment: Alignment.center,
       child: Text(
@@ -215,7 +222,7 @@ class _LogoMark extends StatelessWidget {
         style: GoogleFonts.spaceGrotesk(
           fontSize: 16,
           fontWeight: FontWeight.w700,
-          color: Colors.white,
+          color: scheme.onPrimary,
           height: 1,
         ),
       ),

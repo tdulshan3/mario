@@ -51,13 +51,29 @@ Credentials → your Desktop OAuth client → DOWNLOAD JSON.''';
 class SecretsLoader {
   const SecretsLoader._();
 
-  /// Reads `.env` and the process environment. Returns null only when no
-  /// source exists at all; throws [SecretsMissingException] when sources
-  /// exist but lack the required keys.
+  /// Compile-time constants baked in via `--dart-define`. Empty string when
+  /// the build didn't set them. Production builds use these so the shipped
+  /// binary doesn't need a runtime `.env` or environment variable.
+  static const _bakedId = String.fromEnvironment('MARIO_DESKTOP_CLIENT_ID');
+  static const _bakedSecret =
+      String.fromEnvironment('MARIO_DESKTOP_CLIENT_SECRET');
+
+  /// Reads compile-time `--dart-define` values, then `.env`, then the
+  /// process environment. Returns null only when no source exists at all;
+  /// throws [SecretsMissingException] when sources exist but lack the
+  /// required keys.
   static Future<MarioSecrets?> load({
     String envPath = '.env',
     Map<String, String>? environment,
   }) async {
+    // Production fast-path — secrets baked into the binary at build time.
+    if (_bakedId.isNotEmpty && _bakedSecret.isNotEmpty) {
+      return MarioSecrets(
+        desktopClientId: _bakedId,
+        desktopClientSecret: _bakedSecret,
+      );
+    }
+
     final values = await _readEnvFile(envPath);
     final env = environment ?? Platform.environment;
     final hasFile = values.isNotEmpty;

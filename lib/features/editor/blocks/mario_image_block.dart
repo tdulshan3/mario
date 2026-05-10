@@ -157,13 +157,54 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
     return false;
   }
 
+  /// A path-shaped string (no scheme, starts with `/` or `~/`, or `file://`)
+  /// is meant for the local FS — never fetch via HTTP, even if the file is
+  /// missing. NetworkImage on a bare path throws "No host specified in URI",
+  /// which clogs the console and breaks image-block layout.
+  bool _isLocalPathShape(String src) {
+    if (src.startsWith('file://')) return true;
+    if (src.startsWith('/') || src.startsWith('~/')) return true;
+    final uri = Uri.tryParse(src);
+    return uri != null && uri.scheme.isEmpty;
+  }
+
   Widget _buildImage() {
     final src = _src;
     if (src.isEmpty) return const SizedBox.shrink();
     if (_isLocalFile(src)) {
       return Image.file(File(src), fit: BoxFit.contain);
     }
+    if (_isLocalPathShape(src)) {
+      return _missingImagePlaceholder(src);
+    }
     return Image.network(src, fit: BoxFit.contain);
+  }
+
+  Widget _missingImagePlaceholder(String src) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final muted =
+        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+    final border = isDark ? MarioColors.borderDark : MarioColors.border;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: border),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.broken_image_outlined, size: 20, color: muted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Image missing: $src',
+              style: GoogleFonts.inter(fontSize: 12, color: muted),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

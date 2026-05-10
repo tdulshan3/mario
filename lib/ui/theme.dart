@@ -1,11 +1,119 @@
-/// MarioTheme — light + dark ThemeData using Inter (body) + Space Grotesk (display).
+/// MarioTheme — three ThemeData factories (Light, Dark, Book) and a custom
+/// [MarioThemeMode] enum that extends Flutter's system/light/dark with a
+/// fourth "book" option.
+///
+/// All themes share Inter (body) + Space Grotesk (display), tightly-spaced
+/// pill buttons, and rounded inputs. The Book theme swaps the underlying
+/// surface palette for a sepia / cream paper feel — calmer for long reading
+/// or writing sessions.
+library;
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import 'colors.dart';
 
+/// Theme selector — extends Flutter's [ThemeMode] with a [book] case.
+enum MarioThemeMode {
+  system,
+  light,
+  dark,
+  book;
+
+  /// Whether the Book theme is currently selected (regardless of system mode).
+  bool get isBook => this == MarioThemeMode.book;
+}
+
 class MarioTheme {
   const MarioTheme._();
+
+  /// Reading-focused sepia / cream palette. Identified at runtime by
+  /// `Theme.of(context).extension<MarioThemeMarker>()?.isBook == true`.
+  static ThemeData book() {
+    final base = ThemeData.light(useMaterial3: true);
+    final textTheme = _textTheme(base.textTheme, MarioColors.onSurfaceBook);
+    return base.copyWith(
+      brightness: Brightness.light,
+      colorScheme: const ColorScheme.light(
+        primary: MarioColors.primaryBook,
+        onPrimary: MarioColors.surfaceElevatedBook,
+        secondary: MarioColors.primaryPressedBook,
+        onSecondary: MarioColors.surfaceElevatedBook,
+        surface: MarioColors.surfaceBook,
+        onSurface: MarioColors.onSurfaceBook,
+        onSurfaceVariant: MarioColors.onSurfaceMutedBook,
+        surfaceContainerHighest: MarioColors.surfaceVariantBook,
+        surfaceContainerHigh: MarioColors.surfaceElevatedBook,
+        outline: MarioColors.borderBook,
+        outlineVariant: MarioColors.borderBook,
+        error: Color(0xFFA84C3D),
+        onError: MarioColors.surfaceElevatedBook,
+      ),
+      extensions: const [MarioThemeMarker(isBook: true)],
+      scaffoldBackgroundColor: MarioColors.surfaceBook,
+      canvasColor: MarioColors.surfaceBook,
+      dividerColor: MarioColors.borderBook,
+      textTheme: textTheme,
+      iconTheme: const IconThemeData(color: MarioColors.onSurfaceBook),
+      appBarTheme: AppBarTheme(
+        backgroundColor: MarioColors.surfaceBook,
+        foregroundColor: MarioColors.onSurfaceBook,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleTextStyle: GoogleFonts.spaceGrotesk(
+          color: MarioColors.onSurfaceBook,
+          fontSize: 16,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: MarioColors.primaryBook,
+          foregroundColor: MarioColors.surfaceElevatedBook,
+          elevation: 0,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w600),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(
+          foregroundColor: MarioColors.onSurfaceBook,
+          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w500),
+        ),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide: const BorderSide(color: MarioColors.borderBook),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(8),
+          borderSide:
+              const BorderSide(color: MarioColors.primaryBook, width: 2),
+        ),
+        contentPadding:
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith((s) =>
+            s.contains(WidgetState.selected)
+                ? MarioColors.primaryBook
+                : Colors.transparent),
+        checkColor:
+            WidgetStateProperty.all(MarioColors.surfaceElevatedBook),
+        side: const BorderSide(color: MarioColors.borderBook),
+      ),
+      progressIndicatorTheme: const ProgressIndicatorThemeData(
+        color: MarioColors.primaryBook,
+      ),
+      dividerTheme: const DividerThemeData(
+        color: MarioColors.borderBook,
+        thickness: 1,
+        space: 1,
+      ),
+    );
+  }
 
   static ThemeData light() {
     final base = ThemeData.light(useMaterial3: true);
@@ -18,11 +126,15 @@ class MarioTheme {
         onSecondary: MarioColors.onSurface,
         surface: MarioColors.surface,
         onSurface: MarioColors.onSurface,
+        onSurfaceVariant: MarioColors.onSurfaceMuted,
         surfaceContainerHighest: MarioColors.surfaceVariant,
+        surfaceContainerHigh: MarioColors.surfaceElevated,
         outline: MarioColors.border,
+        outlineVariant: MarioColors.border,
         error: Color(0xFFB3261E),
         onError: Colors.white,
       ),
+      extensions: const [MarioThemeMarker(isBook: false)],
       scaffoldBackgroundColor: MarioColors.surface,
       canvasColor: MarioColors.surface,
       dividerColor: MarioColors.border,
@@ -97,11 +209,15 @@ class MarioTheme {
         onSecondary: Color(0xFF1A1A1A),
         surface: MarioColors.surfaceDark,
         onSurface: MarioColors.onSurfaceDark,
+        onSurfaceVariant: MarioColors.onSurfaceMutedDark,
         surfaceContainerHighest: MarioColors.surfaceVariantDark,
+        surfaceContainerHigh: MarioColors.surfaceElevatedDark,
         outline: MarioColors.borderDark,
+        outlineVariant: MarioColors.borderDark,
         error: Color(0xFFF2B8B5),
         onError: Color(0xFF1A1A1A),
       ),
+      extensions: const [MarioThemeMarker(isBook: false)],
       scaffoldBackgroundColor: MarioColors.surfaceDark,
       canvasColor: MarioColors.surfaceDark,
       dividerColor: MarioColors.borderDark,
@@ -184,3 +300,23 @@ class MarioTheme {
     );
   }
 }
+
+/// Tiny ThemeExtension that lets widgets check whether the Book palette is
+/// active without comparing colors. Useful for the rare case where Book and
+/// Light share the same `Brightness.light` but need different rendering.
+class MarioThemeMarker extends ThemeExtension<MarioThemeMarker> {
+  const MarioThemeMarker({required this.isBook});
+  final bool isBook;
+
+  @override
+  MarioThemeMarker copyWith({bool? isBook}) =>
+      MarioThemeMarker(isBook: isBook ?? this.isBook);
+
+  @override
+  MarioThemeMarker lerp(ThemeExtension<MarioThemeMarker>? other, double t) =>
+      other is MarioThemeMarker ? other : this;
+}
+
+/// Convenience: true when the active theme is the Book palette.
+bool isBookTheme(BuildContext context) =>
+    Theme.of(context).extension<MarioThemeMarker>()?.isBook ?? false;

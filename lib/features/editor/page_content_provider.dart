@@ -12,8 +12,13 @@ import 'package:get_it/get_it.dart';
 
 import '../../core/services/drive_service.dart';
 
+/// `autoDispose` so navigating away from a page clears the cached JSON; the
+/// next visit re-fetches from Drive. Without this, the in-memory cache wins
+/// after a paste-then-switch-back round trip — the editor would mount with
+/// the pre-paste snapshot even though the Drive file is now up to date.
 final pageContentProvider =
-    FutureProvider.family<Map<String, dynamic>, String>((ref, driveFileId) async {
+    FutureProvider.autoDispose.family<Map<String, dynamic>, String>(
+        (ref, driveFileId) async {
   final drive = GetIt.I<DriveService>();
   final raw = await drive.readPageFile(driveFileId);
   return raw.containsKey('document') ? raw : <String, dynamic>{'document': raw};

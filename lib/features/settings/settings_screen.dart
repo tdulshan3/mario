@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../ui/theme.dart';
 import '../auth/auth_notifier.dart';
 import 'settings_state.dart';
 
@@ -63,13 +64,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               padding: const EdgeInsets.all(16),
               children: [
                 _Section(title: 'Appearance', children: [
-                  _DropdownTile<ThemeMode>(
+                  _DropdownTile<MarioThemeMode>(
                     label: 'Theme',
                     value: settings.themeMode,
                     items: const [
-                      ('System', ThemeMode.system),
-                      ('Light', ThemeMode.light),
-                      ('Dark', ThemeMode.dark),
+                      ('System', MarioThemeMode.system),
+                      ('Light', MarioThemeMode.light),
+                      ('Dark', MarioThemeMode.dark),
+                      ('Book — calm sepia', MarioThemeMode.book),
                     ],
                     onChanged: (v) =>
                         notifier.change((s) => s.copyWith(themeMode: v)),

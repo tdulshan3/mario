@@ -19,13 +19,38 @@ class MarioApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(_routerProvider);
     final themeMode = ref.watch(settingsProvider).valueOrNull?.themeMode ??
-        ThemeMode.system;
+        MarioThemeMode.system;
+    // Resolve our 4-mode enum to a concrete ThemeData. For system mode we
+    // still defer to MaterialApp's themeMode + theme/darkTheme so the OS
+    // signal flows through; for explicit modes we force one theme into both
+    // slots.
+    final ThemeData lightTheme;
+    final ThemeData darkTheme;
+    final ThemeMode flutterMode;
+    switch (themeMode) {
+      case MarioThemeMode.system:
+        lightTheme = MarioTheme.light();
+        darkTheme = MarioTheme.dark();
+        flutterMode = ThemeMode.system;
+      case MarioThemeMode.light:
+        lightTheme = MarioTheme.light();
+        darkTheme = MarioTheme.light();
+        flutterMode = ThemeMode.light;
+      case MarioThemeMode.dark:
+        lightTheme = MarioTheme.dark();
+        darkTheme = MarioTheme.dark();
+        flutterMode = ThemeMode.dark;
+      case MarioThemeMode.book:
+        lightTheme = MarioTheme.book();
+        darkTheme = MarioTheme.book();
+        flutterMode = ThemeMode.light;
+    }
     return MaterialApp.router(
       title: 'Mario',
       debugShowCheckedModeBanner: false,
-      themeMode: themeMode,
-      theme: MarioTheme.light(),
-      darkTheme: MarioTheme.dark(),
+      themeMode: flutterMode,
+      theme: lightTheme,
+      darkTheme: darkTheme,
       routerConfig: router,
     );
   }

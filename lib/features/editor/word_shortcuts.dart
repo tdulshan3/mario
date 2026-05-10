@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:pasteboard/pasteboard.dart';
 
 import 'blocks/mario_image_block.dart';
+import 'paste_html_bridge.dart';
 
 /// All Word-style commands. Prepend to the editor's commandShortcutEvents so
 /// they win over AppFlowy's built-ins where keys collide (e.g. Ctrl+E was
@@ -266,6 +267,34 @@ final RegExp _markdownPattern = RegExp(
 
 bool _looksLikeMarkdown(String text) => _markdownPattern.hasMatch(text);
 
+/// Strong HTML signal — DOCTYPE, `<html>`, or any common block tag at the
+/// start of (a leading-whitespace-stripped) line. Ordered before markdown
+/// detection because patterns like `*, *::before { ... }` in CSS would
+/// otherwise look like a markdown bullet.
+final RegExp _htmlPattern = RegExp(
+  r'(<!doctype\s|<html[\s>]|<head[\s>]|<body[\s>]|<style[\s>]|<script[\s>]|<div[\s>]|<section[\s>]|<header[\s>]|<article[\s>]|<table[\s>]|<svg[\s>])',
+  caseSensitive: false,
+);
+
+bool _looksLikeHtml(String text) {
+  final t = text.trimLeft();
+  if (t.startsWith('<!') || t.startsWith('<html') || t.startsWith('<!DOCTYPE')) {
+    return true;
+  }
+  return _htmlPattern.hasMatch(t);
+}
+
+/// True when the text is a complete HTML document — DOCTYPE or `<html>` root
+/// tag — as opposed to a fragment like `<p>foo</p>`. Full documents go to
+/// the preview override (so the entire styled page renders verbatim);
+/// fragments fall through to AppFlowy's structural HTML parser.
+bool _isFullHtmlDocument(String text) {
+  final t = text.trimLeft().toLowerCase();
+  return t.startsWith('<!doctype') ||
+      t.startsWith('<html') ||
+      (t.contains('<html') && t.contains('<body'));
+}
+
 /// Ctrl+V — combined image + markdown + default paste. Always returns
 /// handled so AppFlowy's default paste doesn't fire in parallel; we replay
 /// it ourselves in the fallback branch when the clipboard isn't markdown or
@@ -312,6 +341,26 @@ final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
               return;
             }
           }
+          // Detect HTML first — CSS like `*, *::before` falsely matches the
+          // markdown bullet regex, so HTML source pasted from a code editor
+          // would otherwise be parsed as markdown and turn into garbage.
+          if (_looksLikeHtml(text)) {
+            if (editorState.isDisposed) return;
+            // Full styled documents:
+            //   - Set the override so the preview pane renders it verbatim
+            //     (sticky/grid/JS/animations survive — htmlToDocument would
+            //     flatten it to text+headings).
+            //   - ALSO mirror the raw source as paragraphs in the editor so
+            //     hiding the preview shows the tags-as-text, and the content
+            //     persists in the doc (in addition to the override).
+            if (_isFullHtmlDocument(text)) {
+              rawHtmlOverride.value = text;
+              await _insertHtmlSource(editorState, text);
+              return;
+            }
+            await _insertHtml(editorState, text);
+            return;
+          }
           if (_looksLikeMarkdown(text)) {
             if (editorState.isDisposed) return;
             await _insertMarkdown(editorState, text);
@@ -354,8 +403,51 @@ String? _pathFromTextClipboard(String text) {
   return null;
 }
 
+/// Lazily-created persistent image directory under the app documents dir.
+/// Files written here survive reboots and OS /tmp sweeps, so an image url
+/// stored in a Drive doc keeps working between sessions.
+Future<Directory> _persistentImageDir() async {
+  final base = await getApplicationDocumentsDirectory();
+  final dir = Directory('${base.path}/mario_images');
+  if (!await dir.exists()) {
+    await dir.create(recursive: true);
+  }
+  return dir;
+}
+
+/// Copy a user-supplied image file into the persistent image dir under a
+/// unique filename, returning the new absolute path. Originals can be moved
+/// or deleted by the user without breaking the embedded reference.
+///
+/// Exposed for drag-drop in editor_screen.dart; clipboard/file pastes call
+/// it through [_insertImagePaths].
+Future<String> persistImageFile(String sourcePath) async {
+  final dir = await _persistentImageDir();
+  final ext = () {
+    final dot = sourcePath.lastIndexOf('.');
+    return dot >= 0 ? sourcePath.substring(dot) : '.png';
+  }();
+  final stamp = DateTime.now().microsecondsSinceEpoch;
+  final dest = File('${dir.path}/mario_image_$stamp$ext');
+  await File(sourcePath).copy(dest.path);
+  return dest.path;
+}
+
 Future<void> _insertImagePaths(
     afe.EditorState editorState, List<String> paths) async {
+  if (editorState.isDisposed) return;
+  // Copy each source into the persistent dir so the doc reference survives
+  // moves/deletes/reboots of the original file.
+  final stored = <String>[];
+  for (final p in paths) {
+    try {
+      stored.add(await persistImageFile(p));
+    } catch (_) {
+      // Copy failed (permissions, missing) — fall back to the raw path so
+      // the user still sees something in this session.
+      stored.add(p);
+    }
+  }
   if (editorState.isDisposed) return;
   final selection = editorState.selection;
   final basePath = selection?.end.path ??
@@ -364,7 +456,7 @@ Future<void> _insertImagePaths(
     ..insertNodes(
       basePath.next,
       [
-        for (final p in paths)
+        for (final p in stored)
           afe.Node(
             type: MarioImageKeys.type,
             attributes: {MarioImageKeys.url: p},
@@ -376,7 +468,7 @@ Future<void> _insertImagePaths(
 
 Future<void> _insertClipboardImage(
     afe.EditorState editorState, Uint8List bytes) async {
-  final dir = await getTemporaryDirectory();
+  final dir = await _persistentImageDir();
   final stamp = DateTime.now().microsecondsSinceEpoch;
   final file = File('${dir.path}/mario_paste_$stamp.png');
   await file.writeAsBytes(bytes);
@@ -392,6 +484,73 @@ Future<void> _insertClipboardImage(
         attributes: {MarioImageKeys.url: file.path},
       ),
     );
+  await editorState.apply(tx);
+}
+
+Future<void> _insertHtml(
+    afe.EditorState editorState, String html) async {
+  // AppFlowy's HTML parser handles a subset (paragraph/heading/list/quote/
+  // image/table). Whatever can't be modelled is dropped — the original raw
+  // HTML still exists on the system clipboard if the user wants to keep it.
+  final doc = afe.htmlToDocument(html);
+  final children = doc.root.children.toList();
+  if (children.isEmpty) return;
+  final selection = editorState.selection;
+  var path = selection?.end.path.next ??
+      editorState.document.root.children.last.path.next;
+  if (selection != null) {
+    final node = editorState.document.nodeAtPath(selection.end.path);
+    final delta = node?.delta;
+    if (delta != null && delta.toPlainText().isEmpty) {
+      path = selection.end.path;
+    }
+  }
+  final tx = editorState.transaction..insertNodes(path, children);
+  var afterPath = path;
+  for (var i = 0; i < children.length - 1; i++) {
+    afterPath = afterPath.next;
+  }
+  final offset = children.last.delta?.length ?? 0;
+  tx.afterSelection = afe.Selection.collapsed(
+    afe.Position(path: afterPath, offset: offset),
+  );
+  await editorState.apply(tx);
+}
+
+/// Insert raw HTML source as plain paragraphs (one per source line) below
+/// the caret. Used for full-document pastes so the user sees the HTML *with
+/// tags* in the editor (when preview is off) — the rendered version lives in
+/// the preview pane via [rawHtmlOverride].
+///
+/// Empty lines collapse to a single space so AppFlowy doesn't insert its
+/// placeholder text on what should be a visible blank line.
+Future<void> _insertHtmlSource(
+    afe.EditorState editorState, String html) async {
+  if (editorState.isDisposed) return;
+  final lines = html.split('\n');
+  if (lines.isEmpty) return;
+  final selection = editorState.selection;
+  var path = selection?.end.path.next ??
+      editorState.document.root.children.last.path.next;
+  if (selection != null) {
+    final node = editorState.document.nodeAtPath(selection.end.path);
+    final delta = node?.delta;
+    if (delta != null && delta.toPlainText().isEmpty) {
+      path = selection.end.path;
+    }
+  }
+  final nodes = [
+    for (final line in lines) afe.paragraphNode(text: line.isEmpty ? ' ' : line),
+  ];
+  final tx = editorState.transaction..insertNodes(path, nodes);
+  var afterPath = path;
+  for (var i = 0; i < nodes.length - 1; i++) {
+    afterPath = afterPath.next;
+  }
+  final offset = nodes.last.delta?.length ?? 0;
+  tx.afterSelection = afe.Selection.collapsed(
+    afe.Position(path: afterPath, offset: offset),
+  );
   await editorState.apply(tx);
 }
 
