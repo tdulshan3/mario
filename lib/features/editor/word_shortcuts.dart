@@ -9,7 +9,6 @@ import 'dart:io';
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -429,9 +428,12 @@ final afe.CommandShortcutEvent _smartCopyCommand = afe.CommandShortcutEvent(
         ? _tablePlainText(block)
         : (block.attributes['url'] as String?) ?? '[image]';
     _InAppClipboard.set(text, [block]);
-    () async {
-      await Clipboard.setData(ClipboardData(text: text));
-    }();
+    // Write via the SAME plugin the paste path reads (Pasteboard), so the
+    // round-trip is byte-identical and the in-app match guard fires. Flutter's
+    // Clipboard.setData and Pasteboard.text don't reliably agree on Linux,
+    // which made the guard never match and the copy silently fall back to
+    // AppFlowy's plain-text paste.
+    Pasteboard.writeText(text);
     return KeyEventResult.handled;
   },
 );

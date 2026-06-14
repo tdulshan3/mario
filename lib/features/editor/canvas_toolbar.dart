@@ -234,11 +234,11 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     await _insertNode(tableNode);
   }
 
-  /// Resize *all* columns of the table under the caret to an equal width
-  /// (the current total spread evenly), complementing AppFlowy's per-column
-  /// drag-resize. Row heights re-fit to content automatically. No-op with a
-  /// hint when the caret isn't in a table.
-  Future<void> _fitTableColumns() async {
+  /// Auto-fit every column of the table under the caret to its widest cell's
+  /// content (Word/OneNote "AutoFit to contents"), via AppFlowy's own
+  /// setColWidth so it renders exactly like a manual drag. Row heights re-fit
+  /// automatically. No-op with a hint when the caret isn't in a table.
+  Future<void> _autoFitTableColumns() async {
     final selection = widget.editorState.selection;
     if (selection == null) return;
     afe.Node? n = widget.editorState.getNodeAtPath(selection.start.path);
@@ -253,17 +253,29 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     }
     final cols = (n.attributes['colsLen'] as int?) ?? 0;
     if (cols <= 0) return;
-    // Use AppFlowy's own TableNode.setColWidth so the layout updates exactly as
-    // it does for a manual drag (updates every cell + recomputes row heights).
-    final table = afe.TableNode(node: n);
-    var total = 0.0;
-    for (var c = 0; c < cols; c++) {
-      total += table.getColWidth(c);
+    // Measure the widest cell content per column and size each column to fit.
+    const minW = 48.0, maxW = 420.0, hPad = 24.0;
+    final widths = List<double>.filled(cols, minW);
+    for (final cell in n.children) {
+      if (cell.type != 'table/cell') continue;
+      final c = cell.attributes['colPosition'] as int?;
+      if (c == null || c < 0 || c >= cols) continue;
+      final text =
+          cell.children.map((m) => m.delta?.toPlainText() ?? '').join(' ');
+      final tp = TextPainter(
+        text: TextSpan(text: text, style: const TextStyle(fontSize: 14)),
+        textDirection: TextDirection.ltr,
+        maxLines: 1,
+      )..layout();
+      final w = (tp.width + hPad).clamp(minW, maxW);
+      if (w > widths[c]) widths[c] = w;
     }
-    final each = total / cols;
+    // Apply via AppFlowy's own setColWidth so it updates exactly like a drag
+    // (every cell + recomputed row heights).
+    final table = afe.TableNode(node: n);
     final tx = widget.editorState.transaction;
     for (var c = 0; c < cols; c++) {
-      table.setColWidth(c, each, transaction: tx, force: true);
+      table.setColWidth(c, widths[c], transaction: tx, force: true);
     }
     await widget.editorState.apply(tx);
   }
@@ -402,8 +414,8 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
             ),
             _IconAction(
               icon: Icons.view_column_outlined,
-              tooltip: 'Fit table columns (distribute evenly)',
-              onPressed: _fitTableColumns,
+              tooltip: 'Auto-fit table columns to content',
+              onPressed: _autoFitTableColumns,
             ),
             _ToggleButton(
               icon: Icons.draw_outlined,
