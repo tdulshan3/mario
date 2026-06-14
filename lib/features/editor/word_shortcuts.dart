@@ -9,6 +9,7 @@ import 'dart:io';
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pasteboard/pasteboard.dart';
@@ -46,6 +47,7 @@ List<afe.CommandShortcutEvent> wordCommandShortcuts() => [
       _unicodeMapCommand(_subscriptMap, 'mario.subscript', 'ctrl+equal'),
       _unicodeMapCommand(
           _superscriptMap, 'mario.superscript', 'ctrl+shift+equal'),
+      _smartCopyCommand,
       _smartPasteCommand,
     ];
 
@@ -308,6 +310,19 @@ final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
   handler: (editorState) {
     () async {
       try {
+        // 0. In-app rich copy (e.g. a table) that is still the current
+        // clipboard content → replay the exact nodes so the structure
+        // survives. AppFlowy's clipboard only carries plain text, which would
+        // otherwise flatten a copied table into lines.
+        final inAppNodes = _InAppClipboard.nodes;
+        if (inAppNodes != null) {
+          final clip = await Pasteboard.text;
+          if (clip != null && clip == _InAppClipboard.text) {
+            if (editorState.isDisposed) return;
+            await _pasteInAppNodes(editorState, inAppNodes);
+            return;
+          }
+        }
         if (!kIsWeb) {
           // 1. Raw image bytes (screenshot, "Copy image" from a browser).
           final bytes = await Pasteboard.image;
@@ -377,6 +392,102 @@ final afe.CommandShortcutEvent _smartPasteCommand = afe.CommandShortcutEvent(
     return KeyEventResult.handled;
   },
 );
+
+/// In-app rich-copy buffer. AppFlowy 3.3.0's clipboard only carries plain text
+/// (its copy command computes HTML but [AppFlowyClipboard.setData] drops it),
+/// so a copied table pastes back as flat lines. We stash the copied nodes as
+/// JSON and replay them on paste when the system clipboard still holds the same
+/// text we copied — preserving tables (and other rich blocks) within the app.
+class _InAppClipboard {
+  _InAppClipboard._();
+  static String? text;
+  static List<Map<String, Object>>? nodes;
+
+  static void set(String t, List<afe.Node> ns) {
+    text = t;
+    nodes = ns.map((n) => n.toJson()).toList(growable: false);
+  }
+}
+
+/// Ctrl+C — when the caret/selection is inside a table, copy the whole table
+/// as a reusable block (and mirror its text to the system clipboard). For
+/// everything else we return [KeyEventResult.ignored] so AppFlowy's default
+/// copy keeps handling plain text and partial selections correctly.
+final afe.CommandShortcutEvent _smartCopyCommand = afe.CommandShortcutEvent(
+  key: 'mario.copy.block',
+  command: 'ctrl+c',
+  macOSCommand: 'cmd+c',
+  getDescription: () => 'Copy a table or image as a reusable block',
+  handler: (editorState) {
+    final selection = editorState.selection?.normalized;
+    if (selection == null) return KeyEventResult.ignored;
+    final block = _copyableBlock(editorState, selection);
+    if (block == null) return KeyEventResult.ignored;
+    // For everything else we return ignored so AppFlowy's default copy keeps
+    // handling plain text and partial selections correctly.
+    final text = block.type == 'table'
+        ? _tablePlainText(block)
+        : (block.attributes['url'] as String?) ?? '[image]';
+    _InAppClipboard.set(text, [block]);
+    () async {
+      await Clipboard.setData(ClipboardData(text: text));
+    }();
+    return KeyEventResult.handled;
+  },
+);
+
+/// Walk up from the selection start to find an enclosing copyable rich block —
+/// a table or an image — whose structure AppFlowy's plain-text-only clipboard
+/// would otherwise lose on copy/paste.
+afe.Node? _copyableBlock(afe.EditorState editorState, afe.Selection selection) {
+  afe.Node? n = editorState.getNodeAtPath(selection.start.path);
+  while (n != null) {
+    if (n.type == 'table' || n.type == 'image') return n;
+    n = n.parent;
+  }
+  return null;
+}
+
+/// Tab/newline rendering of a table's cells for the system clipboard (so an
+/// external paste gets readable text, and so we can detect our own copy later).
+String _tablePlainText(afe.Node table) {
+  final cols = (table.attributes['colsLen'] as int?) ?? 0;
+  final rows = (table.attributes['rowsLen'] as int?) ?? 0;
+  if (cols <= 0 || rows <= 0) {
+    return table.children.map((c) => c.delta?.toPlainText() ?? '').join('\n');
+  }
+  final grid = List.generate(rows, (_) => List<String>.filled(cols, ''));
+  for (final cell in table.children) {
+    final r = cell.attributes['rowPosition'] as int?;
+    final c = cell.attributes['colPosition'] as int?;
+    if (r == null || c == null || r < 0 || c < 0 || r >= rows || c >= cols) {
+      continue;
+    }
+    grid[r][c] =
+        cell.children.map((n) => n.delta?.toPlainText() ?? '').join(' ').trim();
+  }
+  return grid.map((row) => row.join('\t')).join('\n');
+}
+
+/// Insert previously-copied in-app nodes (rebuilt from JSON so they're fresh
+/// clones) below the caret — replacing an empty current paragraph if present.
+Future<void> _pasteInAppNodes(
+    afe.EditorState editorState, List<Map<String, Object>> nodesJson) async {
+  if (nodesJson.isEmpty) return;
+  final children = nodesJson.map(afe.Node.fromJson).toList();
+  final selection = editorState.selection;
+  var path = selection?.end.path.next ??
+      editorState.document.root.children.last.path.next;
+  if (selection != null) {
+    final node = editorState.document.nodeAtPath(selection.end.path);
+    final delta = node?.delta;
+    if (delta != null && delta.toPlainText().isEmpty) {
+      path = selection.end.path;
+    }
+  }
+  final tx = editorState.transaction..insertNodes(path, children);
+  await editorState.apply(tx);
+}
 
 const _imageExtensions = <String>{
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.heic', '.heif',

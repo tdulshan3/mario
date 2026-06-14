@@ -9,11 +9,11 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/note_page.dart';
-import '../../core/services/drive_service.dart';
+import '../../core/services/page_content_repository.dart';
 
 class MarkdownExporter {
-  const MarkdownExporter(this._drive);
-  final DriveService _drive;
+  const MarkdownExporter(this._content);
+  final PageContentRepository _content;
 
   /// Render the page's Drive document to Markdown and return the string.
   Future<String> renderPage(NotePage page) async {
@@ -21,7 +21,7 @@ class MarkdownExporter {
     if (fileId == null) {
       throw StateError('Page "${page.title}" has no Drive content');
     }
-    final raw = await _drive.readPageFile(fileId);
+    final raw = await _content.load(fileId);
     final docMap = raw.containsKey('document')
         ? raw
         : <String, dynamic>{'document': raw};

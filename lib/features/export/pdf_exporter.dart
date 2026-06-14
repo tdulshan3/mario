@@ -7,29 +7,64 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show rootBundle;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../core/models/note_page.dart';
-import '../../core/services/drive_service.dart';
+import '../../core/services/page_content_repository.dart';
 
 class PdfExporter {
-  const PdfExporter(this._drive);
-  final DriveService _drive;
+  const PdfExporter(this._content);
+  final PageContentRepository _content;
+
+  /// Parsed once and reused across exports — decoding the bundled TTFs on
+  /// every call is wasteful and the resulting theme is immutable.
+  static Future<pw.ThemeData>? _themeFuture;
+
+  /// A theme whose default/heading/body styles all use Noto Sans, with a
+  /// symbol + math fallback chain.
+  ///
+  /// Without an explicit font the `pdf` package falls back to the built-in
+  /// Helvetica Type1 font, which only covers Latin-1. Any other character —
+  /// curly quotes, em dashes, accented letters, arrows, math operators, … —
+  /// then renders as a missing-glyph box (the "□" / boxed-cross tofu). Noto
+  /// Sans covers Latin/Greek/Cyrillic and the fallback faces fill in symbols
+  /// and math glyphs; the package picks a fallback per-glyph automatically.
+  static Future<pw.ThemeData> _theme() {
+    return _themeFuture ??= () async {
+      Future<pw.Font> load(String file) async =>
+          pw.Font.ttf(await rootBundle.load('assets/fonts/$file'));
+      final base = await load('NotoSans-Regular.ttf');
+      final bold = await load('NotoSans-Bold.ttf');
+      final italic = await load('NotoSans-Italic.ttf');
+      final boldItalic = await load('NotoSans-BoldItalic.ttf');
+      final symbols = await load('NotoSansSymbols-Regular.ttf');
+      final symbols2 = await load('NotoSansSymbols2-Regular.ttf');
+      final math = await load('NotoSansMath-Regular.ttf');
+      return pw.ThemeData.withFont(
+        base: base,
+        bold: bold,
+        italic: italic,
+        boldItalic: boldItalic,
+        fontFallback: [symbols, symbols2, math],
+      );
+    }();
+  }
 
   Future<List<int>> renderPage(NotePage page) async {
     final fileId = page.driveFileId;
     if (fileId == null) {
       throw StateError('Page "${page.title}" has no Drive content');
     }
-    final raw = await _drive.readPageFile(fileId);
+    final raw = await _content.load(fileId);
     final docMap = raw.containsKey('document')
         ? raw
         : <String, dynamic>{'document': raw};
     final document =
         afe.Document.fromJson(Map<String, dynamic>.from(docMap));
 
-    final pdf = pw.Document();
+    final pdf = pw.Document(theme: await _theme());
     pdf.addPage(
       pw.MultiPage(
         margin: const pw.EdgeInsets.all(48),
@@ -163,6 +198,9 @@ class PdfExporter {
                 style: const pw.TextStyle(color: PdfColors.grey)),
           ),
         ];
+      case 'table':
+        final table = _tableWidget(node);
+        return table == null ? const [] : [table];
       default:
         if (text.isEmpty) return [pw.SizedBox(height: 6)];
         return [
@@ -196,6 +234,70 @@ class PdfExporter {
       widgets.addAll(_nodeToWidgets(c, indent));
     }
     return widgets;
+  }
+
+  /// Renders an AppFlowy `table` node as a bordered grid. Cells are `table/cell`
+  /// children carrying `rowPosition`/`colPosition`; their text lives in nested
+  /// block children. Returns null for a malformed/empty table.
+  pw.Widget? _tableWidget(afe.Node node) {
+    final cols = (node.attributes['colsLen'] as int?) ?? 0;
+    final rows = (node.attributes['rowsLen'] as int?) ?? 0;
+    if (cols <= 0 || rows <= 0) return null;
+
+    final grid =
+        List.generate(rows, (_) => List<String>.filled(cols, ''), growable: false);
+    for (final cell in node.children) {
+      if (cell.type != 'table/cell') continue;
+      final r = cell.attributes['rowPosition'] as int?;
+      final c = cell.attributes['colPosition'] as int?;
+      if (r == null || c == null || r < 0 || c < 0 || r >= rows || c >= cols) {
+        continue;
+      }
+      grid[r][c] = _cellText(cell);
+    }
+
+    return pw.Padding(
+      padding: const pw.EdgeInsets.symmetric(vertical: 6),
+      child: pw.Table(
+        border: pw.TableBorder.all(color: PdfColors.grey500, width: 0.5),
+        defaultVerticalAlignment: pw.TableCellVerticalAlignment.top,
+        // Equal-width columns that wrap, so wide content can't overflow the page.
+        columnWidths: {
+          for (var i = 0; i < cols; i++) i: const pw.FlexColumnWidth(),
+        },
+        children: [
+          for (final row in grid)
+            pw.TableRow(
+              children: [
+                for (final cellText in row)
+                  pw.Padding(
+                    padding: const pw.EdgeInsets.all(5),
+                    child: pw.Text(cellText,
+                        style: const pw.TextStyle(fontSize: 11)),
+                  ),
+              ],
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Flattens all text in a table cell (cells hold block children, usually a
+  /// single paragraph) into a newline-joined string.
+  String _cellText(afe.Node cell) {
+    final parts = <String>[];
+    void walk(afe.Node n) {
+      final t = n.delta?.toPlainText();
+      if (t != null && t.isNotEmpty) parts.add(t);
+      for (final c in n.children) {
+        walk(c);
+      }
+    }
+
+    for (final c in cell.children) {
+      walk(c);
+    }
+    return parts.join('\n');
   }
 
   Future<void> exportPageToFile(BuildContext context, NotePage page) async {

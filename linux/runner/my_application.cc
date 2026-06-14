@@ -23,6 +23,17 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
 // Implements GApplication::activate.
 static void my_application_activate(GApplication* application) {
   MyApplication* self = MY_APPLICATION(application);
+
+  // Single-instance: if a window already exists, this activate came from a
+  // second launch (GApplication forwarded it to the primary instance over the
+  // session bus). Present the existing window instead of opening another —
+  // this also restores the window if it had been hidden to the tray.
+  GList* windows = gtk_application_get_windows(GTK_APPLICATION(application));
+  if (windows != nullptr) {
+    gtk_window_present(GTK_WINDOW(windows->data));
+    return;
+  }
+
   GtkWindow* window =
       GTK_WINDOW(gtk_application_window_new(GTK_APPLICATION(application)));
 
@@ -147,7 +158,11 @@ MyApplication* my_application_new() {
   // the application to be recognized beyond its binary name.
   g_set_prgname(APPLICATION_ID);
 
+  // Default flags (not G_APPLICATION_NON_UNIQUE) so GApplication registers the
+  // application-id on the session bus and enforces a single instance: a second
+  // launch forwards its activation to the already-running process rather than
+  // starting a new one.
   return MY_APPLICATION(g_object_new(my_application_get_type(),
                                      "application-id", APPLICATION_ID, "flags",
-                                     G_APPLICATION_NON_UNIQUE, nullptr));
+                                     G_APPLICATION_DEFAULT_FLAGS, nullptr));
 }

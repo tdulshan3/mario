@@ -13,7 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/models/note_page.dart';
 import '../../core/models/notebook.dart';
 import '../../core/models/section.dart';
-import '../../core/services/drive_service.dart';
+import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
 import '../export/markdown_exporter.dart';
 import '../export/pdf_exporter.dart';
@@ -449,7 +449,11 @@ class _PageListState extends ConsumerState<_PageList> {
                   selected: p.id == selection.pageId,
                   onTap: () => ref
                       .read(selectionProvider.notifier)
-                      .selectPage(p.id),
+                      .selectPage(
+                        p.id,
+                        sectionId: p.sectionId,
+                        notebookId: p.notebookId,
+                      ),
                   onMenu: (a) => _handlePageAction(context, p, a),
                 ),
             ],
@@ -478,10 +482,10 @@ class _PageListState extends ConsumerState<_PageList> {
               page.copyWith(title: title, updatedAt: DateTime.now()),
             );
       case _PageAction.exportMd:
-        await MarkdownExporter(GetIt.I<DriveService>())
+        await MarkdownExporter(GetIt.I<PageContentRepository>())
             .exportPageToFile(context, page);
       case _PageAction.exportPdf:
-        await PdfExporter(GetIt.I<DriveService>())
+        await PdfExporter(GetIt.I<PageContentRepository>())
             .exportPageToFile(context, page);
       case _PageAction.delete:
         final ok = await showConfirmDialog(

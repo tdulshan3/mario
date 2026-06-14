@@ -10,6 +10,11 @@ import '../../core/models/section.dart';
 import '../../core/services/sync_service.dart';
 import '../auth/auth_notifier.dart';
 
+// Selection state lives in its own service-free file so it stays unit-testable;
+// re-exported here so existing `import 'shell_state.dart'` call sites are
+// unaffected.
+export 'selection_state.dart';
+
 final syncServiceProvider = Provider<SyncService>((ref) => GetIt.I<SyncService>());
 
 /// Notebooks owned-by or shared-with the current user.
@@ -32,55 +37,3 @@ final pagesStreamProvider = StreamProvider.family<List<NotePage>,
       .watch(syncServiceProvider)
       .watchPages(key.notebookId, key.sectionId);
 });
-
-class Selection {
-  final String? notebookId;
-  final String? sectionId;
-  final String? pageId;
-
-  const Selection({this.notebookId, this.sectionId, this.pageId});
-
-  Selection copyWith({
-    String? notebookId,
-    String? sectionId,
-    String? pageId,
-    bool clearSection = false,
-    bool clearPage = false,
-  }) =>
-      Selection(
-        notebookId: notebookId ?? this.notebookId,
-        sectionId: clearSection ? null : (sectionId ?? this.sectionId),
-        pageId: clearPage ? null : (pageId ?? this.pageId),
-      );
-}
-
-class SelectionNotifier extends Notifier<Selection> {
-  @override
-  Selection build() => const Selection();
-
-  void selectNotebook(String id) =>
-      state = Selection(notebookId: id);
-
-  void selectSection(String id) =>
-      state = state.copyWith(sectionId: id, clearPage: true);
-
-  void selectPage(String id) =>
-      state = state.copyWith(pageId: id);
-
-  void clearForDeletedNotebook(String id) {
-    if (state.notebookId == id) state = const Selection();
-  }
-
-  void clearForDeletedSection(String id) {
-    if (state.sectionId == id) {
-      state = state.copyWith(clearSection: true, clearPage: true);
-    }
-  }
-
-  void clearForDeletedPage(String id) {
-    if (state.pageId == id) state = state.copyWith(clearPage: true);
-  }
-}
-
-final selectionProvider =
-    NotifierProvider<SelectionNotifier, Selection>(SelectionNotifier.new);

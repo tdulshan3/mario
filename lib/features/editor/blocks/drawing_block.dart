@@ -1,6 +1,7 @@
 /// DrawingBlock — AppFlowy embed wrapping the Mario drawing surface.
 library;
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -97,22 +98,36 @@ class _DrawingBlockComponentWidgetState
     super.initState();
     final initial = _persistedStrokes;
     _controller = DrawingController(initial: initial);
+    // Autosave: every committed stroke change writes straight into the document
+    // node, so drawings persist without the user pressing Save (the page-level
+    // autosave then pushes the document to Drive).
+    _controller.committed.addListener(_onCommitted);
     _expanded = initial.isEmpty;
   }
 
   @override
   void dispose() {
+    _controller.committed.removeListener(_onCommitted);
     _controller.dispose();
     super.dispose();
   }
 
-  Future<void> _save() async {
-    final editorState = context.read<afe.EditorState>();
-    await safeApply(editorState, (tx) {
+  void _onCommitted() => unawaited(_persistStrokes());
+
+  /// Writes the current strokes into the document node. [safeApply] no-ops if
+  /// the editor has already been torn down.
+  Future<void> _persistStrokes() async {
+    if (!mounted) return;
+    await safeApply(context.read<afe.EditorState>(), (tx) {
       tx.updateNode(widget.node, {
         DrawingBlockKeys.strokes: strokesToJson(_controller.snapshot()),
       });
     });
+  }
+
+  // Toolbar "Save" — persist and collapse the canvas to its preview.
+  Future<void> _save() async {
+    await _persistStrokes();
     if (!mounted) return;
     setState(() => _expanded = false);
   }

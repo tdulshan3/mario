@@ -18,6 +18,18 @@ class DrawingController extends ChangeNotifier {
   double _width = 4;
   Stroke? _live;
 
+  /// Bumps whenever the *committed* stroke set changes — a stroke finished,
+  /// undo/redo, erase, or clear — as opposed to the per-point live updates that
+  /// drive [notifyListeners]. Autosave listeners watch this so they fire once
+  /// per change instead of once per pointer move.
+  final ValueNotifier<int> committed = ValueNotifier<int>(0);
+
+  @override
+  void dispose() {
+    committed.dispose();
+    super.dispose();
+  }
+
   List<Stroke> get strokes =>
       List<Stroke>.unmodifiable(_live == null ? _strokes : [..._strokes, _live!]);
 
@@ -81,6 +93,7 @@ class DrawingController extends ChangeNotifier {
       _strokes = _strokes.sublist(_strokes.length - 200);
     }
     notifyListeners();
+    committed.value++;
   }
 
   void _eraseAt(Offset p) {
@@ -90,6 +103,7 @@ class DrawingController extends ChangeNotifier {
     _strokes = [..._strokes.take(hit), ..._strokes.skip(hit + 1)];
     _redo.add(removed);
     notifyListeners();
+    committed.value++;
   }
 
   int _hitTestStrokeIndex(Offset p) {
@@ -111,6 +125,7 @@ class DrawingController extends ChangeNotifier {
     _strokes = _strokes.sublist(0, _strokes.length - 1);
     _redo.add(last);
     notifyListeners();
+    committed.value++;
   }
 
   void redo() {
@@ -118,6 +133,7 @@ class DrawingController extends ChangeNotifier {
     final s = _redo.removeLast();
     _strokes = [..._strokes, s];
     notifyListeners();
+    committed.value++;
   }
 
   void clearAll() {
@@ -125,6 +141,7 @@ class DrawingController extends ChangeNotifier {
     _strokes = const [];
     _redo.clear();
     notifyListeners();
+    committed.value++;
   }
 
   List<Stroke> snapshot() => List<Stroke>.unmodifiable(_strokes);

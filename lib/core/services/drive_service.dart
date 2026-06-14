@@ -55,12 +55,27 @@ class DriveService {
     return jsonDecode(utf8.decode(bytes)) as Map<String, dynamic>;
   }
 
-  Future<void> updatePageFile(String fileId, Map<String, dynamic> content) async {
+  /// Uploads new content and returns the file's resulting `modifiedTime` (ISO
+  /// 8601, UTC) so callers can use it as a cache-revalidation marker. Null if
+  /// Drive didn't return one.
+  Future<String?> updatePageFile(
+      String fileId, Map<String, dynamic> content) async {
     final api = await _api();
     final body = utf8.encode(jsonEncode(content));
     final media = drive.Media(Stream.value(body), body.length,
         contentType: 'application/json');
-    await api.files.update(drive.File(), fileId, uploadMedia: media);
+    final updated = await api.files.update(drive.File(), fileId,
+        uploadMedia: media, $fields: 'modifiedTime');
+    return updated.modifiedTime?.toUtc().toIso8601String();
+  }
+
+  /// Cheap metadata fetch of the file's last-modified time — used as a change
+  /// marker so the content cache can skip re-downloading unchanged files.
+  Future<String?> remoteModifiedTime(String fileId) async {
+    final api = await _api();
+    final file =
+        await api.files.get(fileId, $fields: 'modifiedTime') as drive.File;
+    return file.modifiedTime?.toUtc().toIso8601String();
   }
 
   Future<void> deleteFile(String fileId) async {

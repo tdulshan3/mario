@@ -6,13 +6,13 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import '../models/note_page.dart';
 import '../models/notebook.dart';
 import '../models/section.dart';
-import 'drive_service.dart';
 import 'mario_firestore.dart';
+import 'page_content_repository.dart';
 
 class SyncService {
-  SyncService(this._db, this._drive);
+  SyncService(this._db, this._content);
   final MarioFirestore _db;
-  final DriveService _drive;
+  final PageContentRepository _content;
 
   static const _root = 'notebooks';
   String _sectionsPath(String notebookId) => '$_root/$notebookId/sections';
@@ -69,7 +69,7 @@ class SyncService {
       final fileId = p.data['driveFileId'] as String?;
       if (fileId != null) {
         try {
-          await _drive.deleteFile(fileId);
+          await _content.delete(fileId);
         } catch (_) {}
       }
       await _db.delete(p.path);
@@ -96,7 +96,7 @@ class SyncService {
       final fileId = p.data['driveFileId'] as String?;
       if (fileId != null) {
         try {
-          await _drive.deleteFile(fileId);
+          await _content.delete(fileId);
         } catch (_) {}
       }
       await _db.delete(p.path);
@@ -109,7 +109,7 @@ class SyncService {
   Future<String> createPage(NotePage page) async {
     String? driveFileId;
     try {
-      driveFileId = await _drive.createPageFile(
+      driveFileId = await _content.create(
         'page-${DateTime.now().millisecondsSinceEpoch}',
         _emptyPageContent(page.title),
       );
@@ -124,7 +124,7 @@ class SyncService {
   Future<void> deletePage(NotePage page) async {
     if (page.driveFileId != null) {
       try {
-        await _drive.deleteFile(page.driveFileId!);
+        await _content.delete(page.driveFileId!);
       } catch (_) {}
     }
     await _db.delete(_pageDoc(page.notebookId, page.id));

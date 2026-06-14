@@ -15,6 +15,8 @@ import 'core/services/auth_service.dart';
 import 'core/services/drive_service.dart';
 import 'core/services/mario_firestore.dart';
 import 'core/services/ocr_service.dart';
+import 'core/services/page_content_cache.dart';
+import 'core/services/page_content_repository.dart';
 import 'core/services/sync_service.dart';
 import 'core/services/voice_service.dart';
 import 'features/voice/voice_service_impl.dart';
@@ -89,7 +91,10 @@ void _registerServices(bool isLinuxNative) {
   }
 
   getIt.registerSingleton<DriveService>(DriveService(getIt<AuthService>()));
+  getIt.registerSingleton<PageContentCache>(PageContentCache());
+  getIt.registerSingleton<PageContentRepository>(PageContentRepository(
+      getIt<DriveService>(), getIt<PageContentCache>()));
   getIt.registerSingleton<SyncService>(
-      SyncService(getIt<MarioFirestore>(), getIt<DriveService>()));
+      SyncService(getIt<MarioFirestore>(), getIt<PageContentRepository>()));
   getIt.registerSingleton<VoiceService>(VoiceServiceImpl());
 }

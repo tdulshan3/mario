@@ -234,6 +234,40 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     await _insertNode(tableNode);
   }
 
+  /// Resize *all* columns of the table under the caret to an equal width
+  /// (the current total spread evenly), complementing AppFlowy's per-column
+  /// drag-resize. Row heights re-fit to content automatically. No-op with a
+  /// hint when the caret isn't in a table.
+  Future<void> _fitTableColumns() async {
+    final selection = widget.editorState.selection;
+    if (selection == null) return;
+    afe.Node? n = widget.editorState.getNodeAtPath(selection.start.path);
+    while (n != null && n.type != 'table') {
+      n = n.parent;
+    }
+    if (n == null) {
+      ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+        const SnackBar(content: Text('Place the cursor inside a table first')),
+      );
+      return;
+    }
+    final cols = (n.attributes['colsLen'] as int?) ?? 0;
+    if (cols <= 0) return;
+    // Use AppFlowy's own TableNode.setColWidth so the layout updates exactly as
+    // it does for a manual drag (updates every cell + recomputes row heights).
+    final table = afe.TableNode(node: n);
+    var total = 0.0;
+    for (var c = 0; c < cols; c++) {
+      total += table.getColWidth(c);
+    }
+    final each = total / cols;
+    final tx = widget.editorState.transaction;
+    for (var c = 0; c < cols; c++) {
+      table.setColWidth(c, each, transaction: tx, force: true);
+    }
+    await widget.editorState.apply(tx);
+  }
+
   Future<void> _insertDivider() async {
     await _insertNode(afe.Node(type: 'divider'));
   }
@@ -365,6 +399,11 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
               icon: Icons.table_chart_outlined,
               tooltip: 'Insert table',
               onPressed: _insertTable,
+            ),
+            _IconAction(
+              icon: Icons.view_column_outlined,
+              tooltip: 'Fit table columns (distribute evenly)',
+              onPressed: _fitTableColumns,
             ),
             _ToggleButton(
               icon: Icons.draw_outlined,

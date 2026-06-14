@@ -57,5 +57,31 @@ void main() {
     test('invalid expression returns null', () {
       expect(MathEvaluator.tryEvaluate('not math'), isNull);
     });
+
+    // Regression: opening the `/` slash menu and dismissing it (Escape/click)
+    // leaves the `/` in the line, so a following `2+2=` becomes `/2+2=`. The
+    // leading stray operator must not break the calculation.
+    test('tolerates a stray leading slash from the dismissed slash menu', () {
+      expect(MathEvaluator.tryEvaluate('/2+2'), '4');
+      expect(MathEvaluator.tryEvaluate('/2.5+2.5'), '5');
+      expect(MathEvaluator.tryEvaluate('/10/4'), '2.5');
+    });
+
+    test('strips other leading binary operators left behind', () {
+      expect(MathEvaluator.tryEvaluate('*3+1'), '4');
+      expect(MathEvaluator.tryEvaluate('^2+2'), '4');
+    });
+
+    test('legitimate division is unaffected (does not start with an operator)',
+        () {
+      expect(MathEvaluator.tryEvaluate('10/2'), '5');
+      expect(MathEvaluator.tryEvaluate('7/2'), '3.5');
+    });
+
+    test('valid leading characters are preserved', () {
+      expect(MathEvaluator.tryEvaluate('-2.5+5'), '2.5'); // unary minus
+      expect(MathEvaluator.tryEvaluate('(2+3)*2'), '10'); // paren
+      expect(MathEvaluator.tryEvaluate('.5+.5'), '1'); // leading dot
+    });
   });
 }

@@ -17,7 +17,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:webview_cef/webview_cef.dart';
 
 import '../../core/models/note_page.dart';
-import '../../core/services/drive_service.dart';
+import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
@@ -202,7 +202,9 @@ class _EditorState extends ConsumerState<_Editor> {
     _drawingController = DrawingController(
       initial: strokesFromJson(widget.rawJson['strokes'] as List?),
     );
-    _drawingController.addListener(_onStrokesChanged);
+    // Listen to committed changes (a finished stroke / undo / erase), not the
+    // per-point live notifications — autosave once per change, not per pixel.
+    _drawingController.committed.addListener(_onStrokesChanged);
     // Restore this page's stashed paste-HTML override (or clear if the page
     // has none — would otherwise leak from the previously-mounted editor).
     // Then watch the bridge so paste-detected full HTML auto-routes into the
@@ -225,7 +227,7 @@ class _EditorState extends ConsumerState<_Editor> {
     _saveTimer?.cancel();
     _txSub.cancel();
     HardwareKeyboard.instance.removeHandler(_onHardwareKey);
-    _drawingController.removeListener(_onStrokesChanged);
+    _drawingController.committed.removeListener(_onStrokesChanged);
     _drawingController.dispose();
     _hScroll.dispose();
     _previewHtml.dispose();
@@ -255,8 +257,8 @@ class _EditorState extends ConsumerState<_Editor> {
         _rawHtmlOverrideKey: rawHtmlOverride.value,
     };
     final fileId = widget.driveFileId;
-    final drive = GetIt.I<DriveService>();
-    unawaited(drive.updatePageFile(fileId, snapshot).catchError((_) {
+    unawaited(
+        GetIt.I<PageContentRepository>().save(fileId, snapshot).catchError((_) {
       // Silent: the user has already navigated away; surfacing an error
       // through a no-longer-mounted ScaffoldMessenger isn't useful.
     }));
@@ -364,7 +366,6 @@ class _EditorState extends ConsumerState<_Editor> {
   Future<void> _save() async {
     if (!mounted) return;
     setState(() => _status = SaveStatus.saving);
-    final drive = GetIt.I<DriveService>();
     try {
       final json = _editorState.document.toJson();
       final payload = <String, dynamic>{
@@ -375,7 +376,7 @@ class _EditorState extends ConsumerState<_Editor> {
         if (rawHtmlOverride.value != null && rawHtmlOverride.value!.isNotEmpty)
           _rawHtmlOverrideKey: rawHtmlOverride.value,
       };
-      await drive.updatePageFile(widget.driveFileId, payload);
+      await GetIt.I<PageContentRepository>().save(widget.driveFileId, payload);
       if (!mounted) return;
       setState(() {
         _status = SaveStatus.saved;

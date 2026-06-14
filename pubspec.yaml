@@ -1,7 +1,7 @@
 name: mario
 description: "Mario — your notes, your world."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+3
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -85,3 +85,7 @@ flutter:
   uses-material-design: true
   assets:
     - assets/logo/
+    # Bundled for PDF export only (loaded via rootBundle by the `pdf` package).
+    # Noto Sans gives broad Unicode coverage so non-Latin characters no longer
+    # render as missing-glyph boxes; the symbol/math faces are fallbacks.
+    - assets/fonts/

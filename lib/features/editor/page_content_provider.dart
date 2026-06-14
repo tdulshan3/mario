@@ -10,16 +10,20 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
-import '../../core/services/drive_service.dart';
+import '../../core/services/page_content_repository.dart';
 
-/// `autoDispose` so navigating away from a page clears the cached JSON; the
-/// next visit re-fetches from Drive. Without this, the in-memory cache wins
-/// after a paste-then-switch-back round trip — the editor would mount with
-/// the pre-paste snapshot even though the Drive file is now up to date.
+/// `autoDispose` so navigating away from a page clears the in-memory JSON; the
+/// next visit re-reads through [PageContentRepository]. Without this, the
+/// in-memory cache wins after a paste-then-switch-back round trip — the editor
+/// would mount with the pre-paste snapshot.
+///
+/// The repository serves from the local disk cache first (instant), so this is
+/// no longer a Drive round-trip on every open; it revalidates against Drive in
+/// the background and refreshes the cache for next time.
 final pageContentProvider =
     FutureProvider.autoDispose.family<Map<String, dynamic>, String>(
         (ref, driveFileId) async {
-  final drive = GetIt.I<DriveService>();
-  final raw = await drive.readPageFile(driveFileId);
+  final repo = GetIt.I<PageContentRepository>();
+  final raw = await repo.load(driveFileId);
   return raw.containsKey('document') ? raw : <String, dynamic>{'document': raw};
 });
