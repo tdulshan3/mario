@@ -103,9 +103,9 @@ class PdfExporter {
         return [
           pw.Padding(
             padding: const pw.EdgeInsets.only(top: 8, bottom: 4),
-            child: pw.Text(
-              text,
-              style: pw.TextStyle(
+            child: _deltaWidget(
+              node.delta,
+              base: pw.TextStyle(
                 fontSize: switch (level) {
                   1 => 22.0,
                   2 => 18.0,
@@ -117,13 +117,13 @@ class PdfExporter {
           ),
         ];
       case 'bulleted_list':
-        return [_listItem('•', text, indent), ..._childWidgets(node, indent + 1)];
+        return [_listItem('•', node, indent), ..._childWidgets(node, indent + 1)];
       case 'numbered_list':
-        return [_listItem('1.', text, indent), ..._childWidgets(node, indent + 1)];
+        return [_listItem('1.', node, indent), ..._childWidgets(node, indent + 1)];
       case 'todo_list':
         final done = (node.attributes['checked'] as bool?) ?? false;
         return [
-          _listItem(done ? '[x]' : '[ ]', text, indent),
+          _listItem(done ? '[x]' : '[ ]', node, indent),
           ..._childWidgets(node, indent + 1),
         ];
       case 'quote':
@@ -135,8 +135,8 @@ class PdfExporter {
               border: pw.Border(
                   left: pw.BorderSide(color: PdfColors.grey, width: 2)),
             ),
-            child: pw.Text(text,
-                style: const pw.TextStyle(color: PdfColors.grey700)),
+            child: _deltaWidget(node.delta,
+                base: const pw.TextStyle(color: PdfColors.grey700)),
           ),
         ];
       case 'code':
@@ -145,8 +145,8 @@ class PdfExporter {
             margin: const pw.EdgeInsets.symmetric(vertical: 4),
             padding: const pw.EdgeInsets.all(6),
             color: PdfColors.grey100,
-            child: pw.Text(text,
-                style:
+            child: _deltaWidget(node.delta,
+                base:
                     const pw.TextStyle(fontSize: 11, color: PdfColors.black)),
           ),
         ];
@@ -206,13 +206,14 @@ class PdfExporter {
         return [
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(vertical: 2),
-            child: pw.Text(text, style: const pw.TextStyle(fontSize: 12)),
+            child: _deltaWidget(node.delta,
+                base: const pw.TextStyle(fontSize: 12)),
           ),
         ];
     }
   }
 
-  pw.Widget _listItem(String bullet, String text, int indent) {
+  pw.Widget _listItem(String bullet, afe.Node node, int indent) {
     return pw.Padding(
       padding: pw.EdgeInsets.fromLTRB(12.0 * indent, 2, 0, 2),
       child: pw.Row(
@@ -222,10 +223,69 @@ class PdfExporter {
               width: 18,
               child: pw.Text(bullet,
                   style: const pw.TextStyle(fontSize: 12))),
-          pw.Expanded(child: pw.Text(text)),
+          pw.Expanded(
+              child: _deltaWidget(node.delta,
+                  base: const pw.TextStyle(fontSize: 12))),
         ],
       ),
     );
+  }
+
+  /// Builds a rich-text widget from an AppFlowy [delta], honouring inline marks
+  /// (bold, italic, underline, strikethrough, code, text colour). Falls back to
+  /// a plain empty [pw.Text] when the delta is null or carries no insertions —
+  /// `toPlainText()` alone would drop every one of those marks.
+  pw.Widget _deltaWidget(afe.Delta? delta, {required pw.TextStyle base}) {
+    final spans = delta == null ? const <pw.TextSpan>[] : _deltaSpans(delta, base);
+    if (spans.isEmpty) return pw.Text('', style: base);
+    return pw.RichText(text: pw.TextSpan(style: base, children: spans));
+  }
+
+  List<pw.TextSpan> _deltaSpans(afe.Delta delta, pw.TextStyle base) {
+    final spans = <pw.TextSpan>[];
+    for (final op in delta) {
+      if (op is! afe.TextInsert || op.text.isEmpty) continue;
+      final attrs = op.attributes ?? const {};
+      var style = base;
+
+      final bold = attrs[afe.AppFlowyRichTextKeys.bold] == true;
+      final italic = attrs[afe.AppFlowyRichTextKeys.italic] == true;
+      if (bold) style = style.copyWith(fontWeight: pw.FontWeight.bold);
+      if (italic) style = style.copyWith(fontStyle: pw.FontStyle.italic);
+
+      final decorations = <pw.TextDecoration>[];
+      if (attrs[afe.AppFlowyRichTextKeys.underline] == true) {
+        decorations.add(pw.TextDecoration.underline);
+      }
+      if (attrs[afe.AppFlowyRichTextKeys.strikethrough] == true) {
+        decorations.add(pw.TextDecoration.lineThrough);
+      }
+      if (decorations.isNotEmpty) {
+        style = style.copyWith(
+          decoration: pw.TextDecoration.combine(decorations),
+        );
+      }
+
+      if (attrs[afe.AppFlowyRichTextKeys.code] == true) {
+        style = style.copyWith(
+          background: const pw.BoxDecoration(color: PdfColors.grey200),
+          color: PdfColors.red800,
+        );
+      }
+
+      final color = _parseColor(attrs[afe.AppFlowyRichTextKeys.textColor]);
+      if (color != null) style = style.copyWith(color: color);
+
+      spans.add(pw.TextSpan(text: op.text, style: style));
+    }
+    return spans;
+  }
+
+  /// AppFlowy stores inline colours as ARGB hex strings such as `0xFF1A1A1A`.
+  PdfColor? _parseColor(Object? raw) {
+    if (raw is! String) return null;
+    final v = int.tryParse(raw);
+    return v == null ? null : PdfColor.fromInt(v);
   }
 
   List<pw.Widget> _childWidgets(afe.Node node, int indent) {
@@ -244,8 +304,9 @@ class PdfExporter {
     final rows = (node.attributes['rowsLen'] as int?) ?? 0;
     if (cols <= 0 || rows <= 0) return null;
 
-    final grid =
-        List.generate(rows, (_) => List<String>.filled(cols, ''), growable: false);
+    final grid = List.generate(
+        rows, (_) => List<afe.Node?>.filled(cols, null),
+        growable: false);
     for (final cell in node.children) {
       if (cell.type != 'table/cell') continue;
       final r = cell.attributes['rowPosition'] as int?;
@@ -253,7 +314,7 @@ class PdfExporter {
       if (r == null || c == null || r < 0 || c < 0 || r >= rows || c >= cols) {
         continue;
       }
-      grid[r][c] = _cellText(cell);
+      grid[r][c] = cell;
     }
 
     return pw.Padding(
@@ -269,11 +330,10 @@ class PdfExporter {
           for (final row in grid)
             pw.TableRow(
               children: [
-                for (final cellText in row)
+                for (final cell in row)
                   pw.Padding(
                     padding: const pw.EdgeInsets.all(5),
-                    child: pw.Text(cellText,
-                        style: const pw.TextStyle(fontSize: 11)),
+                    child: _cellWidget(cell),
                   ),
               ],
             ),
@@ -282,13 +342,16 @@ class PdfExporter {
     );
   }
 
-  /// Flattens all text in a table cell (cells hold block children, usually a
-  /// single paragraph) into a newline-joined string.
-  String _cellText(afe.Node cell) {
-    final parts = <String>[];
+  /// Renders a table cell's block children as a column of rich-text lines,
+  /// keeping inline marks. Cells usually hold a single paragraph.
+  pw.Widget _cellWidget(afe.Node? cell) {
+    const base = pw.TextStyle(fontSize: 11);
+    if (cell == null) return pw.Text('', style: base);
+    final lines = <pw.Widget>[];
     void walk(afe.Node n) {
-      final t = n.delta?.toPlainText();
-      if (t != null && t.isNotEmpty) parts.add(t);
+      if (n.delta != null) {
+        lines.add(_deltaWidget(n.delta, base: base));
+      }
       for (final c in n.children) {
         walk(c);
       }
@@ -297,7 +360,11 @@ class PdfExporter {
     for (final c in cell.children) {
       walk(c);
     }
-    return parts.join('\n');
+    if (lines.isEmpty) return pw.Text('', style: base);
+    return pw.Column(
+      crossAxisAlignment: pw.CrossAxisAlignment.start,
+      children: lines,
+    );
   }
 
   Future<void> exportPageToFile(BuildContext context, NotePage page) async {
