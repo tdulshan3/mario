@@ -27,6 +27,7 @@ import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
 import 'blocks/drawing_block.dart';
 import 'blocks/mario_image_block.dart';
+import 'blocks/mario_table_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
 import 'canvas_drawing_layer.dart';
@@ -458,6 +459,9 @@ class _EditorState extends ConsumerState<_Editor> {
 
     final blockBuilders = <String, afe.BlockComponentBuilder>{
       ...afe.standardBlockComponentBuilderMap,
+      // Override the stock table with our wrapper that adds a whole-table
+      // corner resize handle (keeps AppFlowy's table for editing/cells).
+      afe.TableBlockKeys.type: MarioTableBlockComponentBuilder(),
       MarioImageKeys.type: MarioImageBlockBuilder(),
       MathBlockKeys.type: MathBlockComponentBuilder(),
       DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
