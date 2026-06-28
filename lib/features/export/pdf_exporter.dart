@@ -205,18 +205,23 @@ class PdfExporter {
         // Code blocks store their source in the `code` attribute (see
         // CodeBlock); fall back to delta text for markdown/html-pasted blocks.
         final codeText = (node.attributes['code'] as String?) ?? text;
+        // Emit one full-width banded row per line instead of a single Container.
+        // A decorated Container can't split across pages, so a tall code block
+        // throws "Widget won't fit into the page"; a flat list of short rows
+        // lets MultiPage break between lines while keeping a continuous
+        // background.
+        const codeStyle = pw.TextStyle(fontSize: 10.5, color: PdfColors.black);
         return [
-          pw.Container(
-            width: double.infinity,
-            margin: const pw.EdgeInsets.symmetric(vertical: 4),
-            padding: const pw.EdgeInsets.all(8),
-            decoration: pw.BoxDecoration(
+          pw.SizedBox(height: 4),
+          for (final line in codeText.split('\n'))
+            pw.Container(
+              width: double.infinity,
               color: PdfColors.grey100,
-              borderRadius: pw.BorderRadius.circular(4),
+              padding:
+                  const pw.EdgeInsets.symmetric(horizontal: 8, vertical: 1.5),
+              child: pw.Text(line.isEmpty ? ' ' : line, style: codeStyle),
             ),
-            child: pw.Text(codeText,
-                style: const pw.TextStyle(fontSize: 10.5, color: PdfColors.black)),
-          ),
+          pw.SizedBox(height: 4),
         ];
       case 'divider':
         return [

@@ -221,6 +221,9 @@ class _EditorState extends ConsumerState<_Editor> {
       _previewMode = true;
       _previewHtml.value = rawHtmlOverride.value!;
     }
+    // Heal pages that were saved empty by the older delete-last-block bug, so
+    // they don't open to a frozen, untypeable canvas.
+    _ensureNonEmptyDocument();
   }
 
   @override
@@ -338,10 +341,28 @@ class _EditorState extends ConsumerState<_Editor> {
   void _onTransaction((afe.TransactionTime, afe.Transaction) event) {
     if (event.$1 != afe.TransactionTime.after) return;
     if (!mounted) return;
+    _ensureNonEmptyDocument();
     setState(() => _status = SaveStatus.dirty);
     _saveTimer?.cancel();
     _saveTimer = Timer(_debounce, _save);
     if (_previewMode) _updatePreview();
+  }
+
+  /// Deleting the last top-level block (e.g. a code/drawing/table/image block
+  /// that was the only line) leaves the document with zero children — the
+  /// canvas then has nothing to focus, so it can't be typed in or clicked.
+  /// Restore an empty paragraph and put the cursor in it. Deferred to the next
+  /// frame so we never apply a transaction reentrantly from the stream callback.
+  void _ensureNonEmptyDocument() {
+    final state = _editorState;
+    if (state.isDisposed || state.document.root.children.isNotEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (state.isDisposed || state.document.root.children.isNotEmpty) return;
+      final tx = state.transaction..insertNode([0], afe.paragraphNode());
+      await state.apply(tx);
+      if (state.isDisposed) return;
+      state.selection = afe.Selection.collapsed(afe.Position(path: [0]));
+    });
   }
 
   void _updatePreview() {
