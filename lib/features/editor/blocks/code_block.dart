@@ -210,6 +210,7 @@ class _CodeBlockComponentWidgetState extends State<CodeBlockComponentWidget> {
   late final _CodeHighlightController _controller;
   late final FocusNode _focusNode;
   Timer? _debounce;
+  bool _disposed = false;
 
   String get _code => (widget.node.attributes[CodeBlockKeys.code] as String?) ?? '';
   String get _language =>
@@ -236,13 +237,20 @@ class _CodeBlockComponentWidgetState extends State<CodeBlockComponentWidget> {
 
   @override
   void dispose() {
+    // Mark disposed and detach the focus listener *before* disposing the node,
+    // so the unfocus it triggers during teardown can't fire _commit(). Applying
+    // an editor transaction mid-dispose (e.g. when the block is deleted while
+    // focused) throws "markNeedsBuild during build" and freezes the canvas.
+    _disposed = true;
     _debounce?.cancel();
+    _focusNode.removeListener(_onFocusChange);
     _focusNode.dispose();
     _controller.dispose();
     super.dispose();
   }
 
   void _onFocusChange() {
+    if (_disposed) return;
     if (!_focusNode.hasFocus) {
       _debounce?.cancel();
       _commit();
@@ -379,9 +387,12 @@ class _CodeBlockComponentWidgetState extends State<CodeBlockComponentWidget> {
   }
 
   Future<void> _commit() async {
-    if (!mounted) return;
+    if (_disposed || !mounted) return;
     if (_controller.text == _code) return;
     final editorState = context.read<afe.EditorState>();
+    // Don't write to a node that's been deleted or moved out from under us —
+    // updating a stale path would throw or clobber a different block.
+    if (editorState.getNodeAtPath(widget.node.path) != widget.node) return;
     await safeApply(editorState, (tx) {
       tx.updateNode(widget.node, {CodeBlockKeys.code: _controller.text});
     });
