@@ -250,20 +250,125 @@ class _CodeBlockComponentWidgetState extends State<CodeBlockComponentWidget> {
   }
 
   // Tab inserts two spaces instead of moving focus — basic IDE indentation.
+  // AppFlowy's editor-level keyboard service (an ancestor Focus) runs its own
+  // copy/paste/cut/select-all command shortcuts and would swallow Ctrl+C/V/X/A
+  // before this TextField sees them. Handling them here — on the block's own,
+  // innermost FocusNode — and returning `handled` keeps them inside the field.
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
-    if (event is KeyDownEvent && event.logicalKey == LogicalKeyboardKey.tab) {
-      final sel = _controller.selection;
-      if (!sel.isValid) return KeyEventResult.ignored;
-      final text = _controller.text;
-      final newText = text.replaceRange(sel.start, sel.end, '  ');
-      _controller.value = TextEditingValue(
-        text: newText,
-        selection: TextSelection.collapsed(offset: sel.start + 2),
-      );
-      _scheduleCommit();
+    if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    final key = event.logicalKey;
+    final mod = HardwareKeyboard.instance.isControlPressed ||
+        HardwareKeyboard.instance.isMetaPressed;
+
+    if (key == LogicalKeyboardKey.tab && !mod) {
+      _indent();
       return KeyEventResult.handled;
     }
+
+    if (mod && event is KeyDownEvent) {
+      if (key == LogicalKeyboardKey.keyC) {
+        _copySelection();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyX) {
+        _cutSelection();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyV) {
+        _paste();
+        return KeyEventResult.handled;
+      }
+      if (key == LogicalKeyboardKey.keyA) {
+        _controller.selection = TextSelection(
+          baseOffset: 0,
+          extentOffset: _controller.text.length,
+        );
+        return KeyEventResult.handled;
+      }
+    }
     return KeyEventResult.ignored;
+  }
+
+  void _indent() {
+    final sel = _controller.selection;
+    if (!sel.isValid) return;
+    final text = _controller.text;
+    final newText = text.replaceRange(sel.start, sel.end, '  ');
+    _controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: sel.start + 2),
+    );
+    _scheduleCommit();
+  }
+
+  /// Copy the selection, or — when nothing is selected — the whole current
+  /// line (VS Code-style), so a bare Ctrl+C still does something useful.
+  Future<void> _copySelection() async {
+    final text = _controller.text;
+    final sel = _controller.selection;
+    final value = (sel.isValid && !sel.isCollapsed)
+        ? sel.textInside(text)
+        : _lineAt(sel.isValid ? sel.start : text.length, text);
+    if (value.isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: value));
+  }
+
+  Future<void> _cutSelection() async {
+    final text = _controller.text;
+    final sel = _controller.selection;
+    if (!sel.isValid) return;
+    final int start, end;
+    if (sel.isCollapsed) {
+      (start, end) = _lineBounds(sel.start, text);
+    } else {
+      (start, end) = (sel.start, sel.end);
+    }
+    if (start == end) return;
+    await Clipboard.setData(ClipboardData(text: text.substring(start, end)));
+    final newText = text.replaceRange(start, end, '');
+    _controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start),
+    );
+    _scheduleCommit();
+  }
+
+  Future<void> _paste() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final pasted = data?.text;
+    if (pasted == null || pasted.isEmpty || !mounted) return;
+    final text = _controller.text;
+    final sel = _controller.selection;
+    final start = sel.isValid ? sel.start : text.length;
+    final end = sel.isValid ? sel.end : text.length;
+    final newText = text.replaceRange(start, end, pasted);
+    _controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: start + pasted.length),
+    );
+    _scheduleCommit();
+  }
+
+  /// Character bounds of the line containing [offset], including the trailing
+  /// newline if present (so a line "cut" removes the break too).
+  (int, int) _lineBounds(int offset, String text) {
+    var start = offset.clamp(0, text.length);
+    while (start > 0 && text[start - 1] != '\n') {
+      start--;
+    }
+    var end = offset.clamp(0, text.length);
+    while (end < text.length && text[end] != '\n') {
+      end++;
+    }
+    if (end < text.length) end++; // include the newline
+    return (start, end);
+  }
+
+  String _lineAt(int offset, String text) {
+    final (start, end) = _lineBounds(offset, text);
+    return text.substring(start, end);
   }
 
   void _onChanged(String _) => _scheduleCommit();
