@@ -8,6 +8,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:http/http.dart' as http;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
@@ -15,8 +16,14 @@ import '../../core/models/note_page.dart';
 import '../../core/services/page_content_repository.dart';
 
 class PdfExporter {
-  const PdfExporter(this._content);
+  PdfExporter(this._content);
   final PageContentRepository _content;
+
+  /// Image bytes pre-loaded for the page currently being rendered, keyed by the
+  /// node's `url` attribute. Populated by [_preloadImages] before the synchronous
+  /// node-walk runs, since loading from disk/network is async and widget builders
+  /// are not. Cleared at the start of every [renderPage].
+  final Map<String, pw.MemoryImage> _images = {};
 
   /// Parsed once and reused across exports — decoding the bundled TTFs on
   /// every call is wasteful and the resulting theme is immutable.
@@ -64,6 +71,9 @@ class PdfExporter {
     final document =
         afe.Document.fromJson(Map<String, dynamic>.from(docMap));
 
+    _images.clear();
+    await _preloadImages(document.root.children);
+
     final pdf = pw.Document(theme: await _theme());
     pdf.addPage(
       pw.MultiPage(
@@ -85,6 +95,58 @@ class PdfExporter {
       ),
     );
     return pdf.save();
+  }
+
+  /// Usable width inside the page margins (`EdgeInsets.all(48)`). The default
+  /// MultiPage format is A4 (595.28pt wide); 48pt margins leave ~499pt. Kept a
+  /// touch under that so images never quite touch the edge.
+  static const double _contentWidth = 495;
+
+  /// Walks every node (including children and table cells) collecting `image`
+  /// URLs, then loads each one concurrently into [_images]. Failures are left
+  /// out of the map — the render path shows an "unavailable" marker for those.
+  Future<void> _preloadImages(Iterable<afe.Node> nodes) async {
+    final urls = <String>{};
+    void collect(afe.Node n) {
+      if (n.type == 'image') {
+        final u = n.attributes['url'];
+        if (u is String && u.isNotEmpty) urls.add(u);
+      }
+      for (final c in n.children) {
+        collect(c);
+      }
+    }
+
+    for (final n in nodes) {
+      collect(n);
+    }
+
+    await Future.wait(urls.map((u) async {
+      final img = await _loadImage(u);
+      if (img != null) _images[u] = img;
+    }));
+  }
+
+  /// Loads image bytes from an http(s) URL or a local path (`file://` or a bare
+  /// filesystem path) and wraps them in a [pw.MemoryImage]. Returns null on any
+  /// failure (missing file, network error, undecodable bytes).
+  Future<pw.MemoryImage?> _loadImage(String src) async {
+    try {
+      final Uint8List bytes;
+      if (src.startsWith('http://') || src.startsWith('https://')) {
+        final resp = await http.get(Uri.parse(src));
+        if (resp.statusCode != 200) return null;
+        bytes = resp.bodyBytes;
+      } else {
+        final path = src.startsWith('file://') ? Uri.parse(src).toFilePath() : src;
+        final file = File(path);
+        if (!await file.exists()) return null;
+        bytes = await file.readAsBytes();
+      }
+      return pw.MemoryImage(bytes);
+    } catch (_) {
+      return null;
+    }
   }
 
   List<pw.Widget> _nodesToWidgets(Iterable<afe.Node> nodes) {
@@ -158,11 +220,29 @@ class PdfExporter {
         ];
       case 'image':
         final url = node.attributes['url'] as String?;
+        final image = url == null ? null : _images[url];
+        if (image == null) {
+          // Couldn't load it (missing file, unreachable URL, bad bytes) — show
+          // a marker rather than silently dropping the block.
+          return [
+            pw.Padding(
+              padding: const pw.EdgeInsets.symmetric(vertical: 6),
+              child: pw.Text('[image unavailable: ${url ?? 'inline'}]',
+                  style: const pw.TextStyle(color: PdfColors.grey)),
+            ),
+          ];
+        }
+        // Use the editor's display width when set, else the image's natural
+        // width, capped to the page content area so wide photos don't overflow.
+        // `BoxFit.contain` keeps the aspect ratio and never upscales past this.
+        final stored = (node.attributes['width'] as num?)?.toDouble();
+        final natural = image.width?.toDouble();
+        var width = stored ?? natural ?? _contentWidth;
+        if (width > _contentWidth) width = _contentWidth;
         return [
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(vertical: 6),
-            child: pw.Text('[image: ${url ?? 'inline'}]',
-                style: const pw.TextStyle(color: PdfColors.grey)),
+            child: pw.Image(image, width: width),
           ),
         ];
       case 'math_equation':
