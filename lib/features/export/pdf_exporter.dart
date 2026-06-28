@@ -202,14 +202,20 @@ class PdfExporter {
           ),
         ];
       case 'code':
+        // Code blocks store their source in the `code` attribute (see
+        // CodeBlock); fall back to delta text for markdown/html-pasted blocks.
+        final codeText = (node.attributes['code'] as String?) ?? text;
         return [
           pw.Container(
+            width: double.infinity,
             margin: const pw.EdgeInsets.symmetric(vertical: 4),
-            padding: const pw.EdgeInsets.all(6),
-            color: PdfColors.grey100,
-            child: _deltaWidget(node.delta,
-                base:
-                    const pw.TextStyle(fontSize: 11, color: PdfColors.black)),
+            padding: const pw.EdgeInsets.all(8),
+            decoration: pw.BoxDecoration(
+              color: PdfColors.grey100,
+              borderRadius: pw.BorderRadius.circular(4),
+            ),
+            child: pw.Text(codeText,
+                style: const pw.TextStyle(fontSize: 10.5, color: PdfColors.black)),
           ),
         ];
       case 'divider':

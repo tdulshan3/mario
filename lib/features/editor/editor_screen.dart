@@ -25,6 +25,7 @@ import '../drawing/stroke.dart';
 import '../math/math_shortcut.dart';
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
+import 'blocks/code_block.dart';
 import 'blocks/drawing_block.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/mario_table_block.dart';
@@ -464,6 +465,7 @@ class _EditorState extends ConsumerState<_Editor> {
       afe.TableBlockKeys.type: MarioTableBlockComponentBuilder(),
       MarioImageKeys.type: MarioImageBlockBuilder(),
       MathBlockKeys.type: MathBlockComponentBuilder(),
+      CodeBlockKeys.type: CodeBlockComponentBuilder(),
       DrawingBlockKeys.type: DrawingBlockComponentBuilder(),
       SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
       AudioBlockKeys.type: AudioBlockComponentBuilder(),
@@ -484,6 +486,7 @@ class _EditorState extends ConsumerState<_Editor> {
         [
           ...afe.standardSelectionMenuItems,
           mathSelectionMenuItem,
+          codeSelectionMenuItem,
           drawingSelectionMenuItem,
           spreadsheetSelectionMenuItem,
           audioSelectionMenuItem,
