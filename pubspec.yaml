@@ -1,7 +1,7 @@
 name: mario
 description: "Mario — your notes, your world."
 publish_to: 'none'
-version: 1.1.7+10
+version: 1.2.0+11
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -55,6 +55,10 @@ dependencies:
   # AI (Anthropic API)
   http: ^1.2.2
 
+  # Content-addressing for synced image assets (see AssetSyncService) — the
+  # sha-256 of an image's bytes is what stops the same picture uploading twice.
+  crypto: ^3.0.3
+
   # Used directly by custom AppFlowy block components
   provider: ^6.1.2
 
@@ -84,6 +88,22 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   drift_dev: ^2.18.0
   build_runner: ^2.4.11
+
+  # Lets asset_cache_test drive the real AssetCache against a temp directory by
+  # swapping PathProviderPlatform.instance — its bugs live in the interaction
+  # between the in-memory index and the actual files, which a double can't show.
+  path_provider_platform_interface: ^2.1.2
+  plugin_platform_interface: ^2.1.8
+
+# Vendored + patched: Flutter 3.44 added TextInputClient.onFocusReceived and
+# neither package implements it yet (checked through appflowy_editor 6.2.0).
+# Each copy carries a one-method override; see the "Mario patch" comment in
+# third_party/*/lib/**. Drop these once upstream ships the fix.
+dependency_overrides:
+  appflowy_editor:
+    path: third_party/appflowy_editor
+  webview_cef:
+    path: third_party/webview_cef
 
 flutter:
   uses-material-design: true

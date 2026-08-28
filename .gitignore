@@ -46,3 +46,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Vendored dependencies (see pubspec.yaml dependency_overrides).
+#
+# third_party/ IS tracked — a fresh clone will not build without it, because
+# each vendored copy carries a one-method "Mario patch" for a Flutter 3.44 API
+# neither package implements yet.
+#
+# What is NOT tracked is the CEF runtime under webview_cef: ~3GB of prebuilt
+# Chromium binaries, two of them over 1GB, fetched on first build by
+# third_party/webview_cef/third/download.cmake. They are downloaded artifacts,
+# not source, and GitHub rejects any file over 100MB outright.
+third_party/webview_cef/third/cef/
+
+# Written by Dart DevTools when it is opened; not project configuration.
+devtools_options.yaml
