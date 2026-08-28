@@ -103,6 +103,23 @@ class OpenAiCompatibleProvider implements LlmProvider {
   /// for the rest of the session and the call is retried without them.
   bool _thinkingControlsAccepted = true;
 
+  /// Turns deliberation off, in every spelling that works.
+  ///
+  /// `reasoning_effort: 'none'` is the one that matters and it was missing.
+  /// Verified against Ollama 0.32.15 with qwen3.6: `enable_thinking: false`
+  /// and `think: false` are both accepted and both ignored — the model thinks
+  /// anyway, fills its whole budget, and returns `finish_reason: "length"`
+  /// with no content at all. With `reasoning_effort: 'none'` the same request
+  /// answers in four tokens and no reasoning.
+  ///
+  /// The other two stay because llama.cpp and vLLM read them and do not read
+  /// `reasoning_effort: 'none'`. Each server takes the one it knows.
+  static void _writeThinkingOff(Map<String, dynamic> body) {
+    body['reasoning_effort'] = 'none';
+    body['chat_template_kwargs'] = {'enable_thinking': false};
+    body['think'] = false;
+  }
+
   /// Whether [body] reads like a complaint about the reasoning hints.
   bool _rejectsThinkingControls(int status, String body) {
     if (status != 400 && status != 422) return false;
@@ -206,8 +223,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     if (fmt != null && sendThinkingControls) {
       // Structured output and deliberation do not mix at this size — see
       // [sendThinkingControls].
-      body['chat_template_kwargs'] = {'enable_thinking': false};
-      body['think'] = false; // Ollama's own spelling
+      _writeThinkingOff(body);
     } else if (sendThinkingControls && _thinkingControlsAccepted) {
       // Free-text generation: pass the requested depth on. Effort used to
       // reach Anthropic only, so a "think harder" choice did nothing at all on
@@ -219,10 +235,13 @@ class OpenAiCompatibleProvider implements LlmProvider {
       // ones it does not know, which is the whole reason all three can be sent
       // — except to api.openai.com, which 400s on anything unrecognised, and
       // is excluded by [sendThinkingControls].
-      final thinks = req.effort != LlmEffort.low;
-      body['reasoning_effort'] = req.effort.name;
-      body['chat_template_kwargs'] = {'enable_thinking': thinks};
-      body['think'] = thinks;
+      if (req.effort == LlmEffort.low) {
+        _writeThinkingOff(body);
+      } else {
+        body['reasoning_effort'] = req.effort.name;
+        body['chat_template_kwargs'] = {'enable_thinking': true};
+        body['think'] = true;
+      }
     }
     if (fmt != null) {
       if (_capabilities.strictJsonSchema) {
@@ -393,10 +412,19 @@ class OpenAiCompatibleProvider implements LlmProvider {
         final delta = choice['delta'] as Map<String, dynamic>?;
         if (delta == null) continue;
 
-        // Servers that split reasoning for us: Ollama sends `thinking`,
-        // vLLM/DeepSeek-style servers send `reasoning_content`.
-        final reasoning =
-            asString(delta['reasoning_content'] ?? delta['thinking']);
+        // Servers that split reasoning out for us, and each one names the
+        // field differently. Ollama's OpenAI-compatible endpoint sends
+        // `reasoning`; vLLM and DeepSeek-style servers send
+        // `reasoning_content`; Ollama's own native API says `thinking`.
+        //
+        // Missing `reasoning` was not a cosmetic gap. On a thinking model
+        // Ollama puts the ENTIRE reply there and leaves `content` an empty
+        // string on every chunk, so every token was read as nothing and the
+        // answer came back empty — while the same model on llama.cpp, which
+        // says `reasoning_content`, worked perfectly.
+        final reasoning = asString(delta['reasoning'] ??
+            delta['reasoning_content'] ??
+            delta['thinking']);
         final content = asString(delta['content']);
 
         for (final tc in (delta['tool_calls'] as List? ?? const [])) {
@@ -509,9 +537,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
       final usage = json['usage'] as Map<String, dynamic>?;
       return LlmResponse(
         text: split.text,
-        reasoning:
-            asString(message['reasoning_content'] ?? message['thinking']) ??
-                split.reasoning,
+        reasoning: asString(message['reasoning'] ??
+                message['reasoning_content'] ??
+                message['thinking']) ??
+            split.reasoning,
         toolCalls: [
           for (final tc in (message['tool_calls'] as List? ?? const []))
             _decodeToolCall(tc as Map<String, dynamic>),

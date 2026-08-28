@@ -156,6 +156,119 @@ void main() {
       expect(client.bodies, hasLength(1), reason: 'no retry');
     });
   });
+
+  group('each server names its thinking channel differently', () {
+    // The bug that made Ollama return nothing at all while the same model on
+    // llama.cpp worked. Verified against Ollama 0.32.15 with qwen3.6: its
+    // OpenAI-compatible endpoint puts the ENTIRE reply in `reasoning` and
+    // sends `content: ""` on every chunk, so reading only `reasoning_content`
+    // and `thinking` meant every token was read as nothing.
+
+    Future<(String, String)> collect(String field) async {
+      final frame = 'data: ${jsonEncode({
+            'choices': [
+              {
+                'delta': {'content': '', field: 'deliberating'}
+              }
+            ]
+          })}\n\n';
+      final client = _FakeClient.paced(
+        [frame, chunk('The answer.'), 'data: [DONE]\n\n'],
+        gap: Duration.zero,
+      );
+      final p = OpenAiCompatibleProvider(
+        id: 'x',
+        displayName: 'srv',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'm',
+        clientFactory: () => client,
+      );
+      final text = StringBuffer();
+      final reasoning = StringBuffer();
+      await for (final d in p.stream(const LlmRequest(messages: []))) {
+        text.write(d.text);
+        reasoning.write(d.reasoning);
+      }
+      return (text.toString(), reasoning.toString());
+    }
+
+    test('Ollama says `reasoning`', () async {
+      final (text, reasoning) = await collect('reasoning');
+      expect(reasoning, 'deliberating',
+          reason: 'missing this is what returned an empty answer');
+      expect(text, 'The answer.');
+    });
+
+    test('vLLM and DeepSeek say `reasoning_content`', () async {
+      final (text, reasoning) = await collect('reasoning_content');
+      expect(reasoning, 'deliberating');
+      expect(text, 'The answer.');
+    });
+
+    test("Ollama's native API says `thinking`", () async {
+      final (text, reasoning) = await collect('thinking');
+      expect(reasoning, 'deliberating');
+      expect(text, 'The answer.');
+    });
+
+    test('thinking never leaks into the answer', () async {
+      // The reason these are separate channels at all: reasoning saved into
+      // someone's notes as the answer would be worse than no answer.
+      for (final field in ['reasoning', 'reasoning_content', 'thinking']) {
+        final (text, _) = await collect(field);
+        expect(text, isNot(contains('deliberating')), reason: field);
+      }
+    });
+  });
+
+  group('turning thinking off', () {
+    Future<String> bodyFor(LlmRequest request) async {
+      final client = _FakeClient.paced(
+        [chunk('hi'), 'data: [DONE]\n\n'],
+        gap: Duration.zero,
+      );
+      final p = OpenAiCompatibleProvider(
+        id: 'x',
+        displayName: 'srv',
+        baseUrl: 'http://127.0.0.1:11434/v1',
+        model: 'm',
+        clientFactory: () => client,
+      );
+      await p.stream(request).drain<void>();
+      return client.bodies.single;
+    }
+
+    test('Fast sends the flag that actually works', () async {
+      // Measured against the real thing: Ollama accepts `enable_thinking:
+      // false` and `think: false` and ignores both — the model thinks anyway,
+      // fills its budget and returns no content. `reasoning_effort: "none"` is
+      // the one it honours.
+      final body =
+          await bodyFor(const LlmRequest(messages: [], effort: LlmEffort.low));
+      expect(body, contains('"reasoning_effort":"none"'));
+      expect(body, contains('"enable_thinking":false'),
+          reason: 'llama.cpp and vLLM read this one instead');
+      expect(body, contains('"think":false'));
+    });
+
+    test('a structured call always turns it off, whatever the depth', () async {
+      // Deliberation and schema-shaped output do not mix at this size: the
+      // model spends the whole budget thinking and emits no JSON at all.
+      final body = await bodyFor(const LlmRequest(
+        messages: [],
+        effort: LlmEffort.high,
+        jsonFormat: LlmJsonFormat(name: 'x', schema: {'type': 'object'}),
+      ));
+      expect(body, contains('"reasoning_effort":"none"'));
+    });
+
+    test('Thorough asks for thinking rather than turning it off', () async {
+      final body =
+          await bodyFor(const LlmRequest(messages: [], effort: LlmEffort.high));
+      expect(body, contains('"reasoning_effort":"high"'));
+      expect(body, contains('"enable_thinking":true'));
+    });
+  });
 }
 
 /// An http client that plays a scripted SSE response.
