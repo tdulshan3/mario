@@ -354,10 +354,17 @@ class _Composer extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Row(
+          // Wrap, not Row-with-Spacer: the panel can be dragged down to its
+          // 280px minimum, where the two buttons together are ~34px too wide
+          // and a Row overflows. They sit side by side when there is room and
+          // stack when there is not.
+          Wrap(
+            spacing: 4,
+            runSpacing: 2,
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: [
               _WebToggle(value: useWeb, onChanged: onWebChanged),
-              const Spacer(),
               TextButton.icon(
                 onPressed: enabled ? onSummarize : null,
                 icon: const Icon(Icons.subject, size: 15),
@@ -789,57 +796,70 @@ class _QuotedSelection extends StatelessWidget {
     final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     return Padding(
       padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      // The accent is a child, not a coloured left border: Flutter only allows
+      // a borderRadius when every side of the border is the same colour, and a
+      // yellow-left/grey-elsewhere Border with rounded corners throws on every
+      // paint.
       child: Container(
-        padding: const EdgeInsets.fromLTRB(9, 7, 4, 7),
         decoration: BoxDecoration(
           color: scheme.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8),
-          border: Border(
-            left: BorderSide(color: MarioColors.primary, width: 3),
-            top: BorderSide(color: scheme.outlineVariant),
-            right: BorderSide(color: scheme.outlineVariant),
-            bottom: BorderSide(color: scheme.outlineVariant),
-          ),
+          border: Border.all(color: scheme.outlineVariant),
         ),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'ASKING ABOUT YOUR HIGHLIGHT',
-                    style: GoogleFonts.spaceGrotesk(
-                      fontSize: 9,
-                      letterSpacing: 1,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.onSurfaceVariant,
-                    ),
+        clipBehavior: Clip.antiAlias,
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Container(width: 3, color: MarioColors.primary),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(9, 7, 4, 7),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'ASKING ABOUT YOUR HIGHLIGHT',
+                              style: GoogleFonts.spaceGrotesk(
+                                fontSize: 9,
+                                letterSpacing: 1,
+                                fontWeight: FontWeight.w600,
+                                color: scheme.onSurfaceVariant,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              oneLine,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                height: 1.35,
+                                color: scheme.onSurface,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Ask about the whole page instead',
+                        onPressed: onClear,
+                        icon: const Icon(Icons.close, size: 14),
+                        visualDensity: VisualDensity.compact,
+                        constraints:
+                            const BoxConstraints(minWidth: 26, minHeight: 26),
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 2),
-                  Text(
-                    oneLine,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: GoogleFonts.inter(
-                      fontSize: 11.5,
-                      height: 1.35,
-                      color: scheme.onSurface,
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
-            IconButton(
-              tooltip: 'Ask about the whole page instead',
-              onPressed: onClear,
-              icon: const Icon(Icons.close, size: 14),
-              visualDensity: VisualDensity.compact,
-              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-              color: scheme.onSurfaceVariant,
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

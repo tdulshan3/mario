@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
 import 'auth_notifier.dart';
+import '../../ui/widgets/mario_logo.dart';
 
 class LoginScreen extends ConsumerWidget {
   const LoginScreen({super.key});
@@ -27,7 +28,7 @@ class LoginScreen extends ConsumerWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _MarioMark(),
+                const MarioLogo(size: 96, shadow: true),
                 const SizedBox(height: 24),
                 Text(
                   'Mario',
@@ -80,9 +81,8 @@ class LoginScreen extends ConsumerWidget {
                     child: ElevatedButton.icon(
                       onPressed: auth.isLoading
                           ? null
-                          : () => ref
-                              .read(authNotifierProvider.notifier)
-                              .signIn(),
+                          : () =>
+                              ref.read(authNotifierProvider.notifier).signIn(),
                       icon: auth.isLoading
                           ? const SizedBox(
                               width: 18,
@@ -110,37 +110,6 @@ class LoginScreen extends ConsumerWidget {
               ],
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-class _MarioMark extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 96,
-      height: 96,
-      decoration: BoxDecoration(
-        color: MarioColors.primary,
-        borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(
-            color: MarioColors.primary.withValues(alpha: 0.35),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        'M',
-        style: GoogleFonts.spaceGrotesk(
-          fontSize: 56,
-          fontWeight: FontWeight.w700,
-          color: Colors.white,
-          height: 1,
         ),
       ),
     );

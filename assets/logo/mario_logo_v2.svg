@@ -1,17 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title description">
-  <title id="title">Mario folded shard symbol</title>
-  <desc id="description">A proprietary turquoise folded shard with a coral inner facet on a midnight-blue rounded square.</desc>
-  <defs>
-    <linearGradient id="surface" x1="32" y1="18" x2="224" y2="238" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#102B64"/>
-      <stop offset="1" stop-color="#07152F"/>
-    </linearGradient>
-    <linearGradient id="shard" x1="88" y1="52" x2="174" y2="205" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#51DDD5"/>
-      <stop offset="1" stop-color="#21BFC4"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="58" fill="url(#surface)"/>
-  <path d="M141 126 171 198c1.813 4.351-3.002 8.478-7.026 6.022l-32.776-36.001a12 12 0 0 1-2.013-12.958Z" fill="#FF6B57"/>
-  <path d="M101.852 50.961 161.55 84.7a12 12 0 0 1 5.079 14.977l-34.618 82.53a8 8 0 0 0 1.675 8.805l31.124 30.23c3.885 3.773-.135 10.245-5.198 8.371l-63.607-23.539A15 15 0 0 1 86.21 192V64c0-12.055 10.896-19.823 15.642-13.039Z" fill="url(#shard)"/>
+  <title id="title">Mario notebook symbol</title>
+  <desc id="description">A cream notebook with a gold spine and a red bookmark ending in a friendly moustache-shaped flourish.</desc>
+  <rect width="256" height="256" rx="58" fill="#17233D"/>
+  <rect x="50" y="36" width="156" height="184" rx="28" fill="#FFF8E8"/>
+  <path d="M50 64c0-15.464 12.536-28 28-28h8v184h-8c-15.464 0-28-12.536-28-28Z" fill="#F2C14E"/>
+  <path d="M115 36h26v146l-13-15-13 15Z" fill="#F05A47"/>
+  <path d="M128 181c9-10 20-14 31-10 9 4 19 2 26-4-1 16-13 29-29 32-12 2-22-4-28-12-6 8-16 14-28 12-16-3-28-16-29-32 7 6 17 8 26 4 11-4 22 0 31 10Z" fill="#17233D"/>
 </svg>

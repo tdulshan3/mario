@@ -11,6 +11,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/widgets/mario_logo.dart';
 import '../ai/ai_state.dart';
 import '../search/global_search.dart';
 import '../sharing/share_dialog.dart';
@@ -25,7 +26,8 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final selection = ref.watch(selectionProvider);
-    final notebooks = ref.watch(notebooksStreamProvider).valueOrNull ?? const [];
+    final notebooks =
+        ref.watch(notebooksStreamProvider).valueOrNull ?? const [];
     final currentName = notebooks
         .where((n) => n.id == selection.notebookId)
         .map((n) => n.name)
@@ -71,7 +73,7 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
                     Expanded(
                       child: Row(
                         children: [
-                          _LogoMark(),
+                          const MarioLogo(size: 28),
                           if (showBrand) ...[
                             const SizedBox(width: 12),
                             Text(
@@ -210,38 +212,6 @@ class _OverflowMenu extends StatelessWidget {
             onSettings();
         }
       },
-    );
-  }
-}
-
-class _LogoMark extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
-      width: 28,
-      height: 28,
-      decoration: BoxDecoration(
-        color: scheme.primary,
-        borderRadius: BorderRadius.circular(8),
-        boxShadow: [
-          BoxShadow(
-            color: scheme.primary.withValues(alpha: 0.3),
-            blurRadius: 6,
-            offset: const Offset(0, 1),
-          ),
-        ],
-      ),
-      alignment: Alignment.center,
-      child: Text(
-        'M',
-        style: GoogleFonts.spaceGrotesk(
-          fontSize: 16,
-          fontWeight: FontWeight.w700,
-          color: scheme.onPrimary,
-          height: 1,
-        ),
-      ),
     );
   }
 }
