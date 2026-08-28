@@ -29,11 +29,22 @@ class PageContentRepository {
   /// Cache-first load. On a hit, returns cached content immediately and kicks
   /// off a detached background revalidation. On a miss, fetches from Drive,
   /// caches, and returns.
-  Future<Map<String, dynamic>> load(String fileId) async {
+  ///
+  /// Set [revalidate] to false for a bulk read — opening one page should check
+  /// Drive for a newer copy, but reading forty pages of a section at once must
+  /// not fire forty *detached* revalidations in one tick. Those are outside
+  /// any caller's concurrency gate (they are `unawaited`), and a burst like
+  /// that is exactly what Drive answers with `403 userRateLimitExceeded`. The
+  /// pages are still served from cache, and the next single-page open
+  /// revalidates them normally.
+  Future<Map<String, dynamic>> load(String fileId,
+      {bool revalidate = true}) async {
     final cached = await _cache.readContent(fileId);
     if (cached != null) {
-      final tag = await _cache.readTag(fileId);
-      unawaited(_revalidate(fileId, cached, tag));
+      if (revalidate) {
+        final tag = await _cache.readTag(fileId);
+        unawaited(_revalidate(fileId, cached, tag));
+      }
       return cached;
     }
     final content = await _drive.readPageFile(fileId);

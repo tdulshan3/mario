@@ -10,6 +10,8 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:window_manager/window_manager.dart';
 
+import '../../ui/colors.dart';
+import '../ai/ai_state.dart';
 import '../search/global_search.dart';
 import '../sharing/share_dialog.dart';
 import 'shell_state.dart';
@@ -99,6 +101,20 @@ class ShellToolbar extends ConsumerWidget implements PreferredSizeWidget {
                             ),
                           ],
                         ],
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: ref.watch(aiPanelProvider).isOpen
+                          ? 'Hide AI panel'
+                          : 'Ask AI / Quiz',
+                      onPressed: () =>
+                          ref.read(aiPanelProvider.notifier).toggle(),
+                      icon: Icon(
+                        Icons.auto_awesome,
+                        size: 18,
+                        color: ref.watch(aiPanelProvider).isOpen
+                            ? MarioColors.primaryPressed
+                            : null,
                       ),
                     ),
                     if (showSearch)

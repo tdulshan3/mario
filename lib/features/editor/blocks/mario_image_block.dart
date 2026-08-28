@@ -1,8 +1,24 @@
-/// MarioImageBlock — drop-in image block with an inline OCR shadow panel.
+/// MarioImageBlock — drop-in image block with an inline OCR shadow panel and
+/// Drive-backed cloud sync for the picture itself.
 ///
 /// Replaces the stock AppFlowy image builder. Trades the resizable image's
 /// drag-handles + alignment menu for a lighter wrapper that runs OCR through
 /// [OcrService] and shows the detected lines as click-to-insert chips.
+///
+/// The block carries two references to the same picture and they are not
+/// interchangeable:
+///
+///  * [MarioImageKeys.url] is where the file sits on *this* machine. It is
+///    written once, by whichever device inserted the image, and is meaningless
+///    everywhere else — which is exactly why images used to vanish on a second
+///    device even though the note itself synced fine.
+///  * [MarioImageKeys.driveId] is the picture's id in the Drive appDataFolder.
+///    It means the same thing everywhere, so it is the reference that actually
+///    travels. [AssetSyncService] turns it back into a local file.
+///
+/// `url` is never rewritten to suit another device: device B resolves the id
+/// into its own cache and leaves the originating device's path untouched, so
+/// two machines editing the same note don't fight over the attribute.
 library;
 
 import 'dart:io';
@@ -15,6 +31,7 @@ import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../../../core/services/asset_sync_service.dart';
 import '../../../core/services/ocr_service.dart';
 import '../../../ui/colors.dart';
 import '_safe_transaction.dart';
@@ -24,6 +41,13 @@ class MarioImageKeys {
   const MarioImageKeys._();
   static const String type = 'image';
   static const String url = 'url';
+
+  /// Google Drive appDataFolder id of the image bytes — the device-independent
+  /// half of the reference. Absent on notes written before image sync existed;
+  /// those get one minted the first time the block renders on a signed-in
+  /// device (see `_syncAsset`).
+  static const String driveId = 'drive_id';
+
   static const String width = 'width';
   static const String ocrLines = 'ocr_lines';
   static const String ocrDismissed = 'ocr_dismissed';
@@ -47,7 +71,8 @@ class MarioImageBlockBuilder extends afe.BlockComponentBuilder {
 
   @override
   bool validate(afe.Node node) =>
-      node.attributes[MarioImageKeys.url] is String;
+      node.attributes[MarioImageKeys.url] is String ||
+      node.attributes[MarioImageKeys.driveId] is String;
 }
 
 class MarioImageBlockWidget extends afe.BlockComponentStatefulWidget {
@@ -66,8 +91,26 @@ class MarioImageBlockWidget extends afe.BlockComponentStatefulWidget {
 class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
     with afe.SelectableMixin, afe.BlockComponentConfigurable {
   bool _ocrRunning = false;
+
+  /// True while this device is pulling the bytes down from Drive for the first
+  /// time — the state a note opened on a brand-new machine starts in.
+  bool _downloading = false;
+
+  /// Memoised result of [_resolveSync], with the attribute pair it was
+  /// computed from. Resolution touches the filesystem (`existsSync`), and
+  /// `build` runs on every editor notification, so recomputing per frame would
+  /// put a syscall in the typing path.
+  String? _resolvedKey;
+  String? _resolvedPath;
+
+  /// The attribute pair [_ensureLocalCopy] has already acted on, so a rebuild
+  /// doesn't re-fire a download that is already done or in flight.
+  String? _syncedKey;
+
   final GlobalKey _imageKey = GlobalKey();
   RenderBox? get _renderBox => context.findRenderObject() as RenderBox?;
+
+  AssetSyncService get _assets => GetIt.I<AssetSyncService>();
 
   @override
   afe.BlockComponentConfiguration get configuration => widget.configuration;
@@ -77,6 +120,16 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
 
   String get _src =>
       (widget.node.attributes[MarioImageKeys.url] as String?) ?? '';
+
+  String? get _driveId {
+    final v = widget.node.attributes[MarioImageKeys.driveId];
+    return (v is String && v.isNotEmpty) ? v : null;
+  }
+
+  /// Identity of the picture this block currently points at. Both halves
+  /// matter: the id can arrive on a block that already had a url (an upload
+  /// finishing), and the url can be all there is (a note from before sync).
+  String get _assetKey => '${_driveId ?? ''}|$_src';
 
   List<String> get _ocrLines {
     final raw = widget.node.attributes[MarioImageKeys.ocrLines];
@@ -93,22 +146,131 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _maybeRunOcr());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _ensureLocalCopy();
+      _maybeRunOcr();
+    });
   }
+
+  @override
+  void didUpdateWidget(covariant MarioImageBlockWidget oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // The node is mutable and AppFlowy reuses this State across attribute
+    // changes, so a fresh id (or a replaced url) shows up here rather than in
+    // a new State. Both calls no-op when nothing moved.
+    _ensureLocalCopy();
+    _maybeRunOcr();
+  }
+
+  // ---------- Asset resolution ----------
+
+  /// The file this block can actually draw right now, or null if there isn't
+  /// one yet. Never touches the network.
+  ///
+  /// The Drive id is consulted first because it is the reference that is true
+  /// everywhere; `url` is the fallback for the device that inserted the image
+  /// (and for notes predating sync). Checking the id first also means that
+  /// after a device re-downloads a picture whose original local copy was
+  /// deleted, the cached copy wins.
+  String? get _localPath {
+    final key = _assetKey;
+    if (key != _resolvedKey) {
+      _resolvedKey = key;
+      _resolvedPath = _resolveSync();
+    }
+    return _resolvedPath;
+  }
+
+  String? _resolveSync() {
+    final id = _driveId;
+    if (id != null) {
+      final hit = _assets.cachedPath(id);
+      if (hit != null) return hit;
+    }
+    final src = _src;
+    if (src.isNotEmpty && _isLocalFile(src)) return src;
+    return null;
+  }
+
+  /// Make sure this device has the bytes, downloading them if the note points
+  /// at an asset this machine has never seen.
+  ///
+  /// Only the download half lives here. Uploads belong to [AssetSweeper],
+  /// which walks the whole document: blocks below the fold are never built by
+  /// the editor's lazy list, so a block-driven upload would quietly skip
+  /// exactly the images the user didn't scroll past.
+  ///
+  /// A failed download clears [_syncedKey] so the Retry button can try again;
+  /// nothing retries on a timer, because an offline user shouldn't have a
+  /// background loop hammering Drive.
+  Future<void> _ensureLocalCopy() async {
+    if (kIsWeb) return;
+    final key = _assetKey;
+    if (_syncedKey == key) return;
+    _syncedKey = key;
+
+    final id = _driveId;
+    if (id == null) return; // nothing to fetch; the sweeper will mint an id
+    if (_assets.cachedPath(id) != null) return; // already on this disk
+
+    final src = _src;
+    if (src.isNotEmpty && _isLocalFile(src)) {
+      // We have the bytes but the index lost the mapping (corrupt index, or an
+      // upload that finished after the app was killed mid-stamp). Re-point the
+      // index instead of re-downloading them.
+      await _assets.adoptLocal(id, src);
+      if (!mounted) return;
+      setState(() => _resolvedKey = null);
+      return;
+    }
+
+    if (!mounted) return;
+    setState(() => _downloading = true);
+    // The extension comes from the originating device's url, which synced with
+    // the note — supplying it saves a metadata round-trip per image.
+    final path =
+        await _assets.ensureLocal(id, extensionHint: src.isEmpty ? null : src);
+    if (!mounted) return;
+    setState(() {
+      _downloading = false;
+      _resolvedKey = null; // force a re-resolve; the cache may now hit
+    });
+    if (path == null) {
+      _syncedKey = null; // offline or deleted — the Retry button can re-ask
+    } else {
+      _maybeRunOcr();
+    }
+  }
+
+  Future<void> _retryAsset() async {
+    _syncedKey = null;
+    _resolvedKey = null;
+    await _ensureLocalCopy();
+  }
+
+  /// Whether this picture is still local-only. Derived, not tracked: an image
+  /// with local bytes and no Drive id has not reached the cloud, whether the
+  /// sweeper hasn't got to it yet or can't (offline, signed out).
+  ///
+  /// Reads through [_localPath] rather than re-testing the file, so the check
+  /// costs nothing on the build path — this is evaluated on every frame the
+  /// block paints.
+  bool get _awaitingUpload => !kIsWeb && _driveId == null && _localPath != null;
 
   Future<void> _maybeRunOcr() async {
     if (!mounted) return;
     if (_ocrAlreadyKnown || _ocrRunning) return;
     final ocr = GetIt.I<OcrService>();
     if (!ocr.isAvailable) return;
-    final src = _src;
-    if (src.isEmpty) return;
-    if (!_isLocalFile(src)) return;
+    // OCR reads a file off the disk, so it needs the resolved copy — on a
+    // second device `url` points at a path that was never here.
+    final path = _localPath;
+    if (path == null) return;
 
     setState(() => _ocrRunning = true);
     List<String> lines = const [];
     try {
-      lines = await ocr.extractText(src);
+      lines = await ocr.extractText(path);
     } catch (_) {}
     if (!mounted) return;
 
@@ -118,7 +280,7 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
         MarioImageKeys.ocrLines: lines,
         MarioImageKeys.ocrDismissed: false,
       });
-    });
+    }, background: true);
     if (!mounted) return;
     setState(() => _ocrRunning = false);
   }
@@ -169,18 +331,35 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
   }
 
   Widget _buildImage() {
+    final local = _localPath;
+    if (local != null) return Image.file(File(local), fit: BoxFit.contain);
+
+    if (_downloading) return _statusBox(null, 'Downloading image…');
+
     final src = _src;
-    if (src.isEmpty) return const SizedBox.shrink();
-    if (_isLocalFile(src)) {
-      return Image.file(File(src), fit: BoxFit.contain);
+    // A real remote URL (a pasted https image) still renders straight from the
+    // network — those never needed syncing in the first place.
+    if (src.isNotEmpty && !_isLocalPathShape(src)) {
+      return Image.network(src, fit: BoxFit.contain);
     }
-    if (_isLocalPathShape(src)) {
-      return _missingImagePlaceholder(src);
+    if (src.isEmpty && _driveId == null) return const SizedBox.shrink();
+
+    // Known to Drive but not here yet, and the fetch didn't succeed: almost
+    // always offline. Worth distinguishing from a genuinely lost file, because
+    // one of them comes back on its own and the other doesn't.
+    if (_driveId != null) {
+      return _statusBox(
+        Icons.cloud_off_outlined,
+        "Image isn't downloaded yet",
+        onRetry: _retryAsset,
+      );
     }
-    return Image.network(src, fit: BoxFit.contain);
+    return _statusBox(Icons.broken_image_outlined, 'Image missing: $src');
   }
 
-  Widget _missingImagePlaceholder(String src) {
+  /// Shared frame for the non-image states. A null [icon] means "in progress"
+  /// and draws a spinner in its place.
+  Widget _statusBox(IconData? icon, String message, {VoidCallback? onRetry}) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted =
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
@@ -193,16 +372,70 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
       ),
       child: Row(
         children: [
-          Icon(Icons.broken_image_outlined, size: 20, color: muted),
+          if (icon == null)
+            SizedBox(
+              width: 20,
+              height: 20,
+              child: Padding(
+                padding: const EdgeInsets.all(3),
+                child: CircularProgressIndicator(strokeWidth: 1.5, color: muted),
+              ),
+            )
+          else
+            Icon(icon, size: 20, color: muted),
           const SizedBox(width: 10),
           Expanded(
             child: Text(
-              'Image missing: $src',
+              message,
               style: GoogleFonts.inter(fontSize: 12, color: muted),
               overflow: TextOverflow.ellipsis,
             ),
           ),
+          if (onRetry != null)
+            TextButton(
+              onPressed: onRetry,
+              style: TextButton.styleFrom(
+                foregroundColor: MarioColors.primaryPressed,
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              child: Text('Retry',
+                  style: GoogleFonts.inter(
+                      fontSize: 11, fontWeight: FontWeight.w600)),
+            ),
         ],
+      ),
+    );
+  }
+
+  /// Small corner badge while the picture is still local-only, so it's obvious
+  /// the image isn't safe on another device *yet*. Deliberately unobtrusive —
+  /// the upload is background work and blocking on it would be worse.
+  ///
+  /// No spinner: when the user is offline this state persists, and a spinner
+  /// that never resolves reads as a hang rather than as "waiting for a
+  /// connection".
+  Widget _uploadBadge() {
+    return Positioned(
+      right: 8,
+      top: 8,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.55),
+          borderRadius: BorderRadius.circular(4),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.cloud_upload_outlined,
+                size: 11, color: Colors.white),
+            const SizedBox(width: 6),
+            Text('Not synced yet',
+                style: GoogleFonts.inter(fontSize: 10, color: Colors.white)),
+          ],
+        ),
       ),
     );
   }
@@ -222,9 +455,14 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(6),
-            child: _buildImage(),
+          Stack(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: _buildImage(),
+              ),
+              if (_awaitingUpload) _uploadBadge(),
+            ],
           ),
           if (_ocrRunning)
             Padding(

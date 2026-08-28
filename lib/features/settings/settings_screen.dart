@@ -1,4 +1,4 @@
-/// Settings — appearance, editor, voice, AI key, account.
+/// Settings — appearance, editor, voice, AI models, account.
 library;
 
 import 'package:flutter/material.dart';
@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/theme.dart';
+import '../ai/ai_settings_section.dart';
 import '../auth/auth_notifier.dart';
 import 'settings_state.dart';
 
@@ -18,31 +19,9 @@ class SettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen> {
-  final _apiKeyController = TextEditingController();
-  bool _apiKeyHidden = true;
-  bool _apiKeyLoaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _loadApiKey();
-  }
-
-  Future<void> _loadApiKey() async {
-    final notifier = ref.read(settingsProvider.notifier);
-    final key = await notifier.getApiKey();
-    if (!mounted) return;
-    setState(() {
-      _apiKeyController.text = key ?? '';
-      _apiKeyLoaded = true;
-    });
-  }
-
-  @override
-  void dispose() {
-    _apiKeyController.dispose();
-    super.dispose();
-  }
+  // The old single Anthropic-key field lived here. It is now one entry in the
+  // backend list owned by AiSettingsSection; any key already in secure storage
+  // is migrated into that list on first load by LlmProviderStore.
 
   @override
   Widget build(BuildContext context) {
@@ -133,69 +112,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                         notifier.change((s) => s.copyWith(voiceLocale: v)),
                   ),
                 ]),
-                _Section(title: 'AI features', children: [
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Text(
-                      'Add an Anthropic API key to enable inline AI suggestions and /summary. Get one at console.anthropic.com.',
-                      style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: Theme.of(context)
-                              .colorScheme
-                              .onSurface
-                              .withValues(alpha: 0.6)),
-                    ),
-                  ),
-                  TextField(
-                    controller: _apiKeyController,
-                    obscureText: _apiKeyHidden,
-                    enabled: _apiKeyLoaded,
-                    decoration: InputDecoration(
-                      labelText: 'Anthropic API key',
-                      hintText: 'sk-ant-…',
-                      suffixIcon: IconButton(
-                        icon: Icon(_apiKeyHidden
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined),
-                        onPressed: () =>
-                            setState(() => _apiKeyHidden = !_apiKeyHidden),
-                      ),
-                    ),
-                    onSubmitted: (v) async {
-                      final messenger = ScaffoldMessenger.of(context);
-                      await notifier.setApiKey(v.trim());
-                      if (!mounted) return;
-                      messenger.showSnackBar(const SnackBar(
-                        content: Text('API key saved'),
-                      ));
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      TextButton(
-                        onPressed: () async {
-                          await notifier.setApiKey(null);
-                          if (!mounted) return;
-                          setState(() => _apiKeyController.text = '');
-                        },
-                        child: const Text('Clear'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () async {
-                          final messenger = ScaffoldMessenger.of(context);
-                          await notifier
-                              .setApiKey(_apiKeyController.text.trim());
-                          if (!mounted) return;
-                          messenger.showSnackBar(const SnackBar(
-                              content: Text('API key saved')));
-                        },
-                        child: const Text('Save'),
-                      ),
-                    ],
-                  ),
+                _Section(title: 'AI models', children: const [
+                  AiSettingsSection(),
                 ]),
                 _Section(title: 'Sync', children: [
                   _SwitchTile(

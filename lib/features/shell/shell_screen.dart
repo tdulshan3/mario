@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/widgets/resizable_panel.dart';
+import '../ai/ai_side_panel.dart';
 import '../editor/editor_screen.dart';
 import 'keyboard_shortcuts.dart';
 import 'nav_tree.dart';
@@ -53,6 +54,8 @@ class _ShellScreenState extends ConsumerState<ShellScreen> {
                 child: NavTree(onCollapse: _toggleTree),
               ),
             const Expanded(child: _EditorHost()),
+            // Renders nothing until opened, so the editor keeps its full width.
+            const AiSidePanel(),
           ],
         ),
       ),

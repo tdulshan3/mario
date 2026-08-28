@@ -11,6 +11,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
 import 'app.dart';
+import 'core/services/ai/ai_artifact_store.dart';
+import 'core/services/ai/llm_provider_config.dart';
+import 'core/services/ai/llm_service.dart';
+import 'core/services/ai/web_search_service.dart';
+import 'core/services/asset_cache.dart';
+import 'core/services/asset_sync_service.dart';
 import 'core/services/auth_service.dart';
 import 'core/services/drive_service.dart';
 import 'core/services/mario_firestore.dart';
@@ -54,6 +60,13 @@ Future<void> main() async {
   }
 
   _registerServices(isLinuxNative);
+
+  // Load the image-asset index before the first editor can mount. It is one
+  // small JSON read, and having it in memory is what lets an image block
+  // resolve a cached picture synchronously instead of flashing a spinner on
+  // every page open.
+  await GetIt.I<AssetSyncService>().warmUp();
+
   runApp(const ProviderScope(child: MarioApp()));
 }
 
@@ -91,10 +104,25 @@ void _registerServices(bool isLinuxNative) {
   }
 
   getIt.registerSingleton<DriveService>(DriveService(getIt<AuthService>()));
+  getIt.registerSingleton<AssetCache>(AssetCache());
+  getIt.registerSingleton<AssetSyncService>(
+      AssetSyncService(getIt<DriveService>(), getIt<AssetCache>()));
   getIt.registerSingleton<PageContentCache>(PageContentCache());
   getIt.registerSingleton<PageContentRepository>(PageContentRepository(
       getIt<DriveService>(), getIt<PageContentCache>()));
-  getIt.registerSingleton<SyncService>(
-      SyncService(getIt<MarioFirestore>(), getIt<PageContentRepository>()));
+  // AI. The backend list is loaded lazily by aiConfigsProvider rather than
+  // here, so a slow or absent keyring cannot delay first paint — and the app
+  // is entirely usable with no model configured at all.
+  getIt.registerSingleton<AiBackends>(AiBackends(LlmProviderStore()));
+  getIt.registerSingleton<LlmService>(LlmService(getIt<AiBackends>()));
+  getIt.registerSingleton<WebSearchService>(WebSearchService());
+  getIt.registerSingleton<AiArtifactStore>(
+      AiArtifactStore(getIt<DriveService>()));
+
+  getIt.registerSingleton<SyncService>(SyncService(
+    getIt<MarioFirestore>(),
+    getIt<PageContentRepository>(),
+    getIt<AiArtifactStore>(),
+  ));
   getIt.registerSingleton<VoiceService>(VoiceServiceImpl());
 }

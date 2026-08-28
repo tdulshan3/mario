@@ -6,13 +6,32 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import '../models/note_page.dart';
 import '../models/notebook.dart';
 import '../models/section.dart';
+import 'ai/ai_artifact_store.dart';
 import 'mario_firestore.dart';
 import 'page_content_repository.dart';
 
 class SyncService {
-  SyncService(this._db, this._content);
+  SyncService(this._db, this._content, [this._aiArtifacts]);
   final MarioFirestore _db;
   final PageContentRepository _content;
+
+  /// Optional so tests can construct a SyncService without the AI layer.
+  ///
+  /// Deleting a page has to evict what the AI features derived from it —
+  /// summaries are keyed by page id, and a quiz about a page that no longer
+  /// exists is unanswerable. Without this the artifacts are orphaned in a
+  /// per-notebook blob that is downloaded on every notebook load, growing
+  /// forever and occasionally handing a stale summary to a section read.
+  final AiArtifactStore? _aiArtifacts;
+
+  Future<void> _forgetAiArtifacts(String notebookId, String pageId) async {
+    try {
+      await _aiArtifacts?.forgetPage(notebookId, pageId);
+    } catch (_) {
+      // Best-effort, exactly like the Drive content delete above it: failing
+      // to tidy derived data must never block deleting the page itself.
+    }
+  }
 
   static const _root = 'notebooks';
   String _sectionsPath(String notebookId) => '$_root/$notebookId/sections';
@@ -74,6 +93,11 @@ class SyncService {
       }
       await _db.delete(p.path);
     }
+    // The whole notebook's AI artifacts go with it, in one call rather than
+    // per page — the blob is keyed by notebook.
+    try {
+      await _aiArtifacts?.forgetNotebook(id);
+    } catch (_) {}
     final sections = await _db.fetchCollection(_sectionsPath(id));
     for (final s in sections) {
       await _db.delete(s.path);
@@ -99,6 +123,7 @@ class SyncService {
           await _content.delete(fileId);
         } catch (_) {}
       }
+      await _forgetAiArtifacts(notebookId, p.id);
       await _db.delete(p.path);
     }
     await _db.delete(_sectionDoc(notebookId, sectionId));
@@ -127,6 +152,7 @@ class SyncService {
         await _content.delete(page.driveFileId!);
       } catch (_) {}
     }
+    await _forgetAiArtifacts(page.notebookId, page.id);
     await _db.delete(_pageDoc(page.notebookId, page.id));
   }
 

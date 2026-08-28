@@ -31,8 +31,33 @@ custom blocks:
   playback (`record`, `just_audio`).
 - **OCR** — extract text from images.
 - **Search** across your notes.
-- **AI assist** — bring your own [Anthropic](https://www.anthropic.com/) API key
-  (stored in the OS secure storage) for in-app assistance.
+- **AI assist** — see the section below.
+
+### AI study tools
+Bring your own model. Mario talks to a local one through **Ollama**, to any
+**OpenAI-compatible** server on your network (llama.cpp's `llama-server`,
+LM Studio, vLLM, Jan), to **OpenAI**, or to **Claude** — configured in
+*Settings → AI models*, with a Test button that says what is actually wrong when
+a connection fails. Keys live in the OS secure storage; nothing works, and
+nothing is sent anywhere, until you set a backend up.
+
+- **`/summary`** — summarises the note above the cursor.
+- **`/ask`** — reads the page, optionally searches the web (Serper), answers,
+  and offers to insert the answer into the note with its sources.
+- **`/quiz`** — a right-hand panel that builds a paper from the current page or
+  a whole section: multiple choice plus essay questions, generated in batches
+  and validated as they arrive.
+- **Marking** — multiple choice is marked in plain Dart, instantly and offline.
+  Essays are marked against a rubric, shown with the points they hit and missed,
+  labelled a draft, and editable — a small model's opinion of an essay is an
+  opinion, not a grade.
+- **Writing check** — on-demand spelling and grammar suggestions, accepted or
+  ignored one at a time, each its own undo step.
+
+Summaries, answers, quizzes and marks are saved to the same private Google Drive
+folder as your notes, so they follow you between machines and work offline. A
+saved summary doubles as cached context, which is what makes a second question
+about a long section fast.
 
 ### Sync & storage
 - **Cloud sync** via Firebase/Firestore on web, and via `firedart` on Linux (where
@@ -72,8 +97,10 @@ custom blocks:
 - For Linux desktop builds: `clang`, `cmake`, `ninja`, `pkg-config` and the GTK3
   dev headers.
 
-> **Note:** the first Linux build downloads ~150 MB of CEF (Chromium) binaries for
-> the embedded HTML preview.
+> **Note:** the first Linux build downloads CEF (Chromium) for the embedded HTML
+> preview. The archive is ~150 MB but unpacks to roughly **3 GB** under
+> `third_party/webview_cef/third/cef/`, which is gitignored — it is a build
+> artifact, fetched by `download.cmake`, not source.
 
 ### Configuration
 Mario needs a Google OAuth **desktop client id + secret** for Google sign-in / Drive.

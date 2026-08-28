@@ -20,6 +20,7 @@ import 'blocks/drawing_block.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
+import 'word_shortcuts.dart';
 
 const _fontSizes = [10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 28.0, 32.0, 36.0, 48.0];
 
@@ -214,9 +215,20 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
       type: FileType.image,
       withData: false,
     );
-    final path = result?.files.firstOrNull?.path;
-    if (path == null) return;
-    if (!await File(path).exists()) return;
+    final picked = result?.files.firstOrNull?.path;
+    if (picked == null) return;
+    if (!await File(picked).exists()) return;
+    // Copy into the app's images folder, exactly as drag-drop and paste do.
+    // Inserting the picked path directly leaves the bytes wherever the user
+    // happened to pick them from, so the reference breaks when they move the
+    // original — and the asset cache, which indexes by name relative to that
+    // folder, can't record the file at all.
+    String path;
+    try {
+      path = await persistImageFile(picked);
+    } catch (_) {
+      path = picked; // better a fragile reference than no image
+    }
     await _insertNode(afe.Node(
       type: MarioImageKeys.type,
       attributes: {MarioImageKeys.url: path},

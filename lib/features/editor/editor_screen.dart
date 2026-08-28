@@ -17,11 +17,17 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:webview_cef/webview_cef.dart';
 
 import '../../core/models/note_page.dart';
+import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
 import '../drawing/stroke.dart';
+import '../ai/ai_slash_commands.dart';
+import '../ai/grammar_check.dart';
+import '../ai/ai_state.dart';
+import '../ai/ask_panel.dart';
+import '../ai/note_context.dart';
 import '../math/math_shortcut.dart';
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
@@ -31,8 +37,10 @@ import 'blocks/mario_image_block.dart';
 import 'blocks/mario_table_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
+import 'asset_sweeper.dart';
 import 'canvas_drawing_layer.dart';
 import 'canvas_toolbar.dart';
+import 'image_asset_resolver.dart';
 import 'page_content_provider.dart';
 import 'paste_html_bridge.dart';
 import 'word_shortcuts.dart';
@@ -148,6 +156,15 @@ class _EditorState extends ConsumerState<_Editor> {
   // a drop-zone highlight to confirm the drop will be accepted.
   bool _dragOver = false;
 
+  // Pushes this page's images to Drive. Page-level rather than block-level
+  // because the editor's lazy list never builds blocks below the fold — see
+  // AssetSweeper's header for why that matters.
+  late AssetSweeper _assetSweeper;
+
+  // Captured in initState so dispose() can clear the AI bridge without
+  // touching `ref`, which is already invalid by then.
+  StateController<AiEditorBridge?>? _bridgeController;
+
   // HTML preview pane — toggled from the toolbar. _previewHtml is fed by
   // _updatePreview (called on each transaction while preview is on) so the
   // pane re-renders without rebuilding the editor.
@@ -224,10 +241,25 @@ class _EditorState extends ConsumerState<_Editor> {
     // Heal pages that were saved empty by the older delete-last-block bug, so
     // they don't open to a frozen, untypeable canvas.
     _ensureNonEmptyDocument();
+
+    // Hand the AI panel a way to read this page and write back into it. Done
+    // after the first frame because publishing to a provider during initState
+    // would mutate state while the tree is still building. The controller is
+    // grabbed now, synchronously, because dispose() cannot use `ref` — see
+    // [_withdrawAiBridge].
+    _bridgeController = ref.read(aiEditorBridgeProvider.notifier);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _publishAiBridge());
+
+    _assetSweeper = AssetSweeper(_editorState, GetIt.I<AssetSyncService>());
+    // One pass on open covers images this device inserted while offline and
+    // notes written before image sync existed. Later passes ride on _save.
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => unawaited(_assetSweeper.sweep()));
   }
 
   @override
   void dispose() {
+    _withdrawAiBridge();
     final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
     _txSub.cancel();
@@ -245,6 +277,8 @@ class _EditorState extends ConsumerState<_Editor> {
     if (hadPendingSave && !state.isDisposed) {
       _flushFinalSave(state);
     }
+    // After the flush — assetIds() reads the document the flush also snapshots.
+    _assetSweeper.dispose();
     WidgetsBinding.instance.addPostFrameCallback((_) => state.dispose());
     super.dispose();
   }
@@ -258,6 +292,7 @@ class _EditorState extends ConsumerState<_Editor> {
       'title': widget.page.title,
       'updatedAt': DateTime.now().toIso8601String(),
       'strokes': strokesToJson(_drawingController.snapshot()),
+      'assetIds': _assetSweeper.assetIds(),
       if (rawHtmlOverride.value != null && rawHtmlOverride.value!.isNotEmpty)
         _rawHtmlOverrideKey: rawHtmlOverride.value,
     };
@@ -365,7 +400,15 @@ class _EditorState extends ConsumerState<_Editor> {
     });
   }
 
-  void _updatePreview() {
+  /// Memo for the preview's image-path substitutions, keyed by the set of
+  /// asset ids in the document. Resolving stats one file per image, and the
+  /// preview regenerates on every keystroke — without this, a page with thirty
+  /// pictures would do thirty syscalls per character typed. The ids only
+  /// change when an image is added, removed, or finishes uploading.
+  String _previewSubsKey = '';
+  Map<String, String> _previewSubs = const {};
+
+  Future<void> _updatePreview() async {
     try {
       // Pasted-HTML override wins — render the user's verbatim source so
       // sticky/grid/JS/animations all survive. Otherwise fall back to the
@@ -373,9 +416,22 @@ class _EditorState extends ConsumerState<_Editor> {
       final override = rawHtmlOverride.value;
       if (override != null && override.isNotEmpty) {
         _previewHtml.value = override;
-      } else {
-        _previewHtml.value = afe.documentToHTML(_editorState.document);
+        return;
       }
+      // The HTML encoder emits each image node's `url`, which is the path on
+      // the device that inserted it — repoint those at this device's copies.
+      // `fetchMissing: false` on purpose: the preview must never touch the
+      // network. An image the editor has already downloaded is a cache hit
+      // here anyway.
+      final ids = _assetSweeper.assetIds().join(',');
+      if (ids != _previewSubsKey) {
+        _previewSubs = await resolveImageSources(
+            _editorState.document, GetIt.I<AssetSyncService>());
+        _previewSubsKey = ids;
+        if (!mounted) return;
+      }
+      _previewHtml.value = rewriteHtmlImageSources(
+          afe.documentToHTML(_editorState.document), _previewSubs);
     } catch (e) {
       _previewHtml.value = '<!-- preview error: $e -->';
     }
@@ -396,6 +452,11 @@ class _EditorState extends ConsumerState<_Editor> {
         'title': widget.page.title,
         'updatedAt': DateTime.now().toIso8601String(),
         'strokes': strokesToJson(_drawingController.snapshot()),
+        // Which Drive assets this page still references. Nothing reads it
+        // today; it exists so a later cleanup pass can tell a live image from
+        // an orphan. Deleting a page destroys its JSON, so if the ids aren't
+        // recorded before that happens they're unrecoverable.
+        'assetIds': _assetSweeper.assetIds(),
         if (rawHtmlOverride.value != null && rawHtmlOverride.value!.isNotEmpty)
           _rawHtmlOverrideKey: rawHtmlOverride.value,
       };
@@ -405,6 +466,10 @@ class _EditorState extends ConsumerState<_Editor> {
         _status = SaveStatus.saved;
         _lastSavedAt = DateTime.now();
       });
+      // Push any images that still lack a Drive id. Riding on the save keeps
+      // the retry cadence tied to real activity — a paste is swept within a
+      // couple of seconds, an idle page costs nothing.
+      unawaited(_assetSweeper.sweep());
     } catch (e) {
       if (!mounted) return;
       setState(() => _status = SaveStatus.error);
@@ -430,6 +495,87 @@ class _EditorState extends ConsumerState<_Editor> {
   void _zoomReset() {
     setState(() => _zoom = 1.0);
   }
+
+  // ---------------------------------------------------------------- AI panel
+
+  /// Publishes the handle the AI side panel uses to read this page and insert
+  /// answers into it. See [AiEditorBridge] for why the panel cannot reach the
+  /// EditorState directly.
+  void _publishAiBridge() {
+    if (!mounted) return;
+    ref.read(aiEditorBridgeProvider.notifier).state = AiEditorBridge(
+      pageId: widget.page.id,
+      notebookId: widget.page.notebookId,
+      sectionId: widget.page.sectionId,
+      pageTitle: widget.page.title,
+      readPage: _readPageText,
+      readAboveCursor: _readTextAboveCursor,
+      insertMarkdown: (markdown) =>
+          insertMarkdownIntoDocument(_editorState, markdown),
+      applyGrammar: (suggestion) =>
+          applyGrammarSuggestion(_editorState, suggestion),
+    );
+  }
+
+  /// Clears the bridge, but only if it is still ours.
+  ///
+  /// Switching pages disposes the outgoing editor *after* the incoming one has
+  /// mounted and published its own bridge; clearing unconditionally would wipe
+  /// the new page's handle and leave the panel thinking no page is open.
+  ///
+  /// Two things make this awkward from `dispose()`, and both are why it goes
+  /// through a captured controller and a microtask rather than `ref`:
+  ///
+  ///  * `ref` is dead by then. Flutter marks the element inactive *before*
+  ///    calling `State.dispose`, so Riverpod throws
+  ///    "Cannot use ref after the widget was disposed". Hence
+  ///    [_bridgeController], captured in initState while `ref` is still valid.
+  ///  * Writing provider state synchronously during teardown rebuilds any
+  ///    widget listening to it in the middle of the tree being dismantled.
+  ///    Deferring to a microtask sidesteps that, and the page-id guard is what
+  ///    keeps the deferral safe — by the time it runs the next editor may
+  ///    already have published, and then this is a no-op.
+  void _withdrawAiBridge() {
+    final controller = _bridgeController;
+    if (controller == null) return;
+    final pageId = widget.page.id;
+    scheduleMicrotask(() {
+      try {
+        if (controller.state?.pageId == pageId) controller.state = null;
+      } catch (_) {
+        // The whole ProviderScope went away with us (app shutdown). Nothing
+        // left to withdraw from.
+      }
+    });
+  }
+
+  NoteText _readPageText() =>
+      extractNoteText(_editorState.document, title: widget.page.title);
+
+  /// Everything above the caret — what `/summary` means by "the note above".
+  /// With no caret (the panel was used without clicking into the page first)
+  /// the whole page is the sensible reading.
+  NoteText _readTextAboveCursor() {
+    final full = _readPageText();
+    final selection = _editorState.selection;
+    if (selection == null) return full;
+    return full.above(List<int>.from(selection.start.path));
+  }
+
+  void _onAskCommand(String question) {
+    final panel = ref.read(aiPanelProvider.notifier);
+    if (question.isEmpty) {
+      panel.open(tab: AiPanelTab.ask);
+    } else {
+      panel.askQuestion(question);
+    }
+  }
+
+  void _onSummaryCommand() =>
+      ref.read(aiPanelProvider.notifier).askQuestion(kSummaryRequest);
+
+  void _onQuizCommand() =>
+      ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.quiz);
 
   @override
   Widget build(BuildContext context) {
@@ -505,6 +651,11 @@ class _EditorState extends ConsumerState<_Editor> {
       ...standardSpaceHandlers,
       afe.customSlashCommand(
         [
+          ...aiSelectionMenuItems(
+            onAsk: _onAskCommand,
+            onSummary: _onSummaryCommand,
+            onQuiz: _onQuizCommand,
+          ),
           ...afe.standardSelectionMenuItems,
           mathSelectionMenuItem,
           codeSelectionMenuItem,
@@ -705,8 +856,18 @@ class _EditorState extends ConsumerState<_Editor> {
               ),
             ),
           ),
-          _StatusBar(
-              status: _status, lastSavedAt: _lastSavedAt, muted: muted),
+          // Rebuilds on its own when the sweeper's backlog changes, so the
+          // status line never claims "Saved" while some of the page's images
+          // are still local-only.
+          ValueListenableBuilder<int>(
+            valueListenable: _assetSweeper.pendingCount,
+            builder: (context, pendingImages, _) => _StatusBar(
+              status: _status,
+              lastSavedAt: _lastSavedAt,
+              muted: muted,
+              pendingImages: pendingImages,
+            ),
+          ),
         ],
       ),
     );
@@ -1024,21 +1185,32 @@ class _StatusBar extends StatelessWidget {
     required this.status,
     required this.lastSavedAt,
     required this.muted,
+    this.pendingImages = 0,
   });
 
   final SaveStatus status;
   final DateTime? lastSavedAt;
   final Color muted;
 
+  /// Images in this page that haven't reached Drive yet. The text is otherwise
+  /// about the page JSON only, and "Saved" while a picture is still local-only
+  /// would promise something the other devices won't see.
+  final int pendingImages;
+
   @override
   Widget build(BuildContext context) {
-    final (text, icon) = switch (status) {
+    var (text, icon) = switch (status) {
       SaveStatus.idle => (lastSavedAt == null ? '' : 'Saved', Icons.check_circle_outline),
       SaveStatus.dirty => ('Edited', Icons.edit_note),
       SaveStatus.saving => ('Saving…', Icons.cloud_upload_outlined),
       SaveStatus.saved => ('Saved', Icons.cloud_done_outlined),
       SaveStatus.error => ('Save failed', Icons.error_outline),
     };
+    if (pendingImages > 0 && status != SaveStatus.error) {
+      text = '$text · $pendingImages image${pendingImages == 1 ? '' : 's'} '
+          'not synced';
+      icon = Icons.cloud_upload_outlined;
+    }
     final isError = status == SaveStatus.error;
     final color = isError ? Theme.of(context).colorScheme.error : muted;
     return Container(

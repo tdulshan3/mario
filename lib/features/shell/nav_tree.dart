@@ -13,6 +13,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/models/note_page.dart';
 import '../../core/models/notebook.dart';
 import '../../core/models/section.dart';
+import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
 import '../export/markdown_exporter.dart';
@@ -482,10 +483,12 @@ class _PageListState extends ConsumerState<_PageList> {
               page.copyWith(title: title, updatedAt: DateTime.now()),
             );
       case _PageAction.exportMd:
-        await MarkdownExporter(GetIt.I<PageContentRepository>())
+        await MarkdownExporter(
+                GetIt.I<PageContentRepository>(), GetIt.I<AssetSyncService>())
             .exportPageToFile(context, page);
       case _PageAction.exportPdf:
-        await PdfExporter(GetIt.I<PageContentRepository>())
+        await PdfExporter(
+                GetIt.I<PageContentRepository>(), GetIt.I<AssetSyncService>())
             .exportPageToFile(context, page);
       case _PageAction.delete:
         final ok = await showConfirmDialog(

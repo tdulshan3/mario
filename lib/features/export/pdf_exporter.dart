@@ -13,17 +13,36 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 
 import '../../core/models/note_page.dart';
+import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
+import '../editor/blocks/mario_image_block.dart';
 
 class PdfExporter {
-  PdfExporter(this._content);
+  PdfExporter(this._content, this._assets);
   final PageContentRepository _content;
+  final AssetSyncService _assets;
 
-  /// Image bytes pre-loaded for the page currently being rendered, keyed by the
-  /// node's `url` attribute. Populated by [_preloadImages] before the synchronous
-  /// node-walk runs, since loading from disk/network is async and widget builders
-  /// are not. Cleared at the start of every [renderPage].
+  /// Image bytes pre-loaded for the page currently being rendered, keyed by
+  /// [_imageKey] — the node's Drive asset id when it has one, else its `url`.
+  /// Populated by [_preloadImages] before the synchronous node-walk runs, since
+  /// loading from disk/network is async and widget builders are not. Cleared at
+  /// the start of every [renderPage].
   final Map<String, pw.MemoryImage> _images = {};
+
+  /// How an image node is addressed in [_images]. The Drive id comes first for
+  /// the same reason the editor prefers it: on any device but the one that
+  /// inserted the picture, `url` is a path that was never there.
+  ///
+  /// The kind is part of the key rather than something [_resolveSource] guesses
+  /// from the shape of the string. A relative path or a `data:` URI is not
+  /// URL-shaped and would otherwise be mistaken for a Drive id, costing a
+  /// pointless round-trip on every export.
+  static String? _imageKey(afe.Node node) {
+    final id = node.attributes[MarioImageKeys.driveId];
+    if (id is String && id.isNotEmpty) return 'id:$id';
+    final url = node.attributes[MarioImageKeys.url];
+    return (url is String && url.isNotEmpty) ? 'url:$url' : null;
+  }
 
   /// Parsed once and reused across exports — decoding the bundled TTFs on
   /// every call is wasteful and the resulting theme is immutable.
@@ -106,11 +125,16 @@ class PdfExporter {
   /// URLs, then loads each one concurrently into [_images]. Failures are left
   /// out of the map — the render path shows an "unavailable" marker for those.
   Future<void> _preloadImages(Iterable<afe.Node> nodes) async {
-    final urls = <String>{};
+    // key -> the raw url to fall back on when the key is a Drive id whose
+    // bytes aren't cached locally and can't be fetched.
+    final targets = <String, String?>{};
     void collect(afe.Node n) {
-      if (n.type == 'image') {
-        final u = n.attributes['url'];
-        if (u is String && u.isNotEmpty) urls.add(u);
+      if (n.type == MarioImageKeys.type) {
+        final key = _imageKey(n);
+        if (key != null) {
+          final url = n.attributes[MarioImageKeys.url];
+          targets[key] = url is String && url.isNotEmpty ? url : null;
+        }
       }
       for (final c in n.children) {
         collect(c);
@@ -121,24 +145,35 @@ class PdfExporter {
       collect(n);
     }
 
-    await Future.wait(urls.map((u) async {
-      final img = await _loadImage(u);
-      if (img != null) _images[u] = img;
+    await Future.wait(targets.entries.map((e) async {
+      final img = await _loadImage(e.key, e.value);
+      if (img != null) _images[e.key] = img;
     }));
   }
 
-  /// Loads image bytes from an http(s) URL or a local path (`file://` or a bare
-  /// filesystem path) and wraps them in a [pw.MemoryImage]. Returns null on any
-  /// failure (missing file, network error, undecodable bytes).
-  Future<pw.MemoryImage?> _loadImage(String src) async {
+  /// Loads image bytes for one [key] — a Drive asset id, an http(s) URL, or a
+  /// local path (`file://` or bare) — and wraps them in a [pw.MemoryImage].
+  /// Returns null on any failure (missing file, network error, undecodable
+  /// bytes), which the render path turns into an "[image unavailable]" marker.
+  ///
+  /// When [key] is a Drive id the asset is fetched through [AssetSyncService],
+  /// so exporting a note on a machine that has never displayed its images still
+  /// produces a complete PDF — and warms the cache for the editor at the same
+  /// time. [fallbackUrl] covers the offline case where the local copy from the
+  /// originating device happens to still be present.
+  Future<pw.MemoryImage?> _loadImage(String key, String? fallbackUrl) async {
+    final resolved = await _resolveSource(key, fallbackUrl);
+    if (resolved == null) return null;
     try {
       final Uint8List bytes;
-      if (src.startsWith('http://') || src.startsWith('https://')) {
-        final resp = await http.get(Uri.parse(src));
+      if (resolved.startsWith('http://') || resolved.startsWith('https://')) {
+        final resp = await http.get(Uri.parse(resolved));
         if (resp.statusCode != 200) return null;
         bytes = resp.bodyBytes;
       } else {
-        final path = src.startsWith('file://') ? Uri.parse(src).toFilePath() : src;
+        final path = resolved.startsWith('file://')
+            ? Uri.parse(resolved).toFilePath()
+            : resolved;
         final file = File(path);
         if (!await file.exists()) return null;
         bytes = await file.readAsBytes();
@@ -147,6 +182,16 @@ class PdfExporter {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Turns a key from [_imageKey] into something loadable. A `url:` key is
+  /// already a location; an `id:` key may have to be downloaded first.
+  Future<String?> _resolveSource(String key, String? fallbackUrl) async {
+    if (key.startsWith('url:')) return key.substring(4);
+    final id = key.substring(3);
+    final local = _assets.cachedPath(id) ??
+        await _assets.ensureLocal(id, extensionHint: fallbackUrl);
+    return local ?? fallbackUrl;
   }
 
   List<pw.Widget> _nodesToWidgets(Iterable<afe.Node> nodes) {
@@ -229,16 +274,18 @@ class PdfExporter {
               padding: const pw.EdgeInsets.symmetric(vertical: 6),
               child: pw.Divider(thickness: 0.5)),
         ];
-      case 'image':
-        final url = node.attributes['url'] as String?;
-        final image = url == null ? null : _images[url];
+      case MarioImageKeys.type:
+        final key = _imageKey(node);
+        final image = key == null ? null : _images[key];
         if (image == null) {
           // Couldn't load it (missing file, unreachable URL, bad bytes) — show
-          // a marker rather than silently dropping the block.
+          // a marker rather than silently dropping the block. The marker names
+          // nothing: the old version printed the node's `url`, which is the
+          // author's absolute home path, into a document meant to be shared.
           return [
             pw.Padding(
               padding: const pw.EdgeInsets.symmetric(vertical: 6),
-              child: pw.Text('[image unavailable: ${url ?? 'inline'}]',
+              child: pw.Text('[image unavailable]',
                   style: const pw.TextStyle(color: PdfColors.grey)),
             ),
           ];

@@ -9,11 +9,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/models/note_page.dart';
+import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
+import '../editor/image_asset_resolver.dart';
 
 class MarkdownExporter {
-  const MarkdownExporter(this._content);
+  const MarkdownExporter(this._content, this._assets);
   final PageContentRepository _content;
+  final AssetSyncService _assets;
 
   /// Render the page's Drive document to Markdown and return the string.
   Future<String> renderPage(NotePage page) async {
@@ -27,7 +30,14 @@ class MarkdownExporter {
         : <String, dynamic>{'document': raw};
     final document =
         afe.Document.fromJson(Map<String, dynamic>.from(docMap));
-    final body = afe.documentToMarkdown(document);
+    // Point the image links at files that exist here. The encoder writes each
+    // node's `url`, which is the path on whichever device inserted the picture
+    // — fetch anything this machine is missing so the export is complete
+    // rather than full of dead links.
+    final substitutions = await resolveImageSources(document, _assets,
+        fetchMissing: true);
+    final body = rewriteMarkdownImageSources(
+        afe.documentToMarkdown(document), substitutions);
     return '# ${page.title}\n\n$body';
   }
 
