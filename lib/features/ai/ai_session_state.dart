@@ -36,6 +36,7 @@ class AskSession {
     this.inserting = false,
     this.insertError,
     this.insertedRunIds = const {},
+    this.quoted,
   });
 
   final AiRun? run;
@@ -55,6 +56,11 @@ class AskSession {
   /// can say so rather than silently inserting a duplicate.
   final Set<int> insertedRunIds;
 
+  /// The passage the user highlighted, shown above the composer and used as
+  /// the focus of the next question. Null when the question is about the whole
+  /// page.
+  final String? quoted;
+
   AskSession copyWith({
     AiRun? run,
     bool clearRun = false,
@@ -66,6 +72,8 @@ class AskSession {
     String? insertError,
     bool clearInsertError = false,
     Set<int>? insertedRunIds,
+    String? quoted,
+    bool clearQuoted = false,
   }) =>
       AskSession(
         run: clearRun ? null : (run ?? this.run),
@@ -76,6 +84,7 @@ class AskSession {
         insertError:
             clearInsertError ? null : (insertError ?? this.insertError),
         insertedRunIds: insertedRunIds ?? this.insertedRunIds,
+        quoted: clearQuoted ? null : (quoted ?? this.quoted),
       );
 }
 
@@ -84,6 +93,12 @@ class AskSessionNotifier extends Notifier<AskSession> {
   AskSession build() => const AskSession();
 
   void setDraft(String draft) => state = state.copyWith(draft: draft);
+
+  /// Attaches a highlighted passage as the focus of the next question.
+  void quote(String text) => state = state.copyWith(quoted: text);
+
+  /// Drops the attachment — the question goes back to being about the page.
+  void clearQuote() => state = state.copyWith(clearQuoted: true);
 
   void cycleWeb() {
     final next = switch (state.useWeb) {
@@ -107,6 +122,7 @@ class AskSessionNotifier extends Notifier<AskSession> {
       lastQuestion: question,
       clearInsertError: true,
       inserting: false,
+      clearQuoted: true,
     );
   }
 

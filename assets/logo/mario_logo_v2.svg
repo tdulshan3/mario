@@ -1,12 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title description">
-  <title id="title">Mario notes symbol</title>
-  <desc id="description">A modern folded note and conversation shape on a warm yellow rounded square.</desc>
+  <title id="title">Mario folded shard symbol</title>
+  <desc id="description">A proprietary turquoise folded shard with a coral inner facet on a midnight-blue rounded square.</desc>
   <defs>
-    <linearGradient id="surface" x1="28" y1="18" x2="224" y2="238" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#FFD95A"/>
-      <stop offset="1" stop-color="#F2B93B"/>
+    <linearGradient id="surface" x1="32" y1="18" x2="224" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#102B64"/>
+      <stop offset="1" stop-color="#07152F"/>
+    </linearGradient>
+    <linearGradient id="shard" x1="88" y1="52" x2="174" y2="205" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#51DDD5"/>
+      <stop offset="1" stop-color="#21BFC4"/>
     </linearGradient>
   </defs>
   <rect width="256" height="256" rx="58" fill="url(#surface)"/>
-  <path d="M73 51h70l62 62v68c0 13.255-10.745 24-24 24h-73l-43 28 12-28h-4c-13.255 0-24-10.745-24-24V75c0-13.255 10.745-24 24-24Zm70 0v38c0 13.255 10.745 24 24 24h38Z" fill="#FFFDF7" fill-rule="evenodd"/>
+  <path d="M141 126 171 198c1.813 4.351-3.002 8.478-7.026 6.022l-32.776-36.001a12 12 0 0 1-2.013-12.958Z" fill="#FF6B57"/>
+  <path d="M101.852 50.961 161.55 84.7a12 12 0 0 1 5.079 14.977l-34.618 82.53a8 8 0 0 0 1.675 8.805l31.124 30.23c3.885 3.773-.135 10.245-5.198 8.371l-63.607-23.539A15 15 0 0 1 86.21 192V64c0-12.055 10.896-19.823 15.642-13.039Z" fill="url(#shard)"/>
 </svg>

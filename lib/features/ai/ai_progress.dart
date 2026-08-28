@@ -292,6 +292,14 @@ class AiRun extends ValueNotifier<AiRunState> {
     value = value.copyWith(answer: value.answer + text);
   }
 
+  /// Drops the answer so far, for a task that decided to start over — the web
+  /// rescue in [AiTasks.ask] re-answers once results are in, and leaving the
+  /// stalled reply in front of it would read as one confused answer.
+  void clearAnswer() {
+    if (_disposed) return;
+    value = value.copyWith(answer: '');
+  }
+
   void appendReasoning(String text) {
     if (_disposed || text.isEmpty) return;
     value = value.copyWith(reasoning: value.reasoning + text);

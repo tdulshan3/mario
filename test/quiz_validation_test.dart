@@ -298,6 +298,49 @@ void main() {
     });
   });
 
+  group('looksLikeANonAnswer spots a stall worth retrying', () {
+    // From a real failure: asked to "explain the note", the model replied that
+    // the notes "do not contain the answer to the question" — it went looking
+    // for an answer inside the material instead of explaining it.
+
+    test('catches the disclaimer-only reply', () {
+      expect(
+        looksLikeANonAnswer(
+            'The notes provided do not contain the answer to the question.'),
+        isTrue,
+      );
+      expect(looksLikeANonAnswer('I cannot answer that from these notes.'),
+          isTrue);
+      expect(looksLikeANonAnswer('There is no specific question in the notes.'),
+          isTrue);
+    });
+
+    test('an empty reply counts as a stall', () {
+      expect(looksLikeANonAnswer(''), isTrue);
+      expect(looksLikeANonAnswer('   \n '), isTrue);
+    });
+
+    test('leaves a real explanation alone', () {
+      expect(
+        looksLikeANonAnswer(
+            'The evaluation matrix scores each opportunity on four criteria. '
+            'Market size carries the most weight, then feasibility.'),
+        isFalse,
+      );
+    });
+
+    test('does not discard a long answer that mentions a gap in passing', () {
+      // The dangerous false positive: re-running this would throw away a good
+      // answer because it was honest about the notes' limits.
+      final good = 'The matrix scores opportunities on four axes. '
+          '${'Each axis is weighted and summed to a total. ' * 12}'
+          'The notes do not contain the weighting used, so I have assumed '
+          'equal weights.';
+      expect(good.length, greaterThan(400));
+      expect(looksLikeANonAnswer(good), isFalse);
+    });
+  });
+
   group('gradeMcq marks in plain code', () {
     final item = QuizItem(
       id: 'q1',

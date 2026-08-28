@@ -160,6 +160,22 @@ class _EditorState extends ConsumerState<_Editor> {
   // touching `ref`, which is already invalid by then.
   StateController<AiEditorBridge?>? _bridgeController;
 
+  // Publishes what the user has highlighted, for the Ask panel.
+  StateController<String?>? _selectionController;
+  Timer? _selectionDebounce;
+
+  /// How long a selection must hold still before it counts as deliberate.
+  ///
+  /// Selecting text is constant, incidental editing: every drag to delete a
+  /// phrase, every double-click on a word. Reacting to each one would pop the
+  /// panel open while someone is trying to write. Waiting for the selection to
+  /// settle separates "I dragged across this" from "I am looking at this".
+  static const _selectionSettleDelay = Duration(milliseconds: 500);
+
+  /// Below this, a highlight is a cursor placement or a stray double-click
+  /// rather than a passage worth asking about.
+  static const _minQuotableLength = 12;
+
   // HTML preview pane — toggled from the toolbar. _previewHtml is fed by
   // _updatePreview (called on each transaction while preview is on) so the
   // pane re-renders without rebuilding the editor.
@@ -243,6 +259,8 @@ class _EditorState extends ConsumerState<_Editor> {
     // grabbed now, synchronously, because dispose() cannot use `ref` — see
     // [_withdrawAiBridge].
     _bridgeController = ref.read(aiEditorBridgeProvider.notifier);
+    _selectionController = ref.read(editorSelectionProvider.notifier);
+    _editorState.selectionNotifier.addListener(_onSelectionChanged);
     WidgetsBinding.instance.addPostFrameCallback((_) => _publishAiBridge());
 
     _assetSweeper = AssetSweeper(_editorState, GetIt.I<AssetSyncService>());
@@ -254,6 +272,8 @@ class _EditorState extends ConsumerState<_Editor> {
 
   @override
   void dispose() {
+    _selectionDebounce?.cancel();
+    _editorState.selectionNotifier.removeListener(_onSelectionChanged);
     _withdrawAiBridge();
     final hadPendingSave = _saveTimer?.isActive ?? false;
     _saveTimer?.cancel();
@@ -541,6 +561,32 @@ class _EditorState extends ConsumerState<_Editor> {
         // The whole ProviderScope went away with us (app shutdown). Nothing
         // left to withdraw from.
       }
+    });
+  }
+
+  /// Publishes a settled, substantial highlight so the Ask panel can offer to
+  /// answer about it.
+  ///
+  /// Debounced rather than immediate: the listener fires on every character of
+  /// a drag, and acting on each would mean the panel opening and closing under
+  /// the user's hand.
+  void _onSelectionChanged() {
+    _selectionDebounce?.cancel();
+    final selection = _editorState.selection;
+    if (selection == null || selection.isCollapsed) {
+      // Clearing is immediate. Leaving a stale quote attached after the user
+      // has clicked away would scope their next question to a passage they are
+      // no longer looking at.
+      _selectionController?.state = null;
+      return;
+    }
+    _selectionDebounce = Timer(_selectionSettleDelay, () {
+      if (!mounted || _editorState.isDisposed) return;
+      final current = _editorState.selection;
+      if (current == null || current.isCollapsed) return;
+      final text = _editorState.getTextInSelection(current).join('\n').trim();
+      _selectionController?.state =
+          text.length >= _minQuotableLength ? text : null;
     });
   }
 

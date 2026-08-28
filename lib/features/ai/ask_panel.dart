@@ -94,10 +94,12 @@ class _AskPanelState extends ConsumerState<AskPanel> {
     final ctx = _buildContext(aboveCursorOnly: false);
     if (ctx == null) return;
 
+    final session = ref.read(askSessionProvider);
     final run = ref.read(aiTasksProvider).ask(
           question: question,
           ctx: ctx,
-          useWeb: ref.read(askSessionProvider).useWeb,
+          useWeb: session.useWeb,
+          focus: session.quoted,
         );
     ref.read(askSessionProvider.notifier).startRun(run, question: question);
     _saveWhenDone(run, question: question, ctx: ctx);
@@ -302,6 +304,11 @@ class _AskPanelState extends ConsumerState<AskPanel> {
                   ),
                 ),
         ),
+        if (session.quoted != null)
+          _QuotedSelection(
+            text: session.quoted!,
+            onClear: ref.read(askSessionProvider.notifier).clearQuote,
+          ),
         const Divider(height: 1),
         _Composer(
           controller: _controller,
@@ -757,6 +764,81 @@ class _ErrorBox extends StatelessWidget {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The passage the user highlighted, shown above the composer.
+///
+/// Present rather than implicit: a question silently scoped to a selection the
+/// user has forgotten making produces an answer that looks wrong for no visible
+/// reason. It is also dismissible, because the highlight was often made for
+/// some other purpose entirely.
+class _QuotedSelection extends StatelessWidget {
+  const _QuotedSelection({required this.text, required this.onClear});
+
+  final String text;
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(9, 7, 4, 7),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border(
+            left: BorderSide(color: MarioColors.primary, width: 3),
+            top: BorderSide(color: scheme.outlineVariant),
+            right: BorderSide(color: scheme.outlineVariant),
+            bottom: BorderSide(color: scheme.outlineVariant),
+          ),
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ASKING ABOUT YOUR HIGHLIGHT',
+                    style: GoogleFonts.spaceGrotesk(
+                      fontSize: 9,
+                      letterSpacing: 1,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    oneLine,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: GoogleFonts.inter(
+                      fontSize: 11.5,
+                      height: 1.35,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            IconButton(
+              tooltip: 'Ask about the whole page instead',
+              onPressed: onClear,
+              icon: const Icon(Icons.close, size: 14),
+              visualDensity: VisualDensity.compact,
+              constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+              color: scheme.onSurfaceVariant,
+            ),
           ],
         ),
       ),

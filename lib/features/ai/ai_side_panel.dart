@@ -16,8 +16,10 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/widgets/resizable_panel.dart';
 import '../../core/services/ai/local_model_discovery.dart';
+import 'ai_session_state.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../settings/settings_screen.dart';
+import '../settings/settings_state.dart';
 import 'ai_state.dart';
 import 'ask_panel.dart';
 import 'quiz_panel.dart';
@@ -31,6 +33,25 @@ class AiSidePanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final panel = ref.watch(aiPanelProvider);
+
+    // Highlighting a passage brings the panel up on the Ask tab, ready to
+    // answer about it. Listened for here rather than inside AskPanel, because
+    // when the panel is shut AskPanel is not in the tree to hear it — which is
+    // exactly the case that needs to open it.
+    //
+    // The editor only publishes a selection that has settled and is long enough
+    // to be deliberate (see _onSelectionChanged), so this does not fire on
+    // every drag while someone is editing.
+    final askOnHighlight =
+        ref.watch(settingsProvider).valueOrNull?.askOnHighlight ?? true;
+    ref.listen<String?>(editorSelectionProvider, (previous, next) {
+      if (!askOnHighlight) return;
+      if (next == null || next.trim().isEmpty) return;
+      if (previous == next) return;
+      ref.read(askSessionProvider.notifier).quote(next);
+      ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.ask);
+    });
+
     if (!panel.isOpen) return const SizedBox.shrink();
 
     return ResizablePanel(

@@ -25,6 +25,7 @@ import '../../ui/colors.dart';
 import 'ai_state.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../../core/services/ai/openai_compatible_provider.dart';
+import '../settings/settings_state.dart';
 
 class AiSettingsSection extends ConsumerStatefulWidget {
   const AiSettingsSection({super.key});
@@ -96,7 +97,9 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
             ),
             // Anything already running on this machine, offered as one tap.
             _DetectedLocalModels(configured: configs),
-            const SizedBox(height: 18),
+            const SizedBox(height: 14),
+            const _AskOnHighlightSwitch(),
+            const SizedBox(height: 14),
             const _WebSearchSettings(),
           ],
         );
@@ -754,6 +757,35 @@ class _DetectedRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Whether highlighting a passage opens the panel to ask about it.
+class _AskOnHighlightSwitch extends ConsumerWidget {
+  const _AskOnHighlightSwitch();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final settings = ref.watch(settingsProvider).valueOrNull;
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      title:
+          Text('Ask about a highlight', style: GoogleFonts.inter(fontSize: 13)),
+      subtitle: Text(
+        'Highlighting a passage opens the AI panel ready to answer about it. '
+        'Turn off if you select text mostly to edit it.',
+        style: GoogleFonts.inter(
+            fontSize: 11, height: 1.35, color: scheme.onSurfaceVariant),
+      ),
+      value: settings?.askOnHighlight ?? true,
+      onChanged: settings == null
+          ? null
+          : (v) => ref
+              .read(settingsProvider.notifier)
+              .change((s) => s.copyWith(askOnHighlight: v)),
     );
   }
 }

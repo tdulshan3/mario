@@ -19,6 +19,13 @@ class SettingsState {
   final String voiceLocale;
   final bool offlineMode;
 
+  /// Whether highlighting a passage opens the AI panel to ask about it.
+  ///
+  /// On by default, because that is the point of the feature — but selecting
+  /// text is also ordinary editing, and someone who drags across a sentence to
+  /// delete it should be able to stop the panel appearing.
+  final bool askOnHighlight;
+
   const SettingsState({
     this.themeMode = MarioThemeMode.system,
     this.fontScale = 1.0,
@@ -28,6 +35,7 @@ class SettingsState {
     this.holdToRecord = false,
     this.voiceLocale = 'en_US',
     this.offlineMode = false,
+    this.askOnHighlight = true,
   });
 
   SettingsState copyWith({
@@ -39,6 +47,7 @@ class SettingsState {
     bool? holdToRecord,
     String? voiceLocale,
     bool? offlineMode,
+    bool? askOnHighlight,
   }) =>
       SettingsState(
         themeMode: themeMode ?? this.themeMode,
@@ -49,6 +58,7 @@ class SettingsState {
         holdToRecord: holdToRecord ?? this.holdToRecord,
         voiceLocale: voiceLocale ?? this.voiceLocale,
         offlineMode: offlineMode ?? this.offlineMode,
+        askOnHighlight: askOnHighlight ?? this.askOnHighlight,
       );
 }
 
@@ -60,6 +70,7 @@ const _kSpellCheck = 'mario.spellCheck';
 const _kHoldToRecord = 'mario.holdToRecord';
 const _kVoiceLocale = 'mario.voiceLocale';
 const _kOfflineMode = 'mario.offlineMode';
+const _kAskOnHighlight = 'mario.askOnHighlight';
 const _kAnthropicKey = 'anthropic_api_key';
 
 class SettingsNotifier extends AsyncNotifier<SettingsState> {
@@ -77,6 +88,7 @@ class SettingsNotifier extends AsyncNotifier<SettingsState> {
       holdToRecord: prefs.getBool(_kHoldToRecord) ?? false,
       voiceLocale: prefs.getString(_kVoiceLocale) ?? 'en_US',
       offlineMode: prefs.getBool(_kOfflineMode) ?? false,
+      askOnHighlight: prefs.getBool(_kAskOnHighlight) ?? true,
     );
   }
 
@@ -90,6 +102,7 @@ class SettingsNotifier extends AsyncNotifier<SettingsState> {
     await prefs.setBool(_kHoldToRecord, s.holdToRecord);
     await prefs.setString(_kVoiceLocale, s.voiceLocale);
     await prefs.setBool(_kOfflineMode, s.offlineMode);
+    await prefs.setBool(_kAskOnHighlight, s.askOnHighlight);
   }
 
   Future<void> change(SettingsState Function(SettingsState) mut) async {

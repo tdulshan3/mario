@@ -105,6 +105,14 @@ class AiEditorBridge {
   final Future<bool> Function(GrammarSuggestion) applyGrammar;
 }
 
+/// Text the user has highlighted in the editor, or null when nothing is
+/// selected.
+///
+/// Published by the editor as the selection settles, and consumed by the Ask
+/// tab so a question can be asked *about the highlighted passage* rather than
+/// about the whole page.
+final editorSelectionProvider = StateProvider<String?>((ref) => null);
+
 /// Null whenever no page is open.
 final aiEditorBridgeProvider =
     StateProvider<AiEditorBridge?>((ref) => null);
