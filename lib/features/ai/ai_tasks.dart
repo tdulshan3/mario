@@ -321,6 +321,8 @@ class AiTasks {
 
       run.setUsage(contextTokens: provider.capabilities.contextTokens);
       var sawFirstToken = false;
+      final thinkingClock = Stopwatch()..start();
+      var lastThinkingTick = Duration.zero;
       await for (final delta in provider.stream(
         LlmRequest(
           system: '${sources.isEmpty ? _askSystem : _askWithWebSystem}\n\n'
@@ -343,7 +345,19 @@ class AiTasks {
         if (delta.promptTokens != null) {
           run.setUsage(promptTokens: delta.promptTokens);
         }
-        if (delta.reasoning.isNotEmpty) run.appendReasoning(delta.reasoning);
+        if (delta.reasoning.isNotEmpty) {
+          run.appendReasoning(delta.reasoning);
+          // Say that it is still going. A reasoning model can stream nothing
+          // visible for a minute or more, and a "Thinking" row that never
+          // changes is indistinguishable from a hung request — which is what
+          // it got reported as. Once a second, so the label is alive without
+          // adding a rebuild per token.
+          final elapsed = thinkingClock.elapsed;
+          if (elapsed - lastThinkingTick >= const Duration(seconds: 1)) {
+            lastThinkingTick = elapsed;
+            run.detail('thinking — ${elapsed.inSeconds}s');
+          }
+        }
         if (delta.text.isNotEmpty) {
           if (!sawFirstToken) {
             // The model has stopped thinking and started writing — move the

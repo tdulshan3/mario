@@ -44,6 +44,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     this.embeddingModel,
     LlmCapabilities? capabilities,
     this.timeout = const Duration(minutes: 5),
+    this.idleTimeout = const Duration(minutes: 3),
     bool flatJsonSchema = false,
     this.sendThinkingControls = true,
     http.Client Function()? clientFactory,
@@ -61,7 +62,17 @@ class OpenAiCompatibleProvider implements LlmProvider {
   final String model;
   final String? apiKey;
   final String? embeddingModel;
+  /// How long to wait for the first byte of a reply.
   final Duration timeout;
+
+  /// How long a started stream may go silent before it is treated as dead.
+  ///
+  /// Generous on purpose, and it has to be: Ollama streams nothing at all
+  /// while it loads a model, and a cold 22GB load is a minute or more of
+  /// silence from a server that is working perfectly. Three minutes is a stall
+  /// rather than slow progress — where a total-duration cap would cut off a
+  /// long answer that was arriving perfectly well.
+  final Duration idleTimeout;
 
   /// Whether to send non-standard hints that turn a hybrid model's reasoning
   /// mode off.
@@ -81,6 +92,26 @@ class OpenAiCompatibleProvider implements LlmProvider {
   LlmCapabilities _capabilities;
   @override
   LlmCapabilities get capabilities => _capabilities;
+
+  /// Cleared when a server rejects the reasoning hints.
+  ///
+  /// They are non-standard passthroughs — `reasoning_effort` is OpenAI's,
+  /// `chat_template_kwargs` is llama.cpp's and vLLM's, `think` is Ollama's —
+  /// and a server that validates its request body will 400 rather than ignore
+  /// the ones it does not know. Losing the depth setting is a far better
+  /// outcome than losing the request, so the first rejection turns them off
+  /// for the rest of the session and the call is retried without them.
+  bool _thinkingControlsAccepted = true;
+
+  /// Whether [body] reads like a complaint about the reasoning hints.
+  bool _rejectsThinkingControls(int status, String body) {
+    if (status != 400 && status != 422) return false;
+    final b = body.toLowerCase();
+    return b.contains('reasoning_effort') ||
+        b.contains('chat_template_kwargs') ||
+        b.contains('enable_thinking') ||
+        b.contains('think');
+  }
 
   /// Which `response_format` dialect this endpoint speaks.
   ///
@@ -177,7 +208,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
       // [sendThinkingControls].
       body['chat_template_kwargs'] = {'enable_thinking': false};
       body['think'] = false; // Ollama's own spelling
-    } else if (sendThinkingControls) {
+    } else if (sendThinkingControls && _thinkingControlsAccepted) {
       // Free-text generation: pass the requested depth on. Effort used to
       // reach Anthropic only, so a "think harder" choice did nothing at all on
       // the backends most people here actually run.
@@ -302,14 +333,37 @@ class OpenAiCompatibleProvider implements LlmProvider {
       final response = await client.send(req).timeout(timeout);
       if (response.statusCode >= 400) {
         final body = await response.stream.bytesToString();
+        if (_thinkingControlsAccepted &&
+            _rejectsThinkingControls(response.statusCode, body)) {
+          // Drop the hints and try once more. The answer matters; the depth
+          // setting is a preference this server cannot honour.
+          _thinkingControlsAccepted = false;
+          yield* stream(request, cancel: cancel);
+          return;
+        }
         throw _errorFor(response.statusCode, body);
       }
 
       final toolBuf = <int, _ToolCallBuffer>{};
 
+      // `timeout` above covers only the wait for response headers. Once the
+      // stream is open there was no limit at all, so a server that accepted
+      // the request and then stopped sending — a model stuck mid-thought, a
+      // dropped connection that never surfaced as a socket error, an Ollama
+      // instance still loading a 22GB model — left the panel spinning on
+      // "Thinking" with nothing to end it but Stop.
+      //
+      // This is an *idle* limit: it restarts on every line, so a reply that
+      // takes ten minutes is fine as long as something keeps arriving. That
+      // matters here — reasoning models legitimately stream nothing visible
+      // for a long time, and a total-duration cap would kill exactly the
+      // requests the thinking control exists to allow.
       await for (final line in response.stream
           .transform(utf8.decoder)
-          .transform(const LineSplitter())) {
+          .transform(const LineSplitter())
+          .timeout(idleTimeout, onTimeout: (sink) {
+        sink.addError(TimeoutException('idle', idleTimeout));
+      })) {
         cancel?.throwIfCancelled();
         if (!line.startsWith('data:')) continue;
         final payload = line.substring(5).trim();
@@ -379,9 +433,19 @@ class OpenAiCompatibleProvider implements LlmProvider {
         ];
         yield LlmDelta(toolCalls: calls);
       }
-    } on TimeoutException {
-      throw LlmException('Timed out after ${timeout.inSeconds}s',
-          provider: displayName, isNetwork: true);
+    } on TimeoutException catch (e) {
+      // Told apart because the two mean different things to the user: nothing
+      // ever arrived, versus it started and then stopped.
+      throw LlmException(
+        e.message == 'idle'
+            ? '$displayName went quiet for ${idleTimeout.inSeconds}s in the '
+                'middle of a reply. If it was thinking, the model may be stuck '
+                '— try again, or set thinking to Fast in the bar above the '
+                'panel.'
+            : '$displayName did not answer within ${timeout.inSeconds}s.',
+        provider: displayName,
+        isNetwork: true,
+      );
     } catch (e) {
       if (cancel?.isCancelled ?? false) throw const LlmCancelled();
       if (e is LlmException || e is LlmCancelled) rethrow;

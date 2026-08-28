@@ -17,6 +17,8 @@
 /// test/ai_progress_test.dart.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 import '../../core/services/ai/llm_types.dart';
@@ -308,9 +310,48 @@ class AiRun extends ValueNotifier<AiRunState> {
     super.addListener(listener);
   }
 
+  /// How long streamed text may sit unannounced.
+  ///
+  /// A local model emits 40-80 SSE frames a second and each one used to notify,
+  /// so the whole answer view rebuilt at every frame the scheduler would allow
+  /// — and rebuilding the answer view means re-parsing the entire answer (see
+  /// AiMarkdown). Twenty ticks a second still reads as live text and costs a
+  /// third of the work.
+  static const _coalesce = Duration(milliseconds: 50);
+
+  Timer? _notifyTimer;
+  bool _quiet = false;
+
+  /// Publishes [next] now, tells listeners shortly.
+  ///
+  /// The *notification* is coalesced, never the value: anything reading
+  /// `run.value` — the empty-answer check, the citation guard, a test — sees
+  /// every token the instant it arrives. Buffering the text instead would make
+  /// each of those a race, and there are several.
+  void _publishSoon(AiRunState next) {
+    _quiet = true;
+    value = next;
+    _quiet = false;
+    _notifyTimer ??= Timer(_coalesce, () {
+      _notifyTimer = null;
+      if (!_disposed) super.notifyListeners();
+    });
+  }
+
+  @override
+  void notifyListeners() {
+    if (_quiet) return;
+    // Everything that is not streamed text is news — a step starting, a run
+    // finishing, an error. Deliver it at once and drop the pending tick, so a
+    // listener never sees a stale state on a terminal event.
+    _notifyTimer?.cancel();
+    _notifyTimer = null;
+    super.notifyListeners();
+  }
+
   void appendAnswer(String text) {
     if (_disposed || text.isEmpty) return;
-    value = value.copyWith(answer: value.answer + text);
+    _publishSoon(value.copyWith(answer: value.answer + text));
   }
 
   /// Drops the answer so far, for a task that decided to start over — the web
@@ -323,7 +364,10 @@ class AiRun extends ValueNotifier<AiRunState> {
 
   void appendReasoning(String text) {
     if (_disposed || text.isEmpty) return;
-    value = value.copyWith(reasoning: value.reasoning + text);
+    // Same treatment: a thinking model streams reasoning at the same rate, and
+    // doubling the notification rate before a single visible character appears
+    // is how a long deliberation used to make the panel unusable.
+    _publishSoon(value.copyWith(reasoning: value.reasoning + text));
   }
 
   /// Records the query as it goes out.
@@ -413,6 +457,10 @@ class AiRun extends ValueNotifier<AiRunState> {
   void dispose() {
     if (_disposed) return; // disposing twice is harmless
     _disposed = true;
+    // Required, not tidiness: a live timer here fails every widget test with
+    // "a Timer is still pending", and would fire into a disposed notifier.
+    _notifyTimer?.cancel();
+    _notifyTimer = null;
     cancelToken.cancel();
     _stopwatch.stop();
     super.dispose();
