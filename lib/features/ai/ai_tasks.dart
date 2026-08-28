@@ -34,6 +34,7 @@ import 'ai_progress.dart';
 import 'note_context.dart';
 import 'note_images.dart';
 import 'note_style.dart';
+import 'quiz_style.dart';
 
 /// Where a summary or answer came from, and what to call it.
 class AiTaskContext {
@@ -254,7 +255,7 @@ class AiTasks {
           run.detail(sources.isEmpty
               ? 'no results — answering from the note only'
               : '${sources.length} result(s) from '
-                  '${_domainList(sources)}');
+                  '${domainList(sources)}');
         } on LlmException catch (e) {
           // A failed search must not sink the answer — the note alone is
           // usually enough, and saying so is better than an error page.
@@ -353,7 +354,7 @@ class AiTasks {
         if (sources.isNotEmpty) {
           run.begin(AiStepKind.readingSources,
               detail: '${sources.length} result(s) from '
-                  '${_domainList(sources)}');
+                  '${domainList(sources)}');
           run.clearAnswer();
           run.begin(AiStepKind.thinking);
 
@@ -428,7 +429,7 @@ class AiTasks {
   /// script — see [estimateTokens].
   /// The distinct sites a search returned, for the progress line — so the user
   /// can see where an answer is about to come from before it is written.
-  static String _domainList(List<AiSource> sources) {
+  static String domainList(List<AiSource> sources) {
     final hosts = <String>{};
     for (final s in sources) {
       final h = Uri.tryParse(s.url)?.host.replaceFirst('www.', '');
@@ -679,14 +680,19 @@ extension QuizTasks on AiTasks {
     required String scopeLabel,
     int mcqCount = defaultMcqCount,
     int essayCount = defaultEssayCount,
+    QuizDifficulty difficulty = QuizDifficulty.easy,
   }) {
-    final run = AiRun(const [
+    final run = AiRun([
       AiStepKind.readingNote,
+      // Hard mode looks the subject up first, so the step is in the plan from
+      // the start rather than appearing mid-run.
+      if (difficulty.usesWeb) AiStepKind.searchingWeb,
       AiStepKind.thinking,
       AiStepKind.checking,
       AiStepKind.answering,
     ]);
-    unawaited(_runGenerateQuiz(run, note, scopeLabel, mcqCount, essayCount));
+    unawaited(_runGenerateQuiz(
+        run, note, scopeLabel, mcqCount, essayCount, difficulty));
     return run;
   }
 
@@ -696,6 +702,7 @@ extension QuizTasks on AiTasks {
     String scopeLabel,
     int mcqCount,
     int essayCount,
+    QuizDifficulty difficulty,
   ) async {
     try {
       final provider = await llm.requireProvider();
@@ -714,6 +721,44 @@ extension QuizTasks on AiTasks {
             "model's context");
       }
 
+      // Hard mode goes past the notes, so it needs something to go past them
+      // *with*. Searching once up front — rather than per batch — keeps the
+      // extra context identical across rounds, which is also what lets a
+      // prefix-caching server reuse it.
+      var webContext = '';
+      if (difficulty.usesWeb) {
+        final topic = searchTopicFor(
+          note.title,
+          [
+            for (final b in note.blocks)
+              if (b.isHeading) b.text
+          ],
+        );
+        if (topic.isEmpty || !await search.isEnabled) {
+          run.begin(AiStepKind.searchingWeb,
+              detail: topic.isEmpty
+                  ? 'nothing specific enough to look up'
+                  : 'web search is off — questions will stay closer to the '
+                      'notes');
+          run.skip(AiStepKind.searchingWeb);
+        } else {
+          run.begin(AiStepKind.searchingWeb, detail: topic);
+          run.setSearchQuery(topic);
+          try {
+            final sources = await search.search(topic, cancel: run.cancelToken);
+            run.addSources(sources);
+            webContext = renderSourcesForPrompt(sources);
+            run.detail(sources.isEmpty
+                ? 'no results — questions will stay closer to the notes'
+                : '${sources.length} result(s) from '
+                    '${AiTasks.domainList(sources)}');
+          } on LlmException catch (e) {
+            // A failed lookup makes the questions narrower, not impossible.
+            run.detail('search unavailable (${e.message})');
+          }
+        }
+      }
+
       final total = mcqCount + essayCount;
       run.begin(AiStepKind.thinking, detail: '0 of $total');
 
@@ -725,6 +770,8 @@ extension QuizTasks on AiTasks {
       final mcqs = await _collect(
         run: run,
         noteText: noteText,
+        difficulty: difficulty,
+        webContext: webContext,
         kind: QuizItemKind.mcq,
         target: mcqCount,
         batchSize: _mcqBatchSize,
@@ -737,6 +784,8 @@ extension QuizTasks on AiTasks {
       final essays = await _collect(
         run: run,
         noteText: noteText,
+        difficulty: difficulty,
+        webContext: webContext,
         kind: QuizItemKind.essay,
         target: essayCount,
         batchSize: _essayBatchSize,
@@ -778,6 +827,8 @@ extension QuizTasks on AiTasks {
   Future<List<QuizItem>> _collect({
     required AiRun run,
     required String noteText,
+    required QuizDifficulty difficulty,
+    required String webContext,
     required QuizItemKind kind,
     required int target,
     required int batchSize,
@@ -807,7 +858,7 @@ extension QuizTasks on AiTasks {
 
       final result = await llm.structured(
         request: LlmRequest(
-          system: '$_quizSystem\n\n'
+          system: '$_quizSystem\n\n${quizStyleFor(difficulty)}\n\n'
               '${noteStyleFor(NoteStyleContext.quizFeedback)}',
           messages: [
             // The note goes first and is byte-identical every round, so a
@@ -816,7 +867,9 @@ extension QuizTasks on AiTasks {
             // the varying part first would re-read the whole note per batch —
             // tens of seconds each on CPU.
             LlmMessage.user(
-              '$noteText\n\n---\n\n${_batchInstruction(kind, ask, seen)}',
+              '$noteText\n\n'
+              '${webContext.isEmpty ? '' : '$webContext\n'}'
+              '---\n\n${_batchInstruction(kind, ask, seen)}',
             ),
           ],
           maxTokens: ask * tokensPerItem + 400,

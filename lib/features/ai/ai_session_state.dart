@@ -24,6 +24,7 @@ import 'agent_executor.dart';
 import 'ai_progress.dart';
 import 'ai_tasks.dart';
 import 'grammar_check.dart';
+import 'quiz_style.dart';
 
 // ---------------------------------------------------------------------- Ask
 
@@ -166,6 +167,7 @@ class QuizSession {
     this.scope = QuizScope.page,
     this.mcqCount = QuizTasks.defaultMcqCount,
     this.essayCount = QuizTasks.defaultEssayCount,
+    this.difficulty = QuizDifficulty.easy,
     this.run,
     this.items = const [],
     this.title = 'Quiz',
@@ -183,6 +185,10 @@ class QuizSession {
   final QuizScope scope;
   final int mcqCount;
   final int essayCount;
+
+  /// Easy stays inside the notes; hard reasons past them and looks the subject
+  /// up. Kept on the session so it is chosen once rather than every time.
+  final QuizDifficulty difficulty;
 
   final AiRun? run;
   final List<QuizItem> items;
@@ -220,6 +226,7 @@ class QuizSession {
     QuizScope? scope,
     int? mcqCount,
     int? essayCount,
+    QuizDifficulty? difficulty,
     AiRun? run,
     bool clearRun = false,
     List<QuizItem>? items,
@@ -241,6 +248,7 @@ class QuizSession {
         scope: scope ?? this.scope,
         mcqCount: mcqCount ?? this.mcqCount,
         essayCount: essayCount ?? this.essayCount,
+        difficulty: difficulty ?? this.difficulty,
         run: clearRun ? null : (run ?? this.run),
         items: items ?? this.items,
         title: title ?? this.title,
@@ -263,6 +271,7 @@ class QuizSessionNotifier extends Notifier<QuizSession> {
   void setScope(QuizScope scope) => state = state.copyWith(scope: scope);
   void setMcqCount(int n) => state = state.copyWith(mcqCount: n);
   void setEssayCount(int n) => state = state.copyWith(essayCount: n);
+  void setDifficulty(QuizDifficulty d) => state = state.copyWith(difficulty: d);
 
   void startGenerating(AiRun run) {
     state.run?.dispose();
@@ -336,6 +345,7 @@ class QuizSessionNotifier extends Notifier<QuizSession> {
       scope: state.scope,
       mcqCount: state.mcqCount,
       essayCount: state.essayCount,
+      difficulty: state.difficulty,
       phase: QuizPhase.answering,
       items: quiz.items,
       title: quiz.title,
@@ -366,6 +376,7 @@ class QuizSessionNotifier extends Notifier<QuizSession> {
       scope: state.scope,
       mcqCount: state.mcqCount,
       essayCount: state.essayCount,
+      difficulty: state.difficulty,
     );
   }
 }

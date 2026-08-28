@@ -31,6 +31,7 @@ import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
 import 'note_context.dart';
+import 'quiz_style.dart';
 import '../../ui/widgets/mario_loader.dart';
 
 class QuizPanel extends ConsumerStatefulWidget {
@@ -314,6 +315,23 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
           onTap: () => notifier.setScope(QuizScope.section),
         ),
         const SizedBox(height: 16),
+        Text('How hard?',
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface)),
+        const SizedBox(height: 8),
+        for (final d in QuizDifficulty.values)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: _ScopeOption(
+              label: d.label,
+              detail: d.blurb,
+              selected: session.difficulty == d,
+              onTap: () => notifier.setDifficulty(d),
+            ),
+          ),
+        const SizedBox(height: 10),
         _Counter(
           label: 'Multiple choice',
           value: session.mcqCount,
