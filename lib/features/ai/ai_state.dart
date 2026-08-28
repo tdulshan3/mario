@@ -11,6 +11,7 @@ import 'package:get_it/get_it.dart';
 
 import '../../core/services/ai/ai_artifact_store.dart';
 import '../../core/services/ai/llm_provider_config.dart';
+import '../../core/services/ai/local_model_discovery.dart';
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/web_search_service.dart';
 import '../../core/services/page_content_repository.dart';
@@ -44,6 +45,15 @@ final grammarCheckerProvider =
 final grammarApplierProvider =
     Provider<Future<bool> Function(GrammarSuggestion)?>((ref) {
   return ref.watch(aiEditorBridgeProvider)?.applyGrammar;
+});
+
+/// Model servers already running on this machine.
+///
+/// autoDispose so it re-probes when settings are reopened — someone who just
+/// started Ollama should not have to restart Mario for it to be noticed.
+final localModelsProvider =
+    FutureProvider.autoDispose<List<DiscoveredEndpoint>>((ref) async {
+  return LocalModelDiscovery().scan();
 });
 
 /// The configured backends, re-read whenever settings change.

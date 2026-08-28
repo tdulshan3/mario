@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-labelledby="title description">
+  <title id="title">Mario notes symbol</title>
+  <desc id="description">A modern folded note and conversation shape on a warm yellow rounded square.</desc>
+  <defs>
+    <linearGradient id="surface" x1="28" y1="18" x2="224" y2="238" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFD95A"/>
+      <stop offset="1" stop-color="#F2B93B"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#surface)"/>
+  <path d="M73 51h70l62 62v68c0 13.255-10.745 24-24 24h-73l-43 28 12-28h-4c-13.255 0-24-10.745-24-24V75c0-13.255 10.745-24 24-24Zm70 0v38c0 13.255 10.745 24 24 24h38Z" fill="#FFFDF7" fill-rule="evenodd"/>
+</svg>

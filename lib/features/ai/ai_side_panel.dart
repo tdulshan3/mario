@@ -15,12 +15,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/widgets/resizable_panel.dart';
+import '../../core/services/ai/local_model_discovery.dart';
+import '../../ui/widgets/mario_loader.dart';
 import '../settings/settings_screen.dart';
 import 'ai_state.dart';
 import 'ask_panel.dart';
 import 'quiz_panel.dart';
 import 'writing_panel.dart';
-import '../../ui/widgets/mario_loader.dart';
 
 /// The panel plus its collapsed strip. Renders nothing when closed except a
 /// hairline rail, so the editor keeps its full width.
@@ -71,13 +72,10 @@ class _PanelBody extends ConsumerWidget {
             Expanded(
               child: backends.when(
                 loading: () => const Center(child: MarioLoader(size: 30)),
-                error: (e, _) => _NeedsSetup(message: 'Could not load AI settings: $e'),
+                error: (e, _) =>
+                    _NeedsSetup(message: 'Could not load AI settings: $e'),
                 data: (configs) => configs.isEmpty
-                    ? const _NeedsSetup(
-                        message: 'No model is set up yet.\n\nMario can use a '
-                            'local model through Ollama, any OpenAI-compatible '
-                            'server on your network, OpenAI, or Claude.',
-                      )
+                    ? const _NeedsSetup()
                     : switch (tab) {
                         AiPanelTab.ask => const AskPanel(),
                         AiPanelTab.quiz => const QuizPanel(),
@@ -195,15 +193,28 @@ class _TabChip extends StatelessWidget {
   }
 }
 
-class _NeedsSetup extends StatelessWidget {
-  const _NeedsSetup({required this.message});
-  final String message;
+/// First run: nothing configured yet.
+///
+/// Rather than only pointing at Settings, this looks for a model server already
+/// running on this machine and offers it directly — someone with Ollama going
+/// should be one tap from a working panel, not a form.
+class _NeedsSetup extends ConsumerWidget {
+  const _NeedsSetup({this.message});
+  final String? message;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
+    final found = ref.watch(localModelsProvider);
+
+    final detected = found.maybeWhen(
+      data: (endpoints) => endpoints,
+      orElse: () => const <DiscoveredEndpoint>[],
+    );
+    final best = detected.isEmpty ? null : detected.first;
+
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -212,7 +223,10 @@ class _NeedsSetup extends StatelessWidget {
                 size: 26, color: scheme.onSurfaceVariant),
             const SizedBox(height: 10),
             Text(
-              message,
+              message ??
+                  'No model is set up yet.\n\nMario can use a local model '
+                      'through Ollama, any OpenAI-compatible server on your '
+                      'network, OpenAI, or Claude.',
               textAlign: TextAlign.center,
               style: GoogleFonts.inter(
                 fontSize: 12,
@@ -220,6 +234,47 @@ class _NeedsSetup extends StatelessWidget {
                 color: scheme.onSurfaceVariant,
               ),
             ),
+            if (found.isLoading) ...[
+              const SizedBox(height: 14),
+              const MarioLoader(size: 20),
+              const SizedBox(height: 6),
+              Text('Looking for a local model server…',
+                  style: GoogleFonts.inter(
+                      fontSize: 11, color: scheme.onSurfaceVariant)),
+            ],
+            if (best != null) ...[
+              const SizedBox(height: 14),
+              Text(
+                '${best.serverName} is running here with '
+                '${best.models.length} model'
+                '${best.models.length == 1 ? '' : 's'}.',
+                textAlign: TextAlign.center,
+                style: GoogleFonts.inter(
+                    fontSize: 11.5,
+                    height: 1.4,
+                    color: scheme.onSurface,
+                    fontWeight: FontWeight.w500),
+              ),
+              const SizedBox(height: 8),
+              for (final m in best.models.take(4))
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 5),
+                  child: FilledButton.icon(
+                    onPressed: () => _use(ref, best, m.name),
+                    icon: const Icon(Icons.bolt, size: 15),
+                    label: Text(
+                      m.sizeLabel.isEmpty
+                          ? 'Use ${m.name}'
+                          : 'Use ${m.name}  ·  ${m.sizeLabel}',
+                    ),
+                    style: FilledButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      textStyle: GoogleFonts.inter(
+                          fontSize: 11.5, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+            ],
             const SizedBox(height: 14),
             FilledButton.icon(
               onPressed: () => Navigator.of(context).push(
@@ -228,7 +283,7 @@ class _NeedsSetup extends StatelessWidget {
                 ),
               ),
               icon: const Icon(Icons.tune, size: 15),
-              label: const Text('Set up a model'),
+              label: Text(best == null ? 'Set up a model' : 'More options'),
               style: FilledButton.styleFrom(
                 visualDensity: VisualDensity.compact,
                 textStyle: GoogleFonts.inter(
@@ -239,5 +294,19 @@ class _NeedsSetup extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// Saves the picked model and makes it active, so the panel is usable
+  /// immediately rather than after a trip to Settings.
+  Future<void> _use(
+      WidgetRef ref, DiscoveredEndpoint endpoint, String model) async {
+    final backends = ref.read(aiBackendsProvider);
+    final config = endpoint.toConfig(
+      model,
+      id: 'llm-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await backends.saveConfigs([...backends.configs, config]);
+    await backends.setActive(config.id);
+    ref.invalidate(aiConfigsProvider);
   }
 }

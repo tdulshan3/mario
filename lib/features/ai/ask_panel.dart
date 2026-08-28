@@ -201,8 +201,7 @@ class _AskPanelState extends ConsumerState<AskPanel> {
     final entry = AskEntry(
       id: 'inline',
       pageId: bridge.pageId,
-      question:
-          session.lastQuestion.isEmpty ? 'Summary' : session.lastQuestion,
+      question: session.lastQuestion.isEmpty ? 'Summary' : session.lastQuestion,
       answer: state.answer,
       sources: state.sources,
       usedWeb: state.sources.isNotEmpty,
@@ -608,8 +607,7 @@ class _SourceRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final host =
-        Uri.tryParse(source.url)?.host.replaceFirst('www.', '') ?? '';
+    final host = Uri.tryParse(source.url)?.host.replaceFirst('www.', '') ?? '';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: 5),
@@ -713,53 +711,54 @@ class _ErrorBox extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final raw = detail?.trim();
-    return Container(
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: scheme.errorContainer.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            message,
-            style:
-                GoogleFonts.inter(fontSize: 12, height: 1.4,
-                    color: scheme.onErrorContainer),
-          ),
-          if (raw != null && raw.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Theme(
-              data: Theme.of(context)
-                  .copyWith(dividerColor: Colors.transparent),
-              child: ExpansionTile(
-                dense: true,
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(bottom: 6),
-                title: Text(
-                  'What the model actually said',
-                  style: GoogleFonts.inter(
-                      fontSize: 11, color: scheme.onErrorContainer),
-                ),
-                children: [
-                  SelectableText(
-                    // Capped: a runaway model can return a wall of text, and
-                    // the first part is always the diagnostic part.
-                    raw.length > 1200
-                        ? '${raw.substring(0, 1200)}\n…(truncated)'
-                        : raw,
-                    style: GoogleFonts.robotoMono(
-                      fontSize: 10.5,
-                      height: 1.35,
-                      color: scheme.onErrorContainer.withValues(alpha: 0.9),
-                    ),
-                  ),
-                ],
-              ),
+    // Material, not a coloured Container: the disclosure below is a ListTile,
+    // and a ListTile paints its ink onto the nearest Material ancestor.
+    return Material(
+      color: scheme.errorContainer.withValues(alpha: 0.4),
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.all(10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              message,
+              style: GoogleFonts.inter(
+                  fontSize: 12, height: 1.4, color: scheme.onErrorContainer),
             ),
+            if (raw != null && raw.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Theme(
+                data: Theme.of(context)
+                    .copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  dense: true,
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: const EdgeInsets.only(bottom: 6),
+                  title: Text(
+                    'What the model actually said',
+                    style: GoogleFonts.inter(
+                        fontSize: 11, color: scheme.onErrorContainer),
+                  ),
+                  children: [
+                    SelectableText(
+                      // Capped: a runaway model can return a wall of text, and
+                      // the first part is always the diagnostic part.
+                      raw.length > 1200
+                          ? '${raw.substring(0, 1200)}\n…(truncated)'
+                          : raw,
+                      style: GoogleFonts.robotoMono(
+                        fontSize: 10.5,
+                        height: 1.35,
+                        color: scheme.onErrorContainer.withValues(alpha: 0.9),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

@@ -20,9 +20,11 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/services/ai/anthropic_provider.dart';
 import '../../core/services/ai/llm_provider.dart';
 import '../../core/services/ai/llm_provider_config.dart';
+import '../../core/services/ai/local_model_discovery.dart';
 import '../../ui/colors.dart';
 import 'ai_state.dart';
 import '../../ui/widgets/mario_loader.dart';
+import '../../core/services/ai/openai_compatible_provider.dart';
 
 class AiSettingsSection extends ConsumerStatefulWidget {
   const AiSettingsSection({super.key});
@@ -92,6 +94,8 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
                 label: const Text('Add a model'),
               ),
             ),
+            // Anything already running on this machine, offered as one tap.
+            _DetectedLocalModels(configured: configs),
             const SizedBox(height: 18),
             const _WebSearchSettings(),
           ],
@@ -143,7 +147,9 @@ class _BackendTile extends StatelessWidget {
             tooltip: isActive ? 'Active' : 'Use this one',
             onPressed: isActive ? null : onActivate,
             icon: Icon(
-              isActive ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              isActive
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
               size: 18,
               color: isActive
                   ? MarioColors.primaryPressed
@@ -258,13 +264,11 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   }
 
   LlmProviderConfig _buildConfig() {
-    final id = widget.existing?.id ??
-        'llm-${DateTime.now().microsecondsSinceEpoch}';
+    final id =
+        widget.existing?.id ?? 'llm-${DateTime.now().microsecondsSinceEpoch}';
     return LlmProviderConfig(
       id: id,
-      label: _label.text.trim().isEmpty
-          ? _defaultLabel()
-          : _label.text.trim(),
+      label: _label.text.trim().isEmpty ? _defaultLabel() : _label.text.trim(),
       kind: _kind,
       baseUrl: _baseUrl.text.trim(),
       model: _model.text.trim(),
@@ -332,8 +336,8 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final needsUrl = _kind != LlmProviderKind.openAi &&
-        _kind != LlmProviderKind.anthropic;
+    final needsUrl =
+        _kind != LlmProviderKind.openAi && _kind != LlmProviderKind.anthropic;
 
     return AlertDialog(
       title: Text(widget.existing == null ? 'Add a model' : 'Edit model',
@@ -348,8 +352,8 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
             children: [
               DropdownButtonFormField<LlmProviderKind>(
                 initialValue: _kind,
-                decoration: const InputDecoration(
-                    labelText: 'Kind', isDense: true),
+                decoration:
+                    const InputDecoration(labelText: 'Kind', isDense: true),
                 items: [
                   for (final k in LlmProviderKind.values)
                     DropdownMenuItem(value: k, child: Text(k.label)),
@@ -389,8 +393,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
                   children: [
                     for (final m in _models.take(12))
                       ActionChip(
-                        label: Text(m,
-                            style: GoogleFonts.inter(fontSize: 11)),
+                        label: Text(m, style: GoogleFonts.inter(fontSize: 11)),
                         onPressed: () => setState(() => _model.text = m),
                         visualDensity: VisualDensity.compact,
                       ),
@@ -434,9 +437,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: (_probe!.ok
-                            ? MarioColors.labelGreen
-                            : scheme.error)
+                    color: (_probe!.ok ? MarioColors.labelGreen : scheme.error)
                         .withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(6),
                   ),
@@ -446,9 +447,8 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
                       Icon(
                         _probe!.ok ? Icons.check_circle : Icons.error_outline,
                         size: 15,
-                        color: _probe!.ok
-                            ? MarioColors.labelGreen
-                            : scheme.error,
+                        color:
+                            _probe!.ok ? MarioColors.labelGreen : scheme.error,
                       ),
                       const SizedBox(width: 7),
                       Expanded(
@@ -561,8 +561,8 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
         SwitchListTile(
           contentPadding: EdgeInsets.zero,
           dense: true,
-          title: Text('Allow web search',
-              style: GoogleFonts.inter(fontSize: 13)),
+          title:
+              Text('Allow web search', style: GoogleFonts.inter(fontSize: 13)),
           subtitle: _hasKey
               ? Text('$_remaining of ${100} searches left today',
                   style: GoogleFonts.inter(
@@ -597,6 +597,163 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Model servers found running on this machine, each addable in one tap.
+///
+/// Shown only when something was actually found: an empty "nothing detected"
+/// block on a machine that runs no local model is noise on every visit to
+/// Settings.
+class _DetectedLocalModels extends ConsumerWidget {
+  const _DetectedLocalModels({required this.configured});
+
+  /// Already set up, so the same model is not offered twice.
+  final List<LlmProviderConfig> configured;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final found = ref.watch(localModelsProvider);
+
+    return found.maybeWhen(
+      loading: () => Padding(
+        padding: const EdgeInsets.only(top: 12),
+        child: Row(
+          children: [
+            const MarioLoader(size: 18),
+            const SizedBox(width: 8),
+            Text('Looking for a local model server…',
+                style: GoogleFonts.inter(
+                    fontSize: 11.5, color: scheme.onSurfaceVariant)),
+          ],
+        ),
+      ),
+      data: (endpoints) {
+        // Hide a model that is already configured at the same endpoint.
+        final rows = <({DiscoveredEndpoint endpoint, DiscoveredModel model})>[];
+        for (final e in endpoints) {
+          for (final m in e.models) {
+            final already = configured.any((c) =>
+                c.model == m.name &&
+                OpenAiCompatibleProvider.normalizeBaseUrl(c.baseUrl) ==
+                    OpenAiCompatibleProvider.normalizeBaseUrl(e.baseUrl));
+            if (!already) rows.add((endpoint: e, model: m));
+          }
+        }
+        if (rows.isEmpty) return const SizedBox.shrink();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Icon(Icons.lan_outlined,
+                    size: 13, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 5),
+                Text(
+                  'FOUND ON THIS MACHINE',
+                  style: GoogleFonts.spaceGrotesk(
+                    fontSize: 9.5,
+                    letterSpacing: 1,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+                const Spacer(),
+                IconButton(
+                  tooltip: 'Look again',
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.refresh, size: 15),
+                  onPressed: () => ref.invalidate(localModelsProvider),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            for (final row in rows.take(12))
+              _DetectedRow(
+                endpoint: row.endpoint,
+                model: row.model,
+                onAdd: () => _add(ref, row.endpoint, row.model),
+              ),
+          ],
+        );
+      },
+      orElse: SizedBox.shrink.call,
+    );
+  }
+
+  Future<void> _add(
+      WidgetRef ref, DiscoveredEndpoint endpoint, DiscoveredModel model) async {
+    final backends = ref.read(aiBackendsProvider);
+    final config = endpoint.toConfig(
+      model.name,
+      id: 'llm-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    await backends.saveConfigs([...backends.configs, config]);
+    // Make the first model anyone adds the active one, so a fresh install goes
+    // straight from "found it" to working.
+    if (backends.activeId == null || backends.configs.length == 1) {
+      await backends.setActive(config.id);
+    }
+    ref.invalidate(aiConfigsProvider);
+  }
+}
+
+class _DetectedRow extends StatelessWidget {
+  const _DetectedRow({
+    required this.endpoint,
+    required this.model,
+    required this.onAdd,
+  });
+
+  final DiscoveredEndpoint endpoint;
+  final DiscoveredModel model;
+  final VoidCallback onAdd;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final size = model.sizeLabel;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(model.name,
+                    style: GoogleFonts.inter(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: scheme.onSurface)),
+                Text(
+                  [
+                    endpoint.serverName,
+                    if (model.parameters != null) model.parameters!,
+                    if (size.isNotEmpty) size,
+                  ].join(' · '),
+                  style: GoogleFonts.inter(
+                      fontSize: 10.5, color: scheme.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add, size: 15),
+            label: const Text('Use'),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              textStyle: GoogleFonts.inter(
+                  fontSize: 11.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

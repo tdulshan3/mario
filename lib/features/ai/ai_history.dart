@@ -118,78 +118,85 @@ class _AskHistoryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // The surface colour lives on a Material, not on the Container.
+    // ExpansionTile is a ListTile, and a ListTile paints its background and ink
+    // splashes onto the nearest Material ancestor — a coloured DecoratedBox in
+    // between hides both, which Flutter asserts about in debug.
     return Container(
       margin: const EdgeInsets.only(bottom: 8),
       decoration: BoxDecoration(
-        color: scheme.surface,
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: scheme.outlineVariant),
       ),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          dense: true,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 10),
-          childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
-          title: Text(
-            entry.question,
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: GoogleFonts.inter(
-              fontSize: 12.5,
-              height: 1.35,
-              fontWeight: FontWeight.w500,
-              color: scheme.onSurface,
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: scheme.surface,
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            dense: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+            childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            title: Text(
+              entry.question,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+                color: scheme.onSurface,
+              ),
             ),
-          ),
-          subtitle: Row(
-            children: [
-              if (!fromThisPage) ...[
-                Icon(Icons.description_outlined,
-                    size: 11, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 3),
-                Text('another page',
+            subtitle: Row(
+              children: [
+                if (!fromThisPage) ...[
+                  Icon(Icons.description_outlined,
+                      size: 11, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 3),
+                  Text('another page',
+                      style: GoogleFonts.inter(
+                          fontSize: 10, color: scheme.onSurfaceVariant)),
+                  const SizedBox(width: 8),
+                ],
+                if (entry.usedWeb) ...[
+                  Icon(Icons.public, size: 11, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 3),
+                ],
+                Expanded(
+                  child: Text(
+                    _relative(entry.provenance.createdAt),
                     style: GoogleFonts.inter(
-                        fontSize: 10, color: scheme.onSurfaceVariant)),
-                const SizedBox(width: 8),
-              ],
-              if (entry.usedWeb) ...[
-                Icon(Icons.public, size: 11, color: scheme.onSurfaceVariant),
-                const SizedBox(width: 3),
-              ],
-              Expanded(
-                child: Text(
-                  _relative(entry.provenance.createdAt),
-                  style: GoogleFonts.inter(
-                      fontSize: 10, color: scheme.onSurfaceVariant),
+                        fontSize: 10, color: scheme.onSurfaceVariant),
+                  ),
                 ),
+              ],
+            ),
+            children: [
+              AiMarkdown(entry.answer, fontSize: 12),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: onReplay,
+                    icon: const Icon(Icons.refresh, size: 14),
+                    label: const Text('Ask again'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      textStyle: GoogleFonts.inter(fontSize: 11.5),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    entry.provenance.backend,
+                    style: GoogleFonts.inter(
+                        fontSize: 10,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
+                  ),
+                ],
               ),
             ],
           ),
-          children: [
-            AiMarkdown(entry.answer, fontSize: 12),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                TextButton.icon(
-                  onPressed: onReplay,
-                  icon: const Icon(Icons.refresh, size: 14),
-                  label: const Text('Ask again'),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    textStyle: GoogleFonts.inter(fontSize: 11.5),
-                  ),
-                ),
-                const Spacer(),
-                Text(
-                  entry.provenance.backend,
-                  style: GoogleFonts.inter(
-                      fontSize: 10,
-                      color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
-                ),
-              ],
-            ),
-          ],
         ),
       ),
     );
@@ -302,7 +309,8 @@ class _QuizHistoryTile extends ConsumerWidget {
           IconButton(
             tooltip: 'Retake',
             visualDensity: VisualDensity.compact,
-            icon: Icon(Icons.replay, size: 16, color: MarioColors.primaryPressed),
+            icon:
+                Icon(Icons.replay, size: 16, color: MarioColors.primaryPressed),
             onPressed: () =>
                 ref.read(quizSessionProvider.notifier).retake(quiz),
           ),
