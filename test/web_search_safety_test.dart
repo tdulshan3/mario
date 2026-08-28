@@ -11,6 +11,8 @@
 library;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:mario/core/services/ai/llm_types.dart';
 import 'package:mario/core/services/ai/web_search_service.dart';
 import 'package:mario/features/ai/ai_progress.dart';
 
@@ -31,7 +33,8 @@ void main() {
       );
     });
 
-    test('strips the fence markers so retrieved text cannot escape the block', () {
+    test('strips the fence markers so retrieved text cannot escape the block',
+        () {
       // Without this, a page can close the untrusted-data block early and pose
       // as instructions from the system.
       final out = sanitizeRetrievedText(
@@ -106,8 +109,8 @@ void main() {
 
     test('accepts an answer with no links', () {
       expect(
-        answerCitesOnlyKnownSources('A cell is the basic unit of life.',
-            sources),
+        answerCitesOnlyKnownSources(
+            'A cell is the basic unit of life.', sources),
         isTrue,
       );
     });
@@ -154,6 +157,52 @@ void main() {
     });
   });
 
+  group('testConnection distinguishes "on" from "actually works"', () {
+    // Those are different claims, and without a test path the difference only
+    // shows up mid-answer, as a search that quietly returned nothing.
+
+    test('says so plainly when no key is saved', () async {
+      final service = WebSearchService(secure: _NoSecrets());
+      final result = await service.testConnection();
+      expect(result.ok, isFalse);
+      expect(result.message, contains('No key'));
+    });
+
+    test('reports a working key', () async {
+      final service = WebSearchService(
+        secure: _NoSecrets(),
+        buildProvider: (_) => _FakeProvider(const [
+          AiSource(title: 'A result', url: 'https://example.com'),
+        ]),
+      );
+      final result = await service.testConnection(apiKey: 'k');
+      expect(result.ok, isTrue);
+      expect(result.message.toLowerCase(), contains('working'));
+    });
+
+    test('a rejected key is a failure, with the reason', () async {
+      final service = WebSearchService(
+        secure: _NoSecrets(),
+        buildProvider: (_) => _FakeProvider.throwing(
+          const LlmException('Serper rejected the API key.'),
+        ),
+      );
+      final result = await service.testConnection(apiKey: 'bad');
+      expect(result.ok, isFalse);
+      expect(result.message, contains('rejected'));
+    });
+
+    test('a key that works but finds nothing is still a working key', () async {
+      final service = WebSearchService(
+        secure: _NoSecrets(),
+        buildProvider: (_) => _FakeProvider(const []),
+      );
+      final result = await service.testConnection(apiKey: 'k');
+      expect(result.ok, isTrue);
+      expect(result.message, contains('returned nothing'));
+    });
+  });
+
   group('looksLikeItNeedsSearch errs toward not searching', () {
     test('flags time-sensitive questions', () {
       expect(looksLikeItNeedsSearch('what is the latest version?'), isTrue);
@@ -167,4 +216,39 @@ void main() {
       expect(looksLikeItNeedsSearch('summarise chapter 3'), isFalse);
     });
   });
+}
+
+/// A secure store with nothing in it, so the tests never touch a real keyring.
+class _NoSecrets extends FlutterSecureStorage {
+  const _NoSecrets();
+
+  @override
+  Future<String?> read({
+    required String key,
+    AppleOptions? iOptions,
+    AndroidOptions? aOptions,
+    LinuxOptions? lOptions,
+    WebOptions? webOptions,
+    AppleOptions? mOptions,
+    WindowsOptions? wOptions,
+  }) async =>
+      null;
+}
+
+class _FakeProvider implements WebSearchProvider {
+  _FakeProvider(this.results) : error = null;
+  _FakeProvider.throwing(this.error) : results = const [];
+
+  final List<AiSource> results;
+  final Object? error;
+
+  @override
+  String get name => 'Fake';
+
+  @override
+  Future<List<AiSource>> search(String query,
+      {int limit = 5, CancelToken? cancel}) async {
+    if (error != null) throw error!;
+    return results;
+  }
 }

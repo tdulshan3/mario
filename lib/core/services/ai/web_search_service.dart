@@ -28,6 +28,7 @@ import 'json_coercion.dart';
 
 abstract class WebSearchProvider {
   String get name;
+
   Future<List<AiSource>> search(String query,
       {int limit = 5, CancelToken? cancel});
 }
@@ -172,6 +173,36 @@ class WebSearchService {
   Future<int> remainingToday() async {
     final prefs = await SharedPreferences.getInstance();
     return dailyLimit - _countForToday(prefs);
+  }
+
+  /// Runs one real query to check the key works, without touching the daily
+  /// counter or the cache.
+  ///
+  /// Worth its own path: "web search is on" and "web search actually works" are
+  /// different claims, and the difference only shows up mid-answer otherwise —
+  /// as a search that quietly returned nothing.
+  Future<({bool ok, String message})> testConnection({String? apiKey}) async {
+    final key =
+        apiKey?.trim().isNotEmpty == true ? apiKey!.trim() : await readKey();
+    if (key == null || key.isEmpty) {
+      return (ok: false, message: 'No key saved yet.');
+    }
+    try {
+      final provider =
+          buildProvider?.call(key) ?? SerperSearchProvider(apiKey: key);
+      final results = await provider.search('test', limit: 1);
+      return results.isEmpty
+          ? (
+              ok: true,
+              message: 'Connected, but the search returned nothing. The key '
+                  'works; try a real question.'
+            )
+          : (ok: true, message: 'Working — ${provider.name} answered.');
+    } on LlmException catch (e) {
+      return (ok: false, message: e.message);
+    } catch (e) {
+      return (ok: false, message: e.toString());
+    }
   }
 
   Future<List<AiSource>> search(

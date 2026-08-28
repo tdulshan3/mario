@@ -198,6 +198,106 @@ void main() {
     });
   });
 
+  group('the bug that made a plan come back as nothing but headings', () {
+    // A blockId on an insert almost always means "put it here" — the model
+    // reaching for the only id field it can see. Treating it as a *target*
+    // dropped the whole action, so a plan survived only in the few actions
+    // that happened to carry no id at all.
+
+    test('an insert carrying a stray blockId is kept, not dropped', () {
+      final p = parseAgentPlan(
+        plan([
+          {'kind': 'paragraph', 'text': 'body text', 'blockId': 'abc123'},
+          {'kind': 'code', 'text': 'print(1)', 'blockId': 'abc123'},
+          {'kind': 'heading', 'text': 'A heading'},
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions, hasLength(3));
+      expect(p.dropped, 0);
+    });
+
+    test('that stray id is read as placement, which is what it meant', () {
+      final p = parseAgentPlan(
+        plan([
+          {'kind': 'paragraph', 'text': 'body', 'blockId': 'abc123'},
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions.single.afterBlockId, 'abc123');
+      expect(p.actions.single.blockId, isNull);
+    });
+
+    test('an unknown stray id appends rather than dropping the content', () {
+      final p = parseAgentPlan(
+        plan([
+          {'kind': 'paragraph', 'text': 'body', 'blockId': 'invented'},
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions, hasLength(1));
+      expect(p.actions.single.afterBlockId, isNull);
+    });
+
+    test('a real target is still required where one is needed', () {
+      // The rule has to stay strict for the kinds that act *on* a block.
+      final p = parseAgentPlan(
+        plan([
+          {'kind': 'delete_block', 'blockId': 'invented'},
+          {'kind': 'replace_block', 'blockId': 'invented', 'text': 'x'},
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions, isEmpty);
+    });
+  });
+
+  group('field aliases, since the schema is advisory on many backends', () {
+    test('body text under content, body or value', () {
+      for (final key in ['content', 'body', 'value']) {
+        final p = parseAgentPlan(plan([
+          {'kind': 'paragraph', key: 'the actual text'}
+        ]));
+        expect(p.actions.single.text, 'the actual text', reason: key);
+      }
+    });
+
+    test('list items under list or bullets', () {
+      for (final key in ['list', 'bullets']) {
+        final p = parseAgentPlan(plan([
+          {'kind': 'bullets', key: ['a', 'b']}
+        ]));
+        expect(p.actions.single.items, ['a', 'b'], reason: key);
+      }
+    });
+
+    test('snake_case id fields', () {
+      final p = parseAgentPlan(
+        plan([
+          {'kind': 'delete_block', 'block_id': 'abc123'},
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions.single.blockId, 'abc123');
+    });
+
+    test('a paragraph whose body arrived as a list is joined, not lost', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'paragraph', 'items': ['line one', 'line two']}
+      ]));
+      expect(p.actions.single.text, 'line one\nline two');
+    });
+
+    test('a code block whose body arrived as lines is joined', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'code', 'items': ['def f():', '    return 1'],
+         'language': 'python'}
+      ]));
+      expect(p.actions.single.text, 'def f():\n    return 1');
+      expect(p.actions.single.language, 'python');
+    });
+  });
+
   group('surviving wrong-typed fields', () {
     test('a level given as a string', () {
       final p = parseAgentPlan(plan([

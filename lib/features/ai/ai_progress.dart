@@ -146,6 +146,7 @@ class AiRunState {
     this.result,
     this.promptTokens,
     this.contextTokens,
+    this.searchQuery,
   });
 
   final List<AiStep> steps;
@@ -177,6 +178,11 @@ class AiRunState {
   /// The window it was measured against.
   final int? contextTokens;
 
+  /// What was sent to the search engine. Shown while the search runs, so the
+  /// user can see the query leaving their machine rather than only the answer
+  /// that came back.
+  final String? searchQuery;
+
   /// A structured payload for runs whose output is not prose — quiz generation
   /// puts its validated `List<QuizItem>` here while [answer] holds the title.
   /// Untyped because [AiRun] is shared by every task and must not depend on any
@@ -201,6 +207,7 @@ class AiRunState {
     Object? result,
     int? promptTokens,
     int? contextTokens,
+    String? searchQuery,
   }) =>
       AiRunState(
         steps: steps ?? this.steps,
@@ -214,6 +221,7 @@ class AiRunState {
         result: result ?? this.result,
         promptTokens: promptTokens ?? this.promptTokens,
         contextTokens: contextTokens ?? this.contextTokens,
+        searchQuery: searchQuery ?? this.searchQuery,
       );
 }
 
@@ -316,6 +324,12 @@ class AiRun extends ValueNotifier<AiRunState> {
   void appendReasoning(String text) {
     if (_disposed || text.isEmpty) return;
     value = value.copyWith(reasoning: value.reasoning + text);
+  }
+
+  /// Records the query as it goes out.
+  void setSearchQuery(String query) {
+    if (_disposed) return;
+    value = value.copyWith(searchQuery: query);
   }
 
   void addSources(List<AiSource> sources) {

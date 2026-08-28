@@ -267,6 +267,20 @@ class _AskPanelState extends ConsumerState<AskPanel> {
                           detail: state.errorDetail,
                         ),
                       ],
+                      // What is happening on the internet, while it happens:
+                      // the query going out, then the sites that came back —
+                      // before the answer, because that is the order in which
+                      // they influence it.
+                      if (state.searchQuery != null) ...[
+                        const SizedBox(height: 10),
+                        _WebActivity(
+                          query: state.searchQuery!,
+                          sources: state.sources,
+                          searching: state.steps.any((step) =>
+                              step.kind == AiStepKind.searchingWeb &&
+                              step.state == AiStepState.active),
+                        ),
+                      ],
                       if (state.reasoning.trim().isNotEmpty) ...[
                         const SizedBox(height: 8),
                         _ReasoningDisclosure(text: state.reasoning),
@@ -861,6 +875,139 @@ class _QuotedSelection extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The search as it happens: the query leaving, then the sites that answered.
+///
+/// Shown *before* the answer, and while the search is still running, because
+/// that is the order in which they matter — a user watching a slow local model
+/// should be able to see that it went out to the web, what it asked, and which
+/// sites it is about to write from. Without this the whole thing is one opaque
+/// pause followed by prose with bracketed numbers in it.
+class _WebActivity extends StatelessWidget {
+  const _WebActivity({
+    required this.query,
+    required this.sources,
+    required this.searching,
+  });
+
+  final String query;
+  final List<AiSource> sources;
+  final bool searching;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hosts = <String>[];
+    for (final s in sources) {
+      final host = Uri.tryParse(s.url)?.host.replaceFirst('www.', '');
+      if (host != null && host.isNotEmpty && !hosts.contains(host)) {
+        hosts.add(host);
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 9),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              if (searching)
+                const MarioLoader(size: 16)
+              else
+                Icon(Icons.travel_explore,
+                    size: 14, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  searching
+                      ? 'Searching the web'
+                      : hosts.isEmpty
+                          ? 'Searched the web — no results'
+                          : 'Read ${hosts.length} site'
+                              '${hosts.length == 1 ? '' : 's'}',
+                  style: GoogleFonts.inter(
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurface,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          // The query itself, because it is the thing that actually left the
+          // machine and the user is entitled to see it.
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(Icons.search, size: 12, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 5),
+              Expanded(
+                child: Text(
+                  query,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    height: 1.3,
+                    fontStyle: FontStyle.italic,
+                    color: scheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (hosts.isNotEmpty) ...[
+            const SizedBox(height: 7),
+            Wrap(
+              spacing: 5,
+              runSpacing: 4,
+              children: [
+                for (var i = 0; i < hosts.length; i++)
+                  _HostChip(index: i + 1, host: hosts[i]),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One site, numbered to match the citation markers in the answer.
+class _HostChip extends StatelessWidget {
+  const _HostChip({required this.index, required this.host});
+
+  final int index;
+  final String host;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Text(
+        '$index. $host',
+        style: GoogleFonts.inter(
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+          color: scheme.onSurfaceVariant,
         ),
       ),
     );

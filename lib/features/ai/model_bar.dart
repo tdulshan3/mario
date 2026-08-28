@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/services/ai/llm_provider_config.dart';
+import '../../core/services/ai/llm_service.dart';
 import '../../ui/colors.dart';
 import 'ai_progress.dart';
 import 'ai_state.dart';
@@ -31,10 +32,22 @@ class ModelBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final configs = ref.watch(aiConfigsProvider).valueOrNull ?? const [];
+    // Guarded because this bar renders unconditionally at the top of the panel,
+    // above everything else. The backend providers resolve through get_it, so
+    // in any context where DI has not been set up — a widget test, or a frame
+    // before registration finishes — an unguarded read throws *here* and takes
+    // the whole panel down with it, which is a far worse failure than showing
+    // no bar.
+    final List<LlmProviderConfig> configs;
+    final AiBackends backends;
+    try {
+      configs = ref.watch(aiConfigsProvider).valueOrNull ?? const [];
+      backends = ref.watch(aiBackendsProvider);
+    } catch (_) {
+      return const SizedBox.shrink();
+    }
     if (configs.isEmpty) return const SizedBox.shrink();
 
-    final backends = ref.watch(aiBackendsProvider);
     final active = backends.activeConfig;
     if (active == null) return const SizedBox.shrink();
 

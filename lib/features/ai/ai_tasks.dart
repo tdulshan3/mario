@@ -247,6 +247,7 @@ class AiTasks {
         run.skip(AiStepKind.searchingWeb);
       } else {
         run.begin(AiStepKind.searchingWeb, detail: question);
+        run.setSearchQuery(question);
         try {
           sources = await search.search(question, cancel: run.cancelToken);
           run.addSources(sources);
@@ -341,6 +342,7 @@ class AiTasks {
           await search.isEnabled) {
         run.begin(AiStepKind.searchingWeb,
             detail: 'the notes were not enough — looking it up');
+        run.setSearchQuery(question);
         try {
           sources = await search.search(question, cancel: run.cancelToken);
           run.addSources(sources);

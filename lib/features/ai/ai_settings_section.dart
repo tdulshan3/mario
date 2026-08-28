@@ -505,6 +505,8 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
   bool _enabled = false;
   bool _hasKey = false;
   int _remaining = 0;
+  bool _testing = false;
+  ({bool ok, String message})? _testResult;
 
   @override
   void initState() {
@@ -595,6 +597,55 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
               },
             ),
           ),
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            TextButton.icon(
+              onPressed: _testing
+                  ? null
+                  : () async {
+                      setState(() {
+                        _testing = true;
+                        _testResult = null;
+                      });
+                      // The typed key if there is one, so a key can be checked
+                      // before it is saved.
+                      final result = await service.testConnection(
+                        apiKey: _key.text.trim().isEmpty ? null : _key.text,
+                      );
+                      if (!mounted) return;
+                      setState(() {
+                        _testing = false;
+                        _testResult = result;
+                      });
+                    },
+              icon: _testing
+                  ? const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.wifi_tethering, size: 15),
+              label: const Text('Test search'),
+              style: TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                textStyle: GoogleFonts.inter(fontSize: 12),
+              ),
+            ),
+            if (_testResult != null)
+              Expanded(
+                child: Text(
+                  _testResult!.message,
+                  style: GoogleFonts.inter(
+                    fontSize: 11,
+                    height: 1.3,
+                    color: _testResult!.ok
+                        ? scheme.onSurfaceVariant
+                        : scheme.error,
+                  ),
+                ),
+              ),
+          ],
         ),
       ],
     );

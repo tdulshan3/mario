@@ -279,22 +279,47 @@ AgentPlan parseAgentPlan(Map<String, dynamic> raw,
   );
 }
 
+/// Kinds that actually consume [AgentAction.blockId]. For everything else the
+/// field is meaningless, and — before this distinction existed — fatal.
+const _targetedKinds = <AgentActionKind>{
+  AgentActionKind.replaceBlock,
+  AgentActionKind.deleteBlock,
+  AgentActionKind.moveBlock,
+};
+
 AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds) {
   final kind = _wireNames[asStringOr(m['kind']).trim().toLowerCase()];
   if (kind == null) return null;
 
-  final text = asStringOr(m['text']).trim();
-  final items = asStringList(m['items'])
-      .map((i) => i.trim())
-      .where((i) => i.isNotEmpty)
-      .toList();
-  final blockId = asString(m['blockId'])?.trim();
-  final afterBlockId = asString(m['afterBlockId'])?.trim();
+  // Field aliases, because the schema is advisory on any backend without
+  // strict decoding and models reach for the obvious synonym.
+  final text =
+      asStringOr(m['text'] ?? m['content'] ?? m['body'] ?? m['value']).trim();
+  // Two views of the same field. List entries are trimmed, because leading
+  // space in a bullet is noise; a code body is not, because indentation is
+  // the difference between Python that runs and Python that does not.
+  final rawItems = asStringList(m['items'] ?? m['list'] ?? m['bullets']);
+  final items =
+      rawItems.map((i) => i.trim()).where((i) => i.isNotEmpty).toList();
 
-  // A target that does not exist is a hallucinated id, and acting on it would
-  // hit whatever block happens to be there.
+  var blockId = asString(m['blockId'] ?? m['block_id'])?.trim();
+  var afterBlockId = asString(m['afterBlockId'] ?? m['after_block_id'])?.trim();
+
+  // A blockId on an *insert* almost always means "put it here" — the model
+  // reaching for the only id field it can see. Treating that as a target used
+  // to drop the whole action, which is why a plan could come back as nothing
+  // but the handful of headings that happened to carry no id.
+  if (!_targetedKinds.contains(kind) && blockId != null && blockId.isNotEmpty) {
+    afterBlockId ??= blockId;
+    blockId = null;
+  }
+
   if (knownBlockIds != null) {
-    if (blockId != null &&
+    // A target that does not exist is a hallucinated id, and acting on it
+    // would hit whatever block happens to be there. Only fatal for the kinds
+    // that need one — there is nothing to do without it.
+    if (_targetedKinds.contains(kind) &&
+        blockId != null &&
         blockId.isNotEmpty &&
         !knownBlockIds.contains(blockId)) {
       return null;
@@ -302,12 +327,12 @@ AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds) {
     if (afterBlockId != null &&
         afterBlockId.isNotEmpty &&
         !knownBlockIds.contains(afterBlockId)) {
-      // Not fatal: fall back to appending rather than dropping useful content.
-      return _build(kind, m, text, items, blockId, null);
+      // Not fatal: append rather than discard the content.
+      return _build(kind, m, text, items, rawItems, blockId, null);
     }
   }
 
-  return _build(kind, m, text, items, blockId, afterBlockId);
+  return _build(kind, m, text, items, rawItems, blockId, afterBlockId);
 }
 
 AgentAction? _build(
@@ -315,14 +340,18 @@ AgentAction? _build(
   Map<String, dynamic> m,
   String text,
   List<String> items,
+  List<String> rawItems,
   String? blockId,
   String? afterBlockId,
 ) {
   switch (kind) {
     case AgentActionKind.paragraph:
     case AgentActionKind.quote:
-      if (text.isEmpty) return null;
-      return AgentAction(kind: kind, text: text, afterBlockId: afterBlockId);
+      // Body delivered as a list rather than a string: join it instead of
+      // discarding a paragraph the model did write.
+      final body = text.isNotEmpty ? text : items.join('\n');
+      if (body.isEmpty) return null;
+      return AgentAction(kind: kind, text: body, afterBlockId: afterBlockId);
 
     case AgentActionKind.heading:
       if (text.isEmpty) return null;
@@ -343,11 +372,13 @@ AgentAction? _build(
       return AgentAction(kind: kind, afterBlockId: afterBlockId);
 
     case AgentActionKind.code:
-      if (text.isEmpty) return null;
+      // rawItems, not items: trimming would flatten the indentation.
+      final code = text.isNotEmpty ? text : rawItems.join('\n');
+      if (code.isEmpty) return null;
       final language = asStringOr(m['language'], 'plaintext').trim();
       return AgentAction(
         kind: kind,
-        text: text,
+        text: code,
         language: language.isEmpty ? 'plaintext' : language,
         afterBlockId: afterBlockId,
       );
