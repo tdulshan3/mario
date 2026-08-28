@@ -17,6 +17,7 @@ import '../../core/services/ai/llm_types.dart';
 import 'agent_actions.dart';
 import 'ai_progress.dart';
 import 'note_context.dart';
+import 'note_images.dart';
 import 'note_style.dart';
 
 /// What the agent did, for the panel to show and offer to undo.
@@ -63,10 +64,13 @@ class AgentTask {
       'Prefer adding to rewriting. Only use replace_block or delete_block when '
       'the request plainly calls for changing or removing something that is '
       'already there.\n'
-      'Every block in the notes below is labelled [id:xxxxxx]. To change or '
-      'remove one, use that exact id in blockId. Never invent an id. To add '
-      'something in a particular place, put that id in afterBlockId; omit it '
-      'to add at the end.\n'
+      'Every block in the notes below is labelled [id:xxxxxx]. To change, '
+      'remove or move one, use that exact id in blockId. Never invent an id. '
+      'To add or move something to a particular place, put the id of the block '
+      'it should follow in afterBlockId; omit it for the end.\n'
+      'Images are blocks like any other. Use move_block to put a picture beside '
+      'the text that discusses it — any text detected inside the images is '
+      'listed below, labelled with the same ids.\n'
       'Write real content, not placeholders. A table gets actual rows, a code '
       'block gets code that runs, a formula gets LaTeX.\n'
       'Tables and spreadsheets take "rows", the first row being the header, '
@@ -84,6 +88,7 @@ class AgentTask {
     required NoteText note,
     required void Function(AgentPlan plan) onPlanned,
     required Future<bool> Function(AgentAction action) applyAction,
+    List<NoteImage> images = const [],
   }) {
     final agentRun = AiRun(const [
       AiStepKind.readingNote,
@@ -91,7 +96,8 @@ class AgentTask {
       AiStepKind.checking,
       AiStepKind.answering,
     ]);
-    unawaited(_run(agentRun, instruction, note, onPlanned, applyAction));
+    unawaited(
+        _run(agentRun, instruction, note, onPlanned, applyAction, images));
     return agentRun;
   }
 
@@ -101,6 +107,7 @@ class AgentTask {
     NoteText note,
     void Function(AgentPlan plan) onPlanned,
     Future<bool> Function(AgentAction action) applyAction,
+    List<NoteImage> images,
   ) async {
     try {
       final provider = await llm.requireProvider();
@@ -115,12 +122,17 @@ class AgentTask {
       run.detail('${note.blocks.length} block(s)');
 
       run.begin(AiStepKind.thinking, detail: instruction);
+      // The text found in each picture, labelled by the same block id the
+      // agent uses to move things — which is what lets "put the diagram next
+      // to the section it illustrates" resolve to a specific block.
+      final imageText = renderImageTextForPrompt(images);
       final raw = await llm.structured(
         request: LlmRequest(
           system: '$_system\n\n${noteStyleFor(NoteStyleContext.agent)}',
           messages: [
-            LlmMessage.user('Current page:\n$labelled\n\n---\n\n'
-                'Do this: $instruction'),
+            LlmMessage.user('Current page:\n$labelled\n\n'
+                '${imageText.isEmpty ? '' : '$imageText\n'}'
+                '---\n\nDo this: $instruction'),
           ],
           maxTokens: 3000,
           effort: LlmEffort.medium,

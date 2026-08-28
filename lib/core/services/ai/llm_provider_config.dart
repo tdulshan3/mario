@@ -67,14 +67,20 @@ extension LlmProviderKindLabel on LlmProviderKind {
             jsonMode: true,
             tools: true,
             embeddings: true,
+            vision: true,
             contextTokens: 128000,
           ),
         LlmProviderKind.anthropic => const LlmCapabilities(
             strictJsonSchema: true,
             jsonMode: true,
             tools: true,
+            vision: true,
             contextTokens: 200000,
           ),
+        // Ollama serves plenty of text-only models, so vision is off until the
+        // user turns it on for a model they know can see. Sending an image to
+        // a text-only model wastes a long prefill and returns confident
+        // nonsense about a picture it never received.
         LlmProviderKind.ollama => const LlmCapabilities(
             strictJsonSchema: true,
             jsonMode: true,
@@ -130,7 +136,9 @@ class LlmProviderConfig {
 
   LlmCapabilities get effectiveCapabilities {
     final base = capabilities ?? kind.assumedCapabilities;
-    return contextTokens == null ? base : base.copyWith(contextTokens: contextTokens);
+    return contextTokens == null
+        ? base
+        : base.copyWith(contextTokens: contextTokens);
   }
 
   LlmProviderConfig copyWith({
@@ -194,9 +202,7 @@ class LlmProviderConfig {
           displayName: label,
           apiKey: apiKey ?? '',
           model: model.isEmpty ? kDefaultAnthropicModel : model,
-          baseUrl: baseUrl.isEmpty
-              ? 'https://api.anthropic.com/v1'
-              : baseUrl,
+          baseUrl: baseUrl.isEmpty ? 'https://api.anthropic.com/v1' : baseUrl,
         );
       case LlmProviderKind.openAi:
       case LlmProviderKind.ollama:
@@ -277,7 +283,10 @@ class LlmProviderStore {
   /// leave a live API key behind in the keyring.
   Future<List<LlmProviderConfig>> remove(
       List<LlmProviderConfig> configs, String id) async {
-    final next = [for (final c in configs) if (c.id != id) c];
+    final next = [
+      for (final c in configs)
+        if (c.id != id) c
+    ];
     await save(next);
     await _secure.delete(key: '$_keyPrefix$id');
     final active = await activeId();
@@ -286,7 +295,8 @@ class LlmProviderStore {
   }
 
   /// Turns the old standalone Anthropic key into a first-class provider config.
-  Future<List<LlmProviderConfig>> _migrateLegacy(SharedPreferences prefs) async {
+  Future<List<LlmProviderConfig>> _migrateLegacy(
+      SharedPreferences prefs) async {
     final legacy = await _secure.read(key: _legacyAnthropicKey);
     if (legacy == null || legacy.isEmpty) return const [];
     const id = 'anthropic-legacy';

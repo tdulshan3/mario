@@ -208,7 +208,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
     return body;
   }
 
-  Map<String, dynamic> _encodeMessage(LlmMessage m, {required bool foldSystem}) {
+  Map<String, dynamic> _encodeMessage(LlmMessage m,
+      {required bool foldSystem}) {
     switch (m.role) {
       case LlmRole.tool:
         return {
@@ -233,7 +234,26 @@ class OpenAiCompatibleProvider implements LlmProvider {
       case LlmRole.system:
         return {'role': foldSystem ? 'user' : 'system', 'content': m.content};
       case LlmRole.user:
-        return {'role': 'user', 'content': m.content};
+        if (m.images.isEmpty || !_capabilities.vision) {
+          // A server without vision given content *parts* rejects the whole
+          // request, so a text-only backend keeps the plain string form and
+          // simply does not see the pictures.
+          return {'role': 'user', 'content': m.content};
+        }
+        return {
+          'role': 'user',
+          'content': [
+            {'type': 'text', 'text': m.content},
+            for (final image in m.images)
+              {
+                'type': 'image_url',
+                // OpenAI's shape wants the data: prefix inline.
+                'image_url': {
+                  'url': 'data:${image.mimeType};base64,${image.base64Data}',
+                },
+              },
+          ],
+        };
     }
   }
 
@@ -243,7 +263,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
   Stream<LlmDelta> stream(LlmRequest request, {CancelToken? cancel}) async* {
     if (!_capabilities.streaming) {
       final r = await complete(request, cancel: cancel);
-      yield LlmDelta(text: r.text, reasoning: r.reasoning, toolCalls: r.toolCalls);
+      yield LlmDelta(
+          text: r.text, reasoning: r.reasoning, toolCalls: r.toolCalls);
       return;
     }
 
@@ -342,7 +363,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
   }
 
   @override
-  Future<LlmResponse> complete(LlmRequest request, {CancelToken? cancel}) async {
+  Future<LlmResponse> complete(LlmRequest request,
+      {CancelToken? cancel}) async {
     // Streaming and buffering hit the same endpoint; folding the stream keeps
     // one code path for tool-call assembly and think-tag splitting.
     if (_capabilities.streaming) {
@@ -371,7 +393,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
       if (res.statusCode >= 400) {
         throw _errorFor(res.statusCode, res.body);
       }
-      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final json =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final choice =
           ((json['choices'] as List?)?.firstOrNull as Map<String, dynamic>?) ??
               const {};
@@ -419,11 +442,11 @@ class OpenAiCompatibleProvider implements LlmProvider {
     try {
       final res = await client
           .post(Uri.parse('$baseUrl/embeddings'),
-              headers: _headers,
-              body: jsonEncode({'model': m, 'input': texts}))
+              headers: _headers, body: jsonEncode({'model': m, 'input': texts}))
           .timeout(timeout);
       if (res.statusCode >= 400) throw _errorFor(res.statusCode, res.body);
-      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final json =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final data = (json['data'] as List? ?? const [])
           .cast<Map<String, dynamic>>()
           .toList()
@@ -434,7 +457,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
             (asInt(a['index']) ?? 0).compareTo(asInt(b['index']) ?? 0));
       return [
         for (final d in data)
-          [for (final v in (d['embedding'] as List? ?? const [])) (v as num).toDouble()],
+          [
+            for (final v in (d['embedding'] as List? ?? const []))
+              (v as num).toDouble()
+          ],
       ];
     } on TimeoutException {
       throw LlmException('Embedding timed out',
@@ -500,7 +526,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
       );
     } on TimeoutException {
       return const LlmProbeResult(
-          ok: false, message: 'No response within 10s — is the server running?');
+          ok: false,
+          message: 'No response within 10s — is the server running?');
     } catch (e) {
       return LlmProbeResult(ok: false, message: _networkMessage(e));
     } finally {
@@ -556,7 +583,8 @@ class OpenAiCompatibleProvider implements LlmProvider {
     if (s.contains('Failed host lookup') || s.contains('No address')) {
       return 'Cannot resolve the host in $baseUrl.';
     }
-    if (s.contains('Network is unreachable') || s.contains('No route to host')) {
+    if (s.contains('Network is unreachable') ||
+        s.contains('No route to host')) {
       return 'No route to $baseUrl — are you on the same network?';
     }
     return s;

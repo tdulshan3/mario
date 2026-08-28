@@ -527,6 +527,7 @@ class _EditorState extends ConsumerState<_Editor> {
       pageTitle: widget.page.title,
       readPage: _readPageText,
       readAboveCursor: _readTextAboveCursor,
+      readDocument: () => _editorState.document,
       insertMarkdown: (markdown) =>
           insertMarkdownIntoDocument(_editorState, markdown),
       applyGrammar: (suggestion) =>

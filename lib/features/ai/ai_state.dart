@@ -6,6 +6,7 @@
 /// live here, above the editor.
 library;
 
+import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
@@ -14,6 +15,8 @@ import '../../core/services/ai/llm_provider_config.dart';
 import '../../core/services/ai/local_model_discovery.dart';
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/web_search_service.dart';
+import '../../core/services/asset_sync_service.dart';
+import '../../core/services/ocr_service.dart';
 import '../../core/services/page_content_repository.dart';
 import 'agent_actions.dart';
 import 'agent_executor.dart';
@@ -21,6 +24,7 @@ import 'agent_task.dart';
 import 'ai_tasks.dart';
 import 'grammar_check.dart';
 import 'note_context.dart';
+import 'note_images.dart';
 import 'section_reader.dart';
 
 final aiBackendsProvider = Provider<AiBackends>((ref) => GetIt.I<AiBackends>());
@@ -39,9 +43,16 @@ final sectionReaderProvider = Provider<SectionReader>((ref) => SectionReader(
 final agentTaskProvider =
     Provider<AgentTask>((ref) => AgentTask(ref.watch(llmServiceProvider)));
 
+/// Reads the pictures in a note — bytes for a vision model, OCR text for
+/// everything else.
+final noteImageReaderProvider = Provider<NoteImageReader>(
+  (ref) => NoteImageReader(GetIt.I<AssetSyncService>(), GetIt.I<OcrService>()),
+);
+
 final aiTasksProvider = Provider<AiTasks>((ref) => AiTasks(
       llm: ref.watch(llmServiceProvider),
       search: ref.watch(webSearchProvider),
+      images: ref.watch(noteImageReaderProvider),
     ));
 
 final grammarCheckerProvider = Provider<GrammarChecker>(
@@ -85,6 +96,7 @@ class AiEditorBridge {
     required this.pageTitle,
     required this.readPage,
     required this.readAboveCursor,
+    required this.readDocument,
     required this.insertMarkdown,
     required this.applyGrammar,
     required this.snapshot,
@@ -104,6 +116,11 @@ class AiEditorBridge {
   /// Everything above the caret — what `/summary` means by "the note above".
   /// Falls back to the whole page when there is no caret.
   final NoteText Function() readAboveCursor;
+
+  /// The live document, for reading the pictures out of it. Handed over as a
+  /// getter rather than a parsed result because resolving images is slow —
+  /// a Drive fetch and possibly OCR — and only some backends want it.
+  final afe.Document Function() readDocument;
 
   /// Inserts Markdown after the current block. Returns false when the editor
   /// went away mid-flight.

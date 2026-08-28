@@ -86,6 +86,7 @@ class _AskPanelState extends ConsumerState<AskPanel> {
       notebookId: bridge.notebookId,
       pageId: bridge.pageId,
       note: note,
+      document: bridge.readDocument(),
     );
   }
 

@@ -14,6 +14,7 @@ library;
 
 import 'dart:async';
 
+import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -47,6 +48,7 @@ class _FakeEditorState extends ConsumerState<_FakeEditor> {
         pageTitle: 'Page ${widget.pageId}',
         readPage: () => const NoteText(title: '', blocks: []),
         readAboveCursor: () => const NoteText(title: '', blocks: []),
+        readDocument: afe.Document.blank,
         insertMarkdown: (_) async => true,
         applyGrammar: (_) async => true,
         snapshot: () =>

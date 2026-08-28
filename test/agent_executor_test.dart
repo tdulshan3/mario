@@ -195,6 +195,82 @@ void main() {
     });
   });
 
+  group('moving a block — how a picture ends up beside its text', () {
+    test('moves a block to just after another', () async {
+      final state = editorWith(['intro', 'picture', 'about the picture']);
+      final pictureId = state.document.root.children[1].id;
+      final aboutId = state.document.root.children[2].id;
+
+      final ok = await AgentExecutor(state).apply(AgentAction(
+        kind: AgentActionKind.moveBlock,
+        blockId: pictureId,
+        afterBlockId: aboutId,
+      ));
+      expect(ok, isTrue);
+      expect(blockTexts(state), ['intro', 'about the picture', 'picture']);
+    });
+
+    test('moves backwards as well as forwards', () async {
+      // The direction that an index-arithmetic move gets wrong: the
+      // destination index differs depending on whether the target sits before
+      // or after the source.
+      final state = editorWith(['a', 'b', 'c']);
+      final cId = state.document.root.children[2].id;
+      final aId = state.document.root.children.first.id;
+
+      await AgentExecutor(state).apply(AgentAction(
+        kind: AgentActionKind.moveBlock,
+        blockId: cId,
+        afterBlockId: aId,
+      ));
+      expect(blockTexts(state), ['a', 'c', 'b']);
+    });
+
+    test('with no target, moves to the end', () async {
+      final state = editorWith(['a', 'b', 'c']);
+      final aId = state.document.root.children.first.id;
+      await AgentExecutor(state).apply(
+        AgentAction(kind: AgentActionKind.moveBlock, blockId: aId),
+      );
+      expect(blockTexts(state), ['b', 'c', 'a']);
+    });
+
+    test('a vanished source or target fails rather than guessing', () async {
+      final state = editorWith(['a', 'b']);
+      final aId = state.document.root.children.first.id;
+
+      expect(
+        await AgentExecutor(state).apply(const AgentAction(
+            kind: AgentActionKind.moveBlock, blockId: 'gone')),
+        isFalse,
+      );
+      expect(
+        await AgentExecutor(state).apply(AgentAction(
+          kind: AgentActionKind.moveBlock,
+          blockId: aId,
+          afterBlockId: 'gone',
+        )),
+        isFalse,
+      );
+      expect(blockTexts(state), ['a', 'b']);
+    });
+
+    test('a move is undone by the snapshot like anything else', () async {
+      final state = editorWith(['a', 'b', 'c']);
+      final executor = AgentExecutor(state);
+      final before = executor.snapshot('t');
+
+      await executor.apply(AgentAction(
+        kind: AgentActionKind.moveBlock,
+        blockId: state.document.root.children.first.id,
+      ));
+      expect(blockTexts(state), ['b', 'c', 'a']);
+
+      await executor.restore(before);
+      expect(blockTexts(state), ['a', 'b', 'c']);
+    });
+  });
+
   group('undo puts the page back exactly', () {
     test('after a run of several actions', () async {
       final state = editorWith(['original one', 'original two']);

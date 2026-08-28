@@ -71,6 +71,7 @@ class AnthropicProvider implements LlmProvider {
         // OpenAI-compatible embedder instead. See EmbeddingService.
         embeddings: false,
         systemRole: true,
+        vision: true,
         contextTokens: 200000,
       );
 
@@ -113,7 +114,27 @@ class AnthropicProvider implements LlmProvider {
           ];
           messages.add({'role': 'assistant', 'content': blocks});
         case LlmRole.user:
-          messages.add({'role': 'user', 'content': m.content});
+          if (m.images.isEmpty) {
+            messages.add({'role': 'user', 'content': m.content});
+          } else {
+            messages.add({
+              'role': 'user',
+              // Images before the text: Anthropic's guidance, and it reads
+              // better anyway — the question refers to what precedes it.
+              'content': [
+                for (final image in m.images)
+                  {
+                    'type': 'image',
+                    'source': {
+                      'type': 'base64',
+                      'media_type': image.mimeType,
+                      'data': image.base64Data,
+                    },
+                  },
+                {'type': 'text', 'text': m.content},
+              ],
+            });
+          }
       }
     }
 
@@ -243,7 +264,8 @@ class AnthropicProvider implements LlmProvider {
   }
 
   @override
-  Future<LlmResponse> complete(LlmRequest request, {CancelToken? cancel}) async {
+  Future<LlmResponse> complete(LlmRequest request,
+      {CancelToken? cancel}) async {
     final client = _clientFactory();
     try {
       final res = await client
@@ -253,7 +275,8 @@ class AnthropicProvider implements LlmProvider {
           .timeout(timeout);
       if (res.statusCode >= 400) throw _errorFor(res.statusCode, res.body);
 
-      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final json =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final text = StringBuffer();
       final reasoning = StringBuffer();
       final calls = <LlmToolCall>[];
@@ -336,7 +359,8 @@ class AnthropicProvider implements LlmProvider {
             message: 'HTTP ${res.statusCode} from the Anthropic API.',
             latency: latency);
       }
-      final json = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      final json =
+          jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
       final models = <String>[
         for (final d in (json['data'] as List? ?? const []))
           if ((d as Map<String, dynamic>)['id'] is String) d['id'] as String,

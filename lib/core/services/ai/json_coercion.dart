@@ -107,8 +107,7 @@ String repairJson(String s) {
   // Trailing commas before a closer. replaceAllMapped, not replaceAll: Dart's
   // plain replaceAll treats `$1` as two literal characters rather than a
   // backreference, so the naive version deletes the closing brace.
-  out = out.replaceAllMapped(
-      RegExp(r',(\s*[}\]])'), (m) => m.group(1)!);
+  out = out.replaceAllMapped(RegExp(r',(\s*[}\]])'), (m) => m.group(1)!);
 
   // Truncated output: close whatever is still open. Only structural closers
   // are added, and only when the imbalance is unambiguous — a string left open
@@ -240,7 +239,6 @@ Object? _tryDecode(String s) {
 
 final _fence = RegExp(r'```(?:json|JSON)?\s*([\s\S]*?)```');
 
-
 // ---------------------------------------------------------------------------
 // Reading fields out of JSON nobody guarantees the shape of.
 //
@@ -269,8 +267,7 @@ String? asString(Object? v) => switch (v) {
     };
 
 /// [asString] with a fallback, for fields that must produce something.
-String asStringOr(Object? v, [String fallback = '']) =>
-    asString(v) ?? fallback;
+String asStringOr(Object? v, [String fallback = '']) => asString(v) ?? fallback;
 
 /// Reads [v] as an int, or null.
 ///
@@ -290,8 +287,8 @@ int? asInt(Object? v) => switch (v) {
 /// frequently answers.
 double? asDouble(Object? v) => switch (v) {
       num n => n.toDouble(),
-      String s => double.tryParse(s.trim()) ??
-          double.tryParse(s.split('/').first.trim()),
+      String s =>
+        double.tryParse(s.trim()) ?? double.tryParse(s.split('/').first.trim()),
       List l when l.length == 1 => asDouble(l.first),
       _ => null,
     };

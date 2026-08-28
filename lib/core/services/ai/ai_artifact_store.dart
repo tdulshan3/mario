@@ -120,8 +120,7 @@ class AiArtifactStore {
       (await load(notebookId)).summaries[pageId];
 
   /// Stores a summary, replacing any previous one for the same page.
-  Future<void> putSummary(String notebookId, NoteSummary summary) =>
-      update(
+  Future<void> putSummary(String notebookId, NoteSummary summary) => update(
         notebookId,
         (d) => d.copyWith(
           summaries: {...d.summaries, summary.pageId: summary},
@@ -135,7 +134,13 @@ class AiArtifactStore {
   /// the panel slow for a feature nobody scrolls back that far in.
   Future<void> addAsk(String notebookId, AskEntry entry) => update(
         notebookId,
-        (d) => d.copyWith(asks: [...d.asks, entry].reversed.take(200).toList().reversed.toList()),
+        (d) => d.copyWith(
+            asks: [...d.asks, entry]
+                .reversed
+                .take(200)
+                .toList()
+                .reversed
+                .toList()),
       );
 
   Future<void> markAskInserted(String notebookId, String askId) => update(

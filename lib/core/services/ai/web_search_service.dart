@@ -83,9 +83,8 @@ class SerperSearchProvider implements WebSearchProvider {
       // costs nothing extra — take it first.
       final answerBox = asMap(json['answerBox']);
       if (answerBox != null) {
-        final snippet = asString(answerBox['answer'] ??
-            answerBox['snippet'] ??
-            answerBox['title']);
+        final snippet = asString(
+            answerBox['answer'] ?? answerBox['snippet'] ?? answerBox['title']);
         if (snippet != null && snippet.trim().isNotEmpty) {
           out.add(AiSource(
             title: asStringOr(answerBox['title'], 'Answer'),
@@ -100,8 +99,7 @@ class SerperSearchProvider implements WebSearchProvider {
       if (kgDescription.isNotEmpty) {
         out.add(AiSource(
           title: asStringOr(kg?['title'], 'Overview'),
-          url: asString(kg?['descriptionLink']) ??
-              asStringOr(kg?['website']),
+          url: asString(kg?['descriptionLink']) ?? asStringOr(kg?['website']),
           snippet: kgDescription,
         ));
       }
@@ -200,8 +198,10 @@ class WebSearchService {
           'Daily web-search limit reached. It resets tomorrow.');
     }
 
-    final provider = buildProvider?.call(key) ?? SerperSearchProvider(apiKey: key);
-    final results = await provider.search(trimmed, limit: limit, cancel: cancel);
+    final provider =
+        buildProvider?.call(key) ?? SerperSearchProvider(apiKey: key);
+    final results =
+        await provider.search(trimmed, limit: limit, cancel: cancel);
 
     await prefs.setInt(_kDailyCount, used + 1);
     await prefs.setString(_kDailyStamp, _today());
@@ -230,9 +230,21 @@ class WebSearchService {
 bool looksLikeItNeedsSearch(String question) {
   final q = question.toLowerCase();
   const signals = [
-    'latest', 'current', 'today', 'this year', 'right now', 'recent',
-    'news', 'released', 'version', 'price', 'who won', 'when did',
-    'up to date', 'nowadays', 'as of',
+    'latest',
+    'current',
+    'today',
+    'this year',
+    'right now',
+    'recent',
+    'news',
+    'released',
+    'version',
+    'price',
+    'who won',
+    'when did',
+    'up to date',
+    'nowadays',
+    'as of',
   ];
   if (signals.any(q.contains)) return true;
   // A year later than the notes were plausibly written is a strong signal.

@@ -44,6 +44,7 @@ enum AgentActionKind {
   renamePage,
   replaceBlock,
   deleteBlock,
+  moveBlock,
   setting,
 }
 
@@ -64,6 +65,7 @@ const _wireNames = <String, AgentActionKind>{
   'rename_page': AgentActionKind.renamePage,
   'replace_block': AgentActionKind.replaceBlock,
   'delete_block': AgentActionKind.deleteBlock,
+  'move_block': AgentActionKind.moveBlock,
   'setting': AgentActionKind.setting,
 };
 
@@ -131,6 +133,7 @@ class AgentAction {
         AgentActionKind.renamePage => 'Renamed the page to "${_clip(text)}"',
         AgentActionKind.replaceBlock => 'Rewrote a block',
         AgentActionKind.deleteBlock => 'Deleted a block',
+        AgentActionKind.moveBlock => 'Moved a block',
         AgentActionKind.setting => 'Changed $settingKey to $settingValue',
       };
 
@@ -207,12 +210,12 @@ const agentPlanSchema = <String, dynamic>{
           'language': {'type': 'string', 'description': 'Code language.'},
           'blockId': {
             'type': 'string',
-            'description': 'Existing block to replace or delete.',
+            'description': 'Existing block to replace, delete or move.',
           },
           'afterBlockId': {
             'type': 'string',
-            'description':
-                'Insert after this block. Omit to append at the end.',
+            'description': 'Insert, or move, to just after this block. Omit '
+                'to place at the end.',
           },
           'settingKey': {
             'type': 'string',
@@ -380,6 +383,17 @@ AgentAction? _build(
     case AgentActionKind.deleteBlock:
       if (blockId == null || blockId.isEmpty) return null;
       return AgentAction(kind: kind, blockId: blockId);
+
+    case AgentActionKind.moveBlock:
+      if (blockId == null || blockId.isEmpty) return null;
+      // Moving a block to just after itself is a no-op that still costs a
+      // transaction and reads as a change in the result list.
+      if (afterBlockId == blockId) return null;
+      return AgentAction(
+        kind: kind,
+        blockId: blockId,
+        afterBlockId: afterBlockId,
+      );
 
     case AgentActionKind.setting:
       final key = asString(m['settingKey'])?.trim();

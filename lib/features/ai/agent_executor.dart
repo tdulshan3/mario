@@ -76,6 +76,8 @@ class AgentExecutor {
         return _replaceBlock(action);
       case AgentActionKind.deleteBlock:
         return _deleteBlock(action);
+      case AgentActionKind.moveBlock:
+        return _moveBlock(action);
       case AgentActionKind.renamePage:
       case AgentActionKind.setting:
         // Handled by the caller: neither lives in the document.
@@ -127,6 +129,34 @@ class AgentExecutor {
     return safeApply(editorState, (tx) => tx.deleteNode(node));
   }
 
+  /// Moves an existing block to just after another — how the agent puts a
+  /// picture beside the text that discusses it.
+  ///
+  /// Copy-insert-then-delete rather than a move operation: AppFlowy's
+  /// `moveNode` needs the destination path to be correct *after* the removal,
+  /// which is a different index depending on whether the target sits before or
+  /// after the source. Getting that off by one silently puts the block in the
+  /// wrong place, and the copy costs nothing at this size.
+  Future<bool> _moveBlock(AgentAction action) async {
+    final node = _findById(editorState.document.root, action.blockId!);
+    if (node == null) return false;
+
+    final afterId = action.afterBlockId;
+    final anchor =
+        afterId == null ? null : _findById(editorState.document.root, afterId);
+    if (afterId != null && anchor == null) return false;
+    if (identical(anchor, node)) return false;
+
+    final copy = node.copyWith();
+    return safeApply(editorState, (tx) {
+      tx.insertNode(
+        anchor?.path.next ?? [editorState.document.root.children.length],
+        copy,
+      );
+      tx.deleteNode(node);
+    });
+  }
+
   /// Builds the nodes one action inserts.
   List<afe.Node> _nodesFor(AgentAction a) {
     switch (a.kind) {
@@ -166,6 +196,7 @@ class AgentExecutor {
       case AgentActionKind.renamePage:
       case AgentActionKind.replaceBlock:
       case AgentActionKind.deleteBlock:
+      case AgentActionKind.moveBlock:
       case AgentActionKind.setting:
         return const [];
     }

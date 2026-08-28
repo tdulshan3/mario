@@ -9,6 +9,8 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import 'json_coercion.dart';
 
 enum LlmRole { system, user, assistant, tool }
@@ -17,12 +19,36 @@ enum LlmRole { system, user, assistant, tool }
 ///
 /// [toolCalls] is only ever populated on an assistant turn; [toolCallId] only
 /// on a tool turn, tying the result back to the call that asked for it.
+/// An image attached to a message.
+///
+/// Carried as raw bytes rather than a path or a URL: every backend wants it
+/// base64-encoded inline, a local server cannot fetch a file:// URL from the
+/// user's disk, and the alternative — uploading somewhere first — would send
+/// a picture out of someone's notes to reach a model running on their own
+/// machine.
+class LlmImage {
+  const LlmImage({required this.bytes, required this.mimeType});
+
+  final Uint8List bytes;
+
+  /// e.g. `image/png`. Both wire formats require it and neither sniffs.
+  final String mimeType;
+
+  /// Base64 payload, without a data: prefix — Anthropic wants it bare and
+  /// OpenAI wants it prefixed, so each provider adds what it needs.
+  String get base64Data => base64Encode(bytes);
+
+  /// Roughly what this costs to send: base64 inflates by a third.
+  int get encodedBytes => (bytes.length * 4 / 3).ceil();
+}
+
 class LlmMessage {
   const LlmMessage({
     required this.role,
     required this.content,
     this.toolCalls = const [],
     this.toolCallId,
+    this.images = const [],
   });
 
   final LlmRole role;
@@ -30,17 +56,20 @@ class LlmMessage {
   final List<LlmToolCall> toolCalls;
   final String? toolCallId;
 
+  /// Images the model should look at alongside [content]. Only meaningful on a
+  /// user turn, and only sent when the backend reports [LlmCapabilities.vision].
+  final List<LlmImage> images;
+
   factory LlmMessage.system(String content) =>
       LlmMessage(role: LlmRole.system, content: content);
-  factory LlmMessage.user(String content) =>
-      LlmMessage(role: LlmRole.user, content: content);
+  factory LlmMessage.user(String content, {List<LlmImage> images = const []}) =>
+      LlmMessage(role: LlmRole.user, content: content, images: images);
   factory LlmMessage.assistant(String content,
           {List<LlmToolCall> toolCalls = const []}) =>
       LlmMessage(
           role: LlmRole.assistant, content: content, toolCalls: toolCalls);
   factory LlmMessage.tool(String content, {required String toolCallId}) =>
-      LlmMessage(
-          role: LlmRole.tool, content: content, toolCallId: toolCallId);
+      LlmMessage(role: LlmRole.tool, content: content, toolCallId: toolCallId);
 
   Map<String, dynamic> toJson() => {
         'role': role.name,
@@ -183,7 +212,8 @@ enum LlmEffort { low, medium, high }
 /// separate thinking channel some servers emit (Ollama's `thinking`, OpenAI's
 /// reasoning summaries) which must never be mistaken for the answer.
 class LlmDelta {
-  const LlmDelta({this.text = '', this.reasoning = '', this.toolCalls = const []});
+  const LlmDelta(
+      {this.text = '', this.reasoning = '', this.toolCalls = const []});
   final String text;
   final String reasoning;
   final List<LlmToolCall> toolCalls;
@@ -227,6 +257,7 @@ class LlmCapabilities {
     this.tools = false,
     this.embeddings = false,
     this.systemRole = true,
+    this.vision = false,
     this.contextTokens = 8192,
   });
 
@@ -243,6 +274,12 @@ class LlmCapabilities {
   final bool tools;
   final bool embeddings;
   final bool systemRole;
+
+  /// Whether the model can look at an image. Every current small model is
+  /// natively multimodal, but the *server* still has to accept image parts, and
+  /// a text-only model given one either errors or silently ignores it.
+  final bool vision;
+
   final int contextTokens;
 
   LlmCapabilities copyWith({
@@ -252,6 +289,7 @@ class LlmCapabilities {
     bool? tools,
     bool? embeddings,
     bool? systemRole,
+    bool? vision,
     int? contextTokens,
   }) =>
       LlmCapabilities(
@@ -261,6 +299,7 @@ class LlmCapabilities {
         tools: tools ?? this.tools,
         embeddings: embeddings ?? this.embeddings,
         systemRole: systemRole ?? this.systemRole,
+        vision: vision ?? this.vision,
         contextTokens: contextTokens ?? this.contextTokens,
       );
 
@@ -271,6 +310,7 @@ class LlmCapabilities {
         'tools': tools,
         'embeddings': embeddings,
         'systemRole': systemRole,
+        'vision': vision,
         'contextTokens': contextTokens,
       };
 
@@ -281,6 +321,7 @@ class LlmCapabilities {
         tools: asBool(m['tools']),
         embeddings: asBool(m['embeddings']),
         systemRole: asBool(m['systemRole'], fallback: true),
+        vision: asBool(m['vision']),
         contextTokens: asInt(m['contextTokens']) ?? 8192,
       );
 }

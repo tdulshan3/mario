@@ -53,21 +53,32 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     super.dispose();
   }
 
-  void _run() {
+  Future<void> _run() async {
     final instruction = _controller.text.trim();
     final bridge = ref.read(aiEditorBridgeProvider);
     if (instruction.isEmpty || bridge == null) return;
 
+    // Everything from `ref` is read before the first await: the run outlives
+    // this widget.
     final session = ref.read(agentSessionProvider.notifier);
-    // Captured before the first await: the run outlives this widget.
     final settings = ref.read(settingsProvider.notifier);
+    final task = ref.read(agentTaskProvider);
+    final reader = ref.read(noteImageReaderProvider);
+    final note = bridge.readPage();
+    final document = bridge.readDocument();
 
-    final run = ref.read(agentTaskProvider).run(
-          instruction: instruction,
-          note: bridge.readPage(),
-          onPlanned: (_) => session.snapshotTaken(bridge.snapshot()),
-          applyAction: (action) => _perform(action, bridge, settings),
-        );
+    // Text only: the agent is choosing *where* things go, and OCR labelled by
+    // block id answers that. Sending the pictures themselves would multiply
+    // the prefill of an already slow planning call.
+    final images = await reader.read(document, loadBytes: false);
+
+    final run = task.run(
+      instruction: instruction,
+      note: note,
+      images: images,
+      onPlanned: (_) => session.snapshotTaken(bridge.snapshot()),
+      applyAction: (action) => _perform(action, bridge, settings),
+    );
     session.start(run, instruction: instruction);
   }
 

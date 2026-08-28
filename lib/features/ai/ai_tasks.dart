@@ -23,6 +23,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
 
+import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../core/services/ai/json_coercion.dart';
 import '../../core/services/ai/llm_service.dart';
@@ -30,6 +32,7 @@ import '../../core/services/ai/llm_types.dart';
 import '../../core/services/ai/web_search_service.dart';
 import 'ai_progress.dart';
 import 'note_context.dart';
+import 'note_images.dart';
 import 'note_style.dart';
 
 /// Where a summary or answer came from, and what to call it.
@@ -39,6 +42,7 @@ class AiTaskContext {
     required this.pageId,
     required this.note,
     this.cachedSummary,
+    this.document,
   });
 
   final String notebookId;
@@ -48,16 +52,25 @@ class AiTaskContext {
   /// A previously-saved summary, if one is still valid for this note. Passing
   /// it lets a question skip re-reading the whole page.
   final NoteSummary? cachedSummary;
+
+  /// The live document, for reading the pictures out of it. Optional: a task
+  /// that only needs text does not pay for resolving and OCR-ing images.
+  final afe.Document? document;
 }
 
 class AiTasks {
   AiTasks({
     required this.llm,
     required this.search,
+    this.images,
   });
 
   final LlmService llm;
   final WebSearchService search;
+
+  /// Resolves the pictures in a note. Optional so a caller without the asset
+  /// services — a test, mostly — still gets everything else.
+  final NoteImageReader? images;
 
   /// Fraction of the context window handed to the note. The rest is the
   /// system prompt, the question, web results and the answer itself.
@@ -184,15 +197,33 @@ class AiTasks {
       final provider = await llm.requireProvider();
       run.setBackend(provider.displayName);
 
-      // 1. Read the note.
+      // 1. Read the note, and the pictures in it.
       run.begin(AiStepKind.readingNote);
       final budget = _noteBudget(provider.capabilities.contextTokens);
       final noteText = _noteForPrompt(ctx, budget);
+
+      // Two routes to the same content, and which is available depends on the
+      // backend: send the image where the model can see, and always send the
+      // OCR text, which costs little and helps even a vision model reading a
+      // blurry photo.
+      final canSee = provider.capabilities.vision;
+      final pictures = (images == null || ctx.document == null)
+          ? const <NoteImage>[]
+          : await images!.read(ctx.document!, loadBytes: canSee);
+      final attachments =
+          canSee ? selectImagesToSend(pictures) : const <LlmImage>[];
+      final imageText = renderImageTextForPrompt(pictures);
+
       run.detail(focus != null
           ? 'focused on the highlighted passage'
-          : ctx.cachedSummary != null
-              ? 'using the saved summary'
-              : '${ctx.note.blocks.length} blocks');
+          : [
+              if (attachments.isNotEmpty) '${attachments.length} image(s)',
+              if (attachments.isEmpty && imageText.isNotEmpty)
+                'text from ${pictures.where((p) => p.hasText).length} image(s)',
+              ctx.cachedSummary != null
+                  ? 'using the saved summary'
+                  : '${ctx.note.blocks.length} blocks',
+            ].join(', '));
 
       // 2. Search.
       //
@@ -244,6 +275,11 @@ class AiTasks {
         ..writeln('Notes:')
         ..writeln(noteText)
         ..writeln();
+      if (imageText.isNotEmpty) {
+        prompt
+          ..writeln(imageText)
+          ..writeln();
+      }
       if (focus != null && focus.trim().isNotEmpty) {
         prompt
           ..writeln('The user has highlighted this passage from the notes '
@@ -266,7 +302,9 @@ class AiTasks {
         LlmRequest(
           system: '${sources.isEmpty ? _askSystem : _askWithWebSystem}\n\n'
               '${noteStyleFor(NoteStyleContext.insertedAnswer)}',
-          messages: [LlmMessage.user(prompt.toString())],
+          messages: [
+            LlmMessage.user(prompt.toString(), images: attachments),
+          ],
           maxTokens: 1200,
           effort: LlmEffort.low,
         ),
@@ -328,8 +366,9 @@ class AiTasks {
             ),
             cancel: run.cancelToken,
           )) {
-            if (delta.reasoning.isNotEmpty)
+            if (delta.reasoning.isNotEmpty) {
               run.appendReasoning(delta.reasoning);
+            }
             if (delta.text.isNotEmpty) {
               if (!restarted) {
                 restarted = true;

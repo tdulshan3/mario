@@ -195,7 +195,8 @@ class LlmService {
       // dialect: llama-server wants the schema flat rather than nested under
       // `json_schema`, and rejects the nested form. One retry distinguishes
       // "speaks a different dialect" from "does not support this".
-      if (provider is OpenAiCompatibleProvider && !provider.usesFlatJsonSchema) {
+      if (provider is OpenAiCompatibleProvider &&
+          !provider.usesFlatJsonSchema) {
         provider.usesFlatJsonSchema = true;
         try {
           response = await provider.complete(withSchema, cancel: cancel);
@@ -210,8 +211,8 @@ class LlmService {
       // output. Narrow the stored record so later calls stop asking, and fall
       // back to prompt-and-repair for this one.
       if (provider is OpenAiCompatibleProvider) {
-        provider.downgrade((c) =>
-            c.copyWith(strictJsonSchema: false, jsonMode: false));
+        provider.downgrade(
+            (c) => c.copyWith(strictJsonSchema: false, jsonMode: false));
       }
       await backends.recordCapability(provider.id,
           (c) => c.copyWith(strictJsonSchema: false, jsonMode: false));

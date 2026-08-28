@@ -183,7 +183,8 @@ class _StepIcon extends StatelessWidget {
 
 String _formatElapsed(Duration d) {
   if (d.inMilliseconds < 1000) return '${d.inMilliseconds}ms';
-  if (d.inSeconds < 60)
+  if (d.inSeconds < 60) {
     return '${(d.inMilliseconds / 1000).toStringAsFixed(1)}s';
+  }
   return '${d.inMinutes}m ${d.inSeconds % 60}s';
 }
