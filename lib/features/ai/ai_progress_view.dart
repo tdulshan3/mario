@@ -9,7 +9,7 @@ library;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-import '../../ui/colors.dart';
+import '../../ui/widgets/mario_loader.dart';
 import 'ai_progress.dart';
 
 class AiProgressView extends StatelessWidget {
@@ -87,9 +87,10 @@ class _StepRow extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Wide enough for the four-dot animation to read as four dots.
           SizedBox(
-            width: 20,
-            height: 18,
+            width: 22,
+            height: 20,
             child: Center(child: _StepIcon(state: step.state)),
           ),
           const SizedBox(width: 6),
@@ -160,14 +161,7 @@ class _StepIcon extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     switch (state) {
       case AiStepState.active:
-        return SizedBox(
-          width: 12,
-          height: 12,
-          child: CircularProgressIndicator(
-            strokeWidth: 1.8,
-            color: MarioColors.primary,
-          ),
-        );
+        return const MarioLoader(size: 16);
       case AiStepState.done:
         return Icon(Icons.check, size: 13, color: scheme.onSurfaceVariant);
       case AiStepState.failed:

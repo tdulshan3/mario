@@ -22,6 +22,7 @@ import '../../core/services/ai/llm_provider.dart';
 import '../../core/services/ai/llm_provider_config.dart';
 import '../../ui/colors.dart';
 import 'ai_state.dart';
+import '../../ui/widgets/mario_loader.dart';
 
 class AiSettingsSection extends ConsumerStatefulWidget {
   const AiSettingsSection({super.key});
@@ -39,11 +40,7 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
     return async.when(
       loading: () => const Padding(
         padding: EdgeInsets.all(12),
-        child: SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
+        child: MarioLoader(size: 26),
       ),
       error: (e, _) => Text('Could not load AI settings: $e',
           style: GoogleFonts.inter(fontSize: 12, color: scheme.error)),

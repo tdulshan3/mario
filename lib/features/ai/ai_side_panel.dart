@@ -20,6 +20,7 @@ import 'ai_state.dart';
 import 'ask_panel.dart';
 import 'quiz_panel.dart';
 import 'writing_panel.dart';
+import '../../ui/widgets/mario_loader.dart';
 
 /// The panel plus its collapsed strip. Renders nothing when closed except a
 /// hairline rail, so the editor keeps its full width.
@@ -69,13 +70,7 @@ class _PanelBody extends ConsumerWidget {
             const Divider(height: 1),
             Expanded(
               child: backends.when(
-                loading: () => const Center(
-                  child: SizedBox(
-                    width: 16,
-                    height: 16,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                ),
+                loading: () => const Center(child: MarioLoader(size: 30)),
                 error: (e, _) => _NeedsSetup(message: 'Could not load AI settings: $e'),
                 data: (configs) => configs.isEmpty
                     ? const _NeedsSetup(

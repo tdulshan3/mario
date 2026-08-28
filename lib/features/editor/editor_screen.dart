@@ -44,6 +44,7 @@ import 'image_asset_resolver.dart';
 import 'page_content_provider.dart';
 import 'paste_html_bridge.dart';
 import 'word_shortcuts.dart';
+import '../../ui/widgets/mario_loader.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
 /// Drive JSON is fetched, then mounts the AppFlowyEditor.
@@ -62,13 +63,7 @@ class EditorScreen extends ConsumerWidget {
     }
     final docAsync = ref.watch(pageContentProvider(fileId));
     return docAsync.when(
-      loading: () => const Center(
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-      ),
+      loading: () => const Center(child: MarioLoader(size: 30)),
       error: (e, _) => _UnavailableContent(message: 'Could not load page: $e'),
       data: (rawJson) => _Editor(
         key: ValueKey(fileId),

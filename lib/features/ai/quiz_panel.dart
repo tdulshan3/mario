@@ -31,6 +31,7 @@ import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
 import 'note_context.dart';
+import '../../ui/widgets/mario_loader.dart';
 
 class QuizPanel extends ConsumerStatefulWidget {
   const QuizPanel({super.key});
@@ -440,28 +441,17 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
 
   Widget _buildMarking(QuizSession session) {
     final scheme = Theme.of(context).colorScheme;
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          const SizedBox(
-              width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)),
-          const SizedBox(height: 12),
-          Text('Marking ${session.markingDone} of ${session.items.length}',
-              style: GoogleFonts.inter(
-                  fontSize: 12, color: scheme.onSurfaceVariant)),
-          const SizedBox(height: 10),
-          TextButton.icon(
-            onPressed: ref.read(quizSessionProvider.notifier).stopMarking,
-            icon: const Icon(Icons.stop_circle_outlined, size: 15),
-            label: const Text('Stop and show what is marked'),
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-              foregroundColor: scheme.onSurfaceVariant,
-              textStyle: GoogleFonts.inter(fontSize: 11.5),
-            ),
-          ),
-        ],
+    return MarioLoaderWithLabel(
+      label: 'Marking ${session.markingDone} of ${session.items.length}',
+      trailing: TextButton.icon(
+        onPressed: ref.read(quizSessionProvider.notifier).stopMarking,
+        icon: const Icon(Icons.stop_circle_outlined, size: 15),
+        label: const Text('Stop and show what is marked'),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          foregroundColor: scheme.onSurfaceVariant,
+          textStyle: GoogleFonts.inter(fontSize: 11.5),
+        ),
       ),
     );
   }

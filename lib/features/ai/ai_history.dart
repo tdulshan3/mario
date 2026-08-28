@@ -19,6 +19,7 @@ import '../../ui/colors.dart';
 import 'ai_markdown.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
+import '../../ui/widgets/mario_loader.dart';
 
 /// The notebook's saved artifacts, or empty when no page is open.
 final aiHistoryProvider = FutureProvider<NotebookAiData>((ref) async {
@@ -314,13 +315,8 @@ class _QuizHistoryTile extends ConsumerWidget {
 class _Loading extends StatelessWidget {
   const _Loading();
   @override
-  Widget build(BuildContext context) => const Center(
-        child: SizedBox(
-          width: 16,
-          height: 16,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-      );
+  Widget build(BuildContext context) =>
+      const Center(child: MarioLoader(size: 28));
 }
 
 class _Empty extends StatelessWidget {
