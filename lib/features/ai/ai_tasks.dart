@@ -297,6 +297,7 @@ class AiTasks {
       }
       prompt.writeln('Question: $question');
 
+      run.setUsage(contextTokens: provider.capabilities.contextTokens);
       var sawFirstToken = false;
       await for (final delta in provider.stream(
         LlmRequest(
@@ -310,6 +311,9 @@ class AiTasks {
         ),
         cancel: run.cancelToken,
       )) {
+        if (delta.promptTokens != null) {
+          run.setUsage(promptTokens: delta.promptTokens);
+        }
         if (delta.reasoning.isNotEmpty) run.appendReasoning(delta.reasoning);
         if (delta.text.isNotEmpty) {
           if (!sawFirstToken) {

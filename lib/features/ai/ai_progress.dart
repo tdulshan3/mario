@@ -144,6 +144,8 @@ class AiRunState {
     this.errorDetail,
     this.backendLabel,
     this.result,
+    this.promptTokens,
+    this.contextTokens,
   });
 
   final List<AiStep> steps;
@@ -168,6 +170,13 @@ class AiRunState {
   /// model than from Claude and the user deserves to know which they got.
   final String? backendLabel;
 
+  /// How much of the context window this request actually used, when the
+  /// server reported it. Null on a backend that does not.
+  final int? promptTokens;
+
+  /// The window it was measured against.
+  final int? contextTokens;
+
   /// A structured payload for runs whose output is not prose — quiz generation
   /// puts its validated `List<QuizItem>` here while [answer] holds the title.
   /// Untyped because [AiRun] is shared by every task and must not depend on any
@@ -190,6 +199,8 @@ class AiRunState {
     String? errorDetail,
     String? backendLabel,
     Object? result,
+    int? promptTokens,
+    int? contextTokens,
   }) =>
       AiRunState(
         steps: steps ?? this.steps,
@@ -201,6 +212,8 @@ class AiRunState {
         errorDetail: errorDetail ?? this.errorDetail,
         backendLabel: backendLabel ?? this.backendLabel,
         result: result ?? this.result,
+        promptTokens: promptTokens ?? this.promptTokens,
+        contextTokens: contextTokens ?? this.contextTokens,
       );
 }
 
@@ -313,6 +326,15 @@ class AiRun extends ValueNotifier<AiRunState> {
   void setBackend(String label) {
     if (_disposed) return;
     value = value.copyWith(backendLabel: label);
+  }
+
+  /// Records how much of the window the request used, once the server says.
+  void setUsage({int? promptTokens, int? contextTokens}) {
+    if (_disposed) return;
+    value = value.copyWith(
+      promptTokens: promptTokens,
+      contextTokens: contextTokens,
+    );
   }
 
   /// Attaches the structured output of a task. See [AiRunState.result].

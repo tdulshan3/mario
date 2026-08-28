@@ -23,6 +23,7 @@ import '../settings/settings_screen.dart';
 import '../settings/settings_state.dart';
 import 'ai_state.dart';
 import 'agent_panel.dart';
+import 'model_bar.dart';
 import 'ask_panel.dart';
 import 'quiz_panel.dart';
 import 'writing_panel.dart';
@@ -92,6 +93,10 @@ class _PanelBody extends ConsumerWidget {
               onClose: notifier.close,
             ),
             const Divider(height: 1),
+            // Which model is answering, and how much of its window the last
+            // request used. Above the tabs' content because it applies to all
+            // of them.
+            _ActiveModelBar(tab: tab),
             Expanded(
               child: backends.when(
                 loading: () => const Center(child: MarioLoader(size: 30)),
@@ -339,5 +344,27 @@ class _NeedsSetup extends ConsumerWidget {
     await backends.saveConfigs([...backends.configs, config]);
     await backends.setActive(config.id);
     ref.invalidate(aiConfigsProvider);
+  }
+}
+
+/// The model bar, fed whichever tab's run is currently live.
+///
+/// Each tab keeps its own run (see ai_session_state.dart), so the usage figure
+/// has to follow the tab you are looking at — showing the Ask tab's numbers
+/// while the Quiz tab is generating would be worse than showing none.
+class _ActiveModelBar extends ConsumerWidget {
+  const _ActiveModelBar({required this.tab});
+
+  final AiPanelTab tab;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final run = switch (tab) {
+      AiPanelTab.ask => ref.watch(askSessionProvider).run,
+      AiPanelTab.quiz => ref.watch(quizSessionProvider).run,
+      AiPanelTab.writing => ref.watch(writingSessionProvider).run,
+      AiPanelTab.agent => ref.watch(agentSessionProvider).run,
+    };
+    return ModelBar(run: run);
   }
 }

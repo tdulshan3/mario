@@ -212,11 +212,25 @@ enum LlmEffort { low, medium, high }
 /// separate thinking channel some servers emit (Ollama's `thinking`, OpenAI's
 /// reasoning summaries) which must never be mistaken for the answer.
 class LlmDelta {
-  const LlmDelta(
-      {this.text = '', this.reasoning = '', this.toolCalls = const []});
+  const LlmDelta({
+    this.text = '',
+    this.reasoning = '',
+    this.toolCalls = const [],
+    this.promptTokens,
+    this.completionTokens,
+    this.finishReason,
+  });
+
   final String text;
   final String reasoning;
   final List<LlmToolCall> toolCalls;
+
+  /// Usage and stop reason, when the server reports them. On a streamed reply
+  /// they arrive in a final chunk carrying no text, which is why they live on
+  /// the delta rather than only on [LlmResponse].
+  final int? promptTokens;
+  final int? completionTokens;
+  final String? finishReason;
 }
 
 class LlmResponse {

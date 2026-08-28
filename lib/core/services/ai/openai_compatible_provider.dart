@@ -163,6 +163,11 @@ class OpenAiCompatibleProvider implements LlmProvider {
       'max_tokens': req.maxTokens,
       'temperature': req.temperature,
       if (stream) 'stream': true,
+      // Ask for usage on the streaming path too. OpenAI and vLLM honour it,
+      // llama-server and Ollama ignore what they do not know — and without it
+      // a streamed reply reports no token counts at all, so the panel could
+      // never say how much of the context window a request actually used.
+      if (stream) 'stream_options': {'include_usage': true},
       if (req.stopSequences.isNotEmpty) 'stop': req.stopSequences,
     };
 
@@ -303,6 +308,16 @@ class OpenAiCompatibleProvider implements LlmProvider {
           continue; // keep-alive or a partial frame; the next line completes it
         }
 
+        // The usage chunk carries an empty `choices` list, so it has to be
+        // read before the early return below.
+        final usage = asMap(chunk['usage']);
+        if (usage != null) {
+          yield LlmDelta(
+            promptTokens: asInt(usage['prompt_tokens']),
+            completionTokens: asInt(usage['completion_tokens']),
+          );
+        }
+
         final choices = chunk['choices'] as List?;
         if (choices == null || choices.isEmpty) continue;
         final choice = choices.first as Map<String, dynamic>;
@@ -371,15 +386,26 @@ class OpenAiCompatibleProvider implements LlmProvider {
       final text = StringBuffer();
       final reasoning = StringBuffer();
       final calls = <LlmToolCall>[];
+      int? promptTokens;
+      int? completionTokens;
+      String? finishReason;
       await for (final d in stream(request, cancel: cancel)) {
         text.write(d.text);
         reasoning.write(d.reasoning);
         if (d.toolCalls.isNotEmpty) calls.addAll(d.toolCalls);
+        promptTokens ??= d.promptTokens;
+        completionTokens ??= d.completionTokens;
+        finishReason ??= d.finishReason;
       }
       return LlmResponse(
         text: text.toString(),
         reasoning: reasoning.toString(),
         toolCalls: calls,
+        promptTokens: promptTokens,
+        completionTokens: completionTokens,
+        // Without this the streaming path could never diagnose a reply cut off
+        // by the token ceiling, which is the usual cause of unparseable JSON.
+        finishReason: finishReason,
       );
     }
 

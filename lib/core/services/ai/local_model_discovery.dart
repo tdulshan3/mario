@@ -52,21 +52,37 @@ class DiscoveredEndpoint {
   bool get isEmpty => models.isEmpty;
 
   /// A config ready to save, for the model the user picked.
-  LlmProviderConfig toConfig(String model, {required String id}) =>
-      LlmProviderConfig(
-        id: id,
-        label: '$serverName · $model',
-        kind: kind,
-        baseUrl: baseUrl,
-        model: model,
-      );
+  LlmProviderConfig toConfig(String model, {required String id}) {
+    final found = models.where((m) => m.name == model).firstOrNull;
+    return LlmProviderConfig(
+      id: id,
+      label: '$serverName · $model',
+      kind: kind,
+      baseUrl: baseUrl,
+      model: model,
+      // Carried over where the server told us, so a 262k model is not treated
+      // as an 8k one from the moment it is added.
+      contextTokens: found?.contextLength,
+    );
+  }
 }
 
 class DiscoveredModel {
-  const DiscoveredModel({required this.name, this.sizeBytes, this.parameters});
+  const DiscoveredModel({
+    required this.name,
+    this.sizeBytes,
+    this.parameters,
+    this.contextLength,
+  });
 
   final String name;
   final int? sizeBytes;
+
+  /// The model's real context window, where the server reports one. Far better
+  /// than the per-kind guess: Ollama's default assumption is 8k, and a model
+  /// like qwen3.5 actually carries 262k — a thirty-fold difference in how much
+  /// of a section fits in one request.
+  final int? contextLength;
 
   /// Reported parameter count, e.g. "4.0B". Ollama supplies it; most others
   /// do not.
@@ -196,10 +212,12 @@ List<DiscoveredModel> parseOllamaTags(String body) {
   for (final m in asMapList(json['models'])) {
     final name = asString(m['name']) ?? asString(m['model']);
     if (name == null || name.trim().isEmpty) continue;
+    final details = asMap(m['details']);
     out.add(DiscoveredModel(
       name: name.trim(),
       sizeBytes: asInt(m['size']),
-      parameters: asString(asMap(m['details'])?['parameter_size']),
+      parameters: asString(details?['parameter_size']),
+      contextLength: asInt(details?['context_length']),
     ));
   }
   out.sort((a, b) => (b.sizeBytes ?? 0).compareTo(a.sizeBytes ?? 0));
