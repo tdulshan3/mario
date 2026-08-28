@@ -17,6 +17,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mario/features/ai/agent_executor.dart';
 import 'package:mario/features/ai/ai_state.dart';
 import 'package:mario/features/ai/note_context.dart';
 
@@ -48,6 +49,11 @@ class _FakeEditorState extends ConsumerState<_FakeEditor> {
         readAboveCursor: () => const NoteText(title: '', blocks: []),
         insertMarkdown: (_) async => true,
         applyGrammar: (_) async => true,
+        snapshot: () =>
+            const AgentSnapshot(document: {}, title: 'fake'),
+        restore: (_) async => true,
+        applyAgentAction: (_) async => true,
+        renamePage: (_) async => true,
       );
     });
   }

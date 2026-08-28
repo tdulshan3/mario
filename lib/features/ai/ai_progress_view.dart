@@ -78,7 +78,8 @@ class _StepRow extends StatelessWidget {
       AiStepState.failed => scheme.error,
       // Pending and skipped both read as "not the story right now"; skipped
       // additionally gets a strikethrough below so the two are distinguishable.
-      AiStepState.pending || AiStepState.skipped =>
+      AiStepState.pending ||
+      AiStepState.skipped =>
         scheme.onSurfaceVariant.withValues(alpha: 0.45),
     };
 
@@ -109,8 +110,7 @@ class _StepRow extends StatelessWidget {
                     height: 1.3,
                     color: color,
                     fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
-                    decoration:
-                        isSkipped ? TextDecoration.lineThrough : null,
+                    decoration: isSkipped ? TextDecoration.lineThrough : null,
                   ),
                 ),
                 if (step.detail != null && !isSkipped)
@@ -125,8 +125,7 @@ class _StepRow extends StatelessWidget {
                         height: 1.25,
                         color: isFailed
                             ? scheme.error
-                            : scheme.onSurfaceVariant
-                                .withValues(alpha: 0.75),
+                            : scheme.onSurfaceVariant.withValues(alpha: 0.75),
                       ),
                     ),
                   ),
@@ -167,8 +166,8 @@ class _StepIcon extends StatelessWidget {
       case AiStepState.failed:
         return Icon(Icons.close, size: 13, color: scheme.error);
       case AiStepState.skipped:
-        return Icon(Icons.remove, size: 12,
-            color: scheme.onSurfaceVariant.withValues(alpha: 0.4));
+        return Icon(Icons.remove,
+            size: 12, color: scheme.onSurfaceVariant.withValues(alpha: 0.4));
       case AiStepState.pending:
         return Container(
           width: 6,
@@ -184,6 +183,7 @@ class _StepIcon extends StatelessWidget {
 
 String _formatElapsed(Duration d) {
   if (d.inMilliseconds < 1000) return '${d.inMilliseconds}ms';
-  if (d.inSeconds < 60) return '${(d.inMilliseconds / 1000).toStringAsFixed(1)}s';
+  if (d.inSeconds < 60)
+    return '${(d.inMilliseconds / 1000).toStringAsFixed(1)}s';
   return '${d.inMinutes}m ${d.inSeconds % 60}s';
 }

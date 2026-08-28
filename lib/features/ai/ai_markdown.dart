@@ -100,10 +100,11 @@ class AiMarkdown extends StatelessWidget {
         h3Padding: const EdgeInsets.only(top: 8, bottom: 2),
         listIndent: 18,
         tableBorder: TableBorder.all(color: scheme.outlineVariant, width: 1),
-        tableCellsPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        tableCellsPadding:
+            const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
         tableBody: body.copyWith(fontSize: fontSize - 1),
-        tableHead: body.copyWith(
-            fontSize: fontSize - 1, fontWeight: FontWeight.w600),
+        tableHead:
+            body.copyWith(fontSize: fontSize - 1, fontWeight: FontWeight.w600),
       ),
     );
   }

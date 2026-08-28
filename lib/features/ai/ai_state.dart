@@ -15,6 +15,9 @@ import '../../core/services/ai/local_model_discovery.dart';
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/web_search_service.dart';
 import '../../core/services/page_content_repository.dart';
+import 'agent_actions.dart';
+import 'agent_executor.dart';
+import 'agent_task.dart';
 import 'ai_tasks.dart';
 import 'grammar_check.dart';
 import 'note_context.dart';
@@ -33,13 +36,16 @@ final sectionReaderProvider = Provider<SectionReader>((ref) => SectionReader(
       ref.watch(aiArtifactStoreProvider),
     ));
 
+final agentTaskProvider =
+    Provider<AgentTask>((ref) => AgentTask(ref.watch(llmServiceProvider)));
+
 final aiTasksProvider = Provider<AiTasks>((ref) => AiTasks(
       llm: ref.watch(llmServiceProvider),
       search: ref.watch(webSearchProvider),
     ));
 
-final grammarCheckerProvider =
-    Provider<GrammarChecker>((ref) => GrammarChecker(ref.watch(llmServiceProvider)));
+final grammarCheckerProvider = Provider<GrammarChecker>(
+    (ref) => GrammarChecker(ref.watch(llmServiceProvider)));
 
 /// How the Writing tab applies a fix — null when no page is open.
 final grammarApplierProvider =
@@ -57,8 +63,7 @@ final localModelsProvider =
 });
 
 /// The configured backends, re-read whenever settings change.
-final aiConfigsProvider =
-    FutureProvider<List<LlmProviderConfig>>((ref) async {
+final aiConfigsProvider = FutureProvider<List<LlmProviderConfig>>((ref) async {
   final backends = ref.watch(aiBackendsProvider);
   await backends.load();
   return backends.configs;
@@ -82,6 +87,10 @@ class AiEditorBridge {
     required this.readAboveCursor,
     required this.insertMarkdown,
     required this.applyGrammar,
+    required this.snapshot,
+    required this.restore,
+    required this.applyAgentAction,
+    required this.renamePage,
   });
 
   final String pageId;
@@ -103,6 +112,21 @@ class AiEditorBridge {
   /// Applies one proofreading fix. False when the text it targets has since
   /// changed — a stale suggestion, not an error.
   final Future<bool> Function(GrammarSuggestion) applyGrammar;
+
+  /// Captures the page exactly as it is, so an agent run can be undone in one
+  /// step rather than N presses of Ctrl-Z.
+  final AgentSnapshot Function() snapshot;
+
+  /// Puts a snapshot back, discarding everything a run did.
+  final Future<bool> Function(AgentSnapshot) restore;
+
+  /// Performs one validated agent action. False when it could not be applied —
+  /// a target block edited away between planning and running.
+  final Future<bool> Function(AgentAction) applyAgentAction;
+
+  /// Renames the page. Separate from [applyAgentAction] because the title is
+  /// index metadata in Firestore, not a block in the document.
+  final Future<bool> Function(String title) renamePage;
 }
 
 /// Text the user has highlighted in the editor, or null when nothing is
@@ -114,11 +138,10 @@ class AiEditorBridge {
 final editorSelectionProvider = StateProvider<String?>((ref) => null);
 
 /// Null whenever no page is open.
-final aiEditorBridgeProvider =
-    StateProvider<AiEditorBridge?>((ref) => null);
+final aiEditorBridgeProvider = StateProvider<AiEditorBridge?>((ref) => null);
 
 /// Which tab of the side panel is showing.
-enum AiPanelTab { ask, quiz, writing }
+enum AiPanelTab { ask, quiz, writing, agent }
 
 /// Which tab is showing and whether the panel is open — and nothing else.
 ///
@@ -187,7 +210,6 @@ class AiPanelNotifier extends Notifier<AiPanelState> {
     if (q != null) state = state.copyWith(clearPendingQuestion: true);
     return q;
   }
-
 }
 
 final aiPanelProvider =

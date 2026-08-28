@@ -34,6 +34,7 @@ import 'package:provider/provider.dart';
 import '../../../core/services/asset_sync_service.dart';
 import '../../../core/services/ocr_service.dart';
 import '../../../ui/colors.dart';
+import '../../../ui/widgets/mario_loader.dart';
 import '_safe_transaction.dart';
 import 'block_context_menu.dart';
 
@@ -373,14 +374,7 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
       child: Row(
         children: [
           if (icon == null)
-            SizedBox(
-              width: 20,
-              height: 20,
-              child: Padding(
-                padding: const EdgeInsets.all(3),
-                child: CircularProgressIndicator(strokeWidth: 1.5, color: muted),
-              ),
-            )
+            MarioLoader(size: 20, color: muted)
           else
             Icon(icon, size: 20, color: muted),
           const SizedBox(width: 10),
@@ -470,11 +464,7 @@ class _MarioImageBlockWidgetState extends State<MarioImageBlockWidget>
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  const SizedBox(
-                    width: 12,
-                    height: 12,
-                    child: CircularProgressIndicator(strokeWidth: 1.5),
-                  ),
+                  const MarioLoader(size: 18),
                   const SizedBox(width: 8),
                   Text(
                     'Reading text from image…',

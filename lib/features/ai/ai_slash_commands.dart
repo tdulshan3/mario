@@ -135,11 +135,9 @@ Future<bool> insertMarkdownIntoDocument(
   // Anchor at the caret when there is one; otherwise append to the end, which
   // is what "insert into the page" should mean when the page has no focus.
   final selection = editorState.selection;
-  final anchor = selection == null
-      ? null
-      : editorState.getNodeAtPath(selection.end.path);
-  final path = anchor?.path.next ??
-      [editorState.document.root.children.length];
+  final anchor =
+      selection == null ? null : editorState.getNodeAtPath(selection.end.path);
+  final path = anchor?.path.next ?? [editorState.document.root.children.length];
 
   return safeApply(editorState, (tx) {
     tx.insertNodes(path, nodes);

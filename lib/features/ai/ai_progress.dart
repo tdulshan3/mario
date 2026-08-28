@@ -253,8 +253,8 @@ class AiRun extends ValueNotifier<AiRunState> {
       if (i == target) {
         steps.add(s.copyWith(state: AiStepState.active, detail: detail));
       } else if (s.state == AiStepState.active) {
-        steps.add(s.copyWith(
-            state: AiStepState.done, elapsed: now - _stepStartedAt));
+        steps.add(
+            s.copyWith(state: AiStepState.done, elapsed: now - _stepStartedAt));
       } else if (i < target && s.state == AiStepState.pending) {
         steps.add(s.copyWith(state: AiStepState.skipped));
       } else {
@@ -356,8 +356,7 @@ class AiRun extends ValueNotifier<AiRunState> {
         if (s.state == AiStepState.active)
           s.copyWith(state: state, elapsed: now - _stepStartedAt)
         // Anything never reached is skipped, not left spinning forever.
-        else if (s.state == AiStepState.pending &&
-            state != AiStepState.done)
+        else if (s.state == AiStepState.pending && state != AiStepState.done)
           s.copyWith(state: AiStepState.skipped)
         else if (s.state == AiStepState.pending)
           s.copyWith(state: AiStepState.skipped)

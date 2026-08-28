@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
 import 'auth_notifier.dart';
+import '../../ui/widgets/mario_loader.dart';
 import '../../ui/widgets/mario_logo.dart';
 
 class LoginScreen extends ConsumerWidget {
@@ -57,11 +58,7 @@ class LoginScreen extends ConsumerWidget {
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
+                        const MarioLoader(size: 18),
                         const SizedBox(width: 12),
                         Text(
                           'Restoring session…',
@@ -84,13 +81,9 @@ class LoginScreen extends ConsumerWidget {
                           : () =>
                               ref.read(authNotifierProvider.notifier).signIn(),
                       icon: auth.isLoading
-                          ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Color(0xFF1A1A1A),
-                              ),
+                          ? const MarioLoader(
+                              size: 18,
+                              color: Color(0xFF1A1A1A),
                             )
                           : const Icon(Icons.login, size: 18),
                       label: const Text('Sign in with Google'),

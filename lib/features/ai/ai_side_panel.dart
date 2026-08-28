@@ -7,7 +7,8 @@
 /// And an answer half-streamed should survive the user clicking another page
 /// to check something, which a panel owned by the page cannot do.
 ///
-/// Three tabs: Ask (which `/ask` and `/summary` drive), Quiz, and Writing.
+/// Four tabs: Ask (which `/ask` and `/summary` drive), Quiz, Writing, and Do
+/// — the agent, which edits the page directly.
 library;
 
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ import '../../ui/widgets/mario_loader.dart';
 import '../settings/settings_screen.dart';
 import '../settings/settings_state.dart';
 import 'ai_state.dart';
+import 'agent_panel.dart';
 import 'ask_panel.dart';
 import 'quiz_panel.dart';
 import 'writing_panel.dart';
@@ -101,6 +103,7 @@ class _PanelBody extends ConsumerWidget {
                         AiPanelTab.ask => const AskPanel(),
                         AiPanelTab.quiz => const QuizPanel(),
                         AiPanelTab.writing => const WritingPanel(),
+                        AiPanelTab.agent => const AgentPanel(),
                       },
               ),
             ),
@@ -148,6 +151,13 @@ class _Header extends StatelessWidget {
             icon: Icons.spellcheck,
             selected: tab == AiPanelTab.writing,
             onTap: () => onTab(AiPanelTab.writing),
+          ),
+          const SizedBox(width: 6),
+          _TabChip(
+            label: 'Do',
+            icon: Icons.auto_fix_high,
+            selected: tab == AiPanelTab.agent,
+            onTap: () => onTab(AiPanelTab.agent),
           ),
           const Spacer(),
           IconButton(

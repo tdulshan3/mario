@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/theme.dart';
+import '../../ui/widgets/mario_loader.dart';
 import '../ai/ai_settings_section.dart';
 import '../auth/auth_notifier.dart';
 import 'settings_state.dart';
@@ -38,7 +39,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         title: const Text('Settings'),
       ),
       body: settings == null
-          ? const Center(child: CircularProgressIndicator())
+          ? const Center(child: MarioLoader())
           : ListView(
               padding: const EdgeInsets.all(16),
               children: [

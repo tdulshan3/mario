@@ -85,7 +85,6 @@ class _WritingPanelState extends ConsumerState<WritingPanel> {
       );
     }
 
-
     return Column(
       children: [
         Expanded(
@@ -116,8 +115,7 @@ class _WritingPanelState extends ConsumerState<WritingPanel> {
                         _SuggestionCard(
                           suggestion: session.suggestions[i],
                           outcome: session.outcomes[i],
-                          onAccept: () =>
-                              _accept(i, session.suggestions[i]),
+                          onAccept: () => _accept(i, session.suggestions[i]),
                           onIgnore: () => ref
                               .read(writingSessionProvider.notifier)
                               .resolve(i, SuggestionOutcome.ignored),

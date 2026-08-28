@@ -30,6 +30,7 @@ import '../../core/services/ai/llm_types.dart';
 import '../../core/services/ai/web_search_service.dart';
 import 'ai_progress.dart';
 import 'note_context.dart';
+import 'note_style.dart';
 
 /// Where a summary or answer came from, and what to call it.
 class AiTaskContext {
@@ -95,7 +96,8 @@ class AiTasks {
       run.begin(AiStepKind.thinking);
       final result = await llm.structured(
         request: LlmRequest(
-          system: _summarySystem,
+          system: '$_summarySystem\n\n'
+              '${noteStyleFor(NoteStyleContext.summary)}',
           messages: [
             LlmMessage.user('Summarise these notes.\n\n${trimmed.render()}'),
           ],
@@ -262,7 +264,8 @@ class AiTasks {
       var sawFirstToken = false;
       await for (final delta in provider.stream(
         LlmRequest(
-          system: sources.isEmpty ? _askSystem : _askWithWebSystem,
+          system: '${sources.isEmpty ? _askSystem : _askWithWebSystem}\n\n'
+              '${noteStyleFor(NoteStyleContext.insertedAnswer)}',
           messages: [LlmMessage.user(prompt.toString())],
           maxTokens: 1200,
           effort: LlmEffort.low,
@@ -313,7 +316,8 @@ class AiTasks {
           var restarted = false;
           await for (final delta in provider.stream(
             LlmRequest(
-              system: _askWithWebSystem,
+              system: '$_askWithWebSystem\n\n'
+                  '${noteStyleFor(NoteStyleContext.insertedAnswer)}',
               messages: [
                 LlmMessage.user('$noteText\n\n'
                     '${renderSourcesForPrompt(sources)}\n'
@@ -324,7 +328,8 @@ class AiTasks {
             ),
             cancel: run.cancelToken,
           )) {
-            if (delta.reasoning.isNotEmpty) run.appendReasoning(delta.reasoning);
+            if (delta.reasoning.isNotEmpty)
+              run.appendReasoning(delta.reasoning);
             if (delta.text.isNotEmpty) {
               if (!restarted) {
                 restarted = true;
@@ -757,7 +762,8 @@ extension QuizTasks on AiTasks {
 
       final result = await llm.structured(
         request: LlmRequest(
-          system: _quizSystem,
+          system: '$_quizSystem\n\n'
+              '${noteStyleFor(NoteStyleContext.quizFeedback)}',
           messages: [
             // The note goes first and is byte-identical every round, so a
             // server doing prefix caching (llama.cpp and Ollama both do)
@@ -854,7 +860,8 @@ extension QuizTasks on AiTasks {
 
     final response = await provider.complete(
       LlmRequest(
-        system: _gradingSystem,
+        system: '$_gradingSystem\n\n'
+            '${noteStyleFor(NoteStyleContext.quizFeedback)}',
         messages: [
           LlmMessage.user(
             'Question:\n${item.question}\n\n'

@@ -16,6 +16,7 @@ import '../../core/models/section.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
+import '../../ui/widgets/mario_loader.dart';
 import '../export/markdown_exporter.dart';
 import '../export/pdf_exporter.dart';
 import 'dialogs/notebook_dialog.dart';
@@ -179,13 +180,7 @@ class _SectionListState extends ConsumerState<_SectionList> {
     final scheme = Theme.of(context).colorScheme;
 
     return sectionsAsync.when(
-      loading: () => const Center(
-        child: SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(strokeWidth: 2),
-        ),
-      ),
+      loading: () => const Center(child: MarioLoader(size: 18)),
       error: (e, _) => Padding(
         padding: const EdgeInsets.all(16),
         child: Text('$e',
@@ -415,10 +410,7 @@ class _PageListState extends ConsumerState<_PageList> {
     return pagesAsync.when(
       loading: () => const Padding(
         padding: EdgeInsets.symmetric(vertical: 12),
-        child: Center(
-          child: SizedBox(
-              width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
-        ),
+        child: Center(child: MarioLoader(size: 18)),
       ),
       error: (e, _) => Padding(
         padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 36),

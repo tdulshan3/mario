@@ -482,11 +482,8 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
         TextButton.icon(
           onPressed: _testing ? null : _test,
           icon: _testing
-              ? const SizedBox(
-                  width: 12,
-                  height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.wifi_tethering, size: 16),
+              ? const MarioLoader(size: 18)
+              : const Icon(Icons.wifi_tethering, size: 18),
           label: const Text('Test'),
         ),
         FilledButton(onPressed: _save, child: const Text('Save')),

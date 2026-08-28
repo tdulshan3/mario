@@ -23,6 +23,8 @@ import '../../ui/colors.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
 import '../drawing/stroke.dart';
+import '../../core/services/sync_service.dart';
+import '../ai/agent_executor.dart';
 import '../ai/ai_slash_commands.dart';
 import '../ai/grammar_check.dart';
 import '../ai/ai_state.dart';
@@ -529,6 +531,19 @@ class _EditorState extends ConsumerState<_Editor> {
           insertMarkdownIntoDocument(_editorState, markdown),
       applyGrammar: (suggestion) =>
           applyGrammarSuggestion(_editorState, suggestion),
+      snapshot: () => AgentExecutor(_editorState).snapshot(widget.page.title),
+      restore: (snapshot) async {
+        final ok = await AgentExecutor(_editorState).restore(snapshot);
+        // The title lives on the index entry, not in the document, so it has
+        // to be put back separately.
+        if (ok && snapshot.title != widget.page.title) {
+          await _renamePage(snapshot.title);
+        }
+        return ok;
+      },
+      applyAgentAction: (action) =>
+          AgentExecutor(_editorState).apply(action),
+      renamePage: _renamePage,
     );
   }
 
@@ -588,6 +603,24 @@ class _EditorState extends ConsumerState<_Editor> {
       _selectionController?.state =
           text.length >= _minQuotableLength ? text : null;
     });
+  }
+
+  /// Renames the page.
+  ///
+  /// Writes the index entry rather than the document: the title is Firestore
+  /// metadata that the nav tree and the page header both read, and the Drive
+  /// payload picks it up on the next autosave.
+  Future<bool> _renamePage(String title) async {
+    final clean = title.trim();
+    if (clean.isEmpty || clean == widget.page.title) return false;
+    try {
+      await GetIt.I<SyncService>().updatePage(
+        widget.page.copyWith(title: clean, updatedAt: DateTime.now()),
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   NoteText _readPageText() =>
@@ -1007,13 +1040,7 @@ class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
     try {
       await _ensureCef().timeout(const Duration(seconds: 15));
       final c = WebviewManager().createWebView(
-        loading: const Center(
-          child: SizedBox(
-            width: 18,
-            height: 18,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-        ),
+        loading: const Center(child: MarioLoader(size: 18)),
       );
       final url = await _writeTempFile(widget.html.value);
       await c.initialize(url);
@@ -1164,13 +1191,7 @@ class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
                     ),
                   )
                 : controller == null
-                    ? const Center(
-                        child: SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                      )
+                    ? const Center(child: MarioLoader(size: 18))
                     : ValueListenableBuilder<bool>(
                         valueListenable: controller,
                         builder: (context, ready, _) => SizedBox.expand(

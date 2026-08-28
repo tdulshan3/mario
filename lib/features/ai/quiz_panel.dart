@@ -80,10 +80,12 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
     final store = ref.read(aiArtifactStoreProvider);
     final scope = ref.read(quizSessionProvider).scope;
     final pages = scope == QuizScope.section
-        ? (ref.read(pagesStreamProvider((
-              notebookId: bridge.notebookId,
-              sectionId: bridge.sectionId,
-            ))).valueOrNull ??
+        ? (ref
+                .read(pagesStreamProvider((
+                  notebookId: bridge.notebookId,
+                  sectionId: bridge.sectionId,
+                )))
+                .valueOrNull ??
             const <NotePage>[])
         : const <NotePage>[];
 
@@ -98,9 +100,9 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
           throw StateError('This section has no pages yet.');
         }
         final read = await reader.read(
-              notebookId: bridge.notebookId,
-              pages: pages,
-            );
+          notebookId: bridge.notebookId,
+          pages: pages,
+        );
         if (!mounted) return;
         note = read.merge(title: 'Section');
         scopeLabel = read.failed.isEmpty
@@ -114,11 +116,11 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
 
       final current = ref.read(quizSessionProvider);
       final run = tasks.generateQuiz(
-            note: note,
-            scopeLabel: scopeLabel,
-            mcqCount: current.mcqCount,
-            essayCount: current.essayCount,
-          );
+        note: note,
+        scopeLabel: scopeLabel,
+        mcqCount: current.mcqCount,
+        essayCount: current.essayCount,
+      );
       session.startGenerating(run);
 
       // `session` is captured, not read from `ref` in the callback — the run
@@ -406,10 +408,9 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
                   item: session.items[i],
                   selectedOption:
                       int.tryParse(session.answers[session.items[i].id] ?? ''),
-                  essayController:
-                      session.items[i].kind == QuizItemKind.essay
-                          ? _essayController(session.items[i].id)
-                          : null,
+                  essayController: session.items[i].kind == QuizItemKind.essay
+                      ? _essayController(session.items[i].id)
+                      : null,
                   onOption: (v) => ref
                       .read(quizSessionProvider.notifier)
                       .answer(session.items[i].id, '$v'),
@@ -477,8 +478,7 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
                   item: session.items[i],
                   grade: session.grades[session.items[i].id],
                   answer: session.answers[session.items[i].id] ?? '',
-                  onOverride: (v) =>
-                      _overrideMark(session.items[i].id, v),
+                  onOverride: (v) => _overrideMark(session.items[i].id, v),
                 ),
             ],
           ),
@@ -773,7 +773,8 @@ class _ResultCard extends StatelessWidget {
                 style: GoogleFonts.inter(
                     fontSize: 12, height: 1.4, color: scheme.onSurfaceVariant)),
           ],
-          if (g != null && (g.matchedPoints.isNotEmpty || g.missedPoints.isNotEmpty)) ...[
+          if (g != null &&
+              (g.matchedPoints.isNotEmpty || g.missedPoints.isNotEmpty)) ...[
             const SizedBox(height: 8),
             for (final p in g.matchedPoints)
               _RubricLine(text: p, matched: true),
@@ -992,10 +993,13 @@ class _ScopeOption extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Icon(
-              selected ? Icons.radio_button_checked : Icons.radio_button_unchecked,
+              selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_unchecked,
               size: 16,
-              color:
-                  selected ? MarioColors.primaryPressed : scheme.onSurfaceVariant,
+              color: selected
+                  ? MarioColors.primaryPressed
+                  : scheme.onSurfaceVariant,
             ),
             const SizedBox(width: 8),
             Expanded(

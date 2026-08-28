@@ -129,7 +129,10 @@ class SectionReader {
     ]);
 
     return SectionRead(
-      pages: [for (final r in results) if (r != null) r],
+      pages: [
+        for (final r in results)
+          if (r != null) r
+      ],
       failed: failed,
     );
   }

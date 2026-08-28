@@ -72,8 +72,7 @@ class GrammarChecker {
 
   final LlmService llm;
 
-  static const _system =
-      'You proofread a student\'s own notes.\n'
+  static const _system = 'You proofread a student\'s own notes.\n'
       'Report only clear errors: misspellings, subject-verb disagreement, '
       'missing or wrong punctuation, and sentences that do not parse.\n'
       'Do NOT rewrite for style, do NOT change British to American spelling or '
@@ -178,9 +177,14 @@ class GrammarChecker {
   }
 
   static bool _isProse(NoteBlock b) =>
-      const {'paragraph', 'heading', 'quote', 'bulleted_list', 'numbered_list',
-              'todo_list'}
-          .contains(b.type) &&
+      const {
+        'paragraph',
+        'heading',
+        'quote',
+        'bulleted_list',
+        'numbered_list',
+        'todo_list'
+      }.contains(b.type) &&
       b.text.trim().length > 2;
 }
 

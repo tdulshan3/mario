@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../core/services/ai/llm_types.dart';
+import 'agent_executor.dart';
 import 'ai_progress.dart';
 import 'ai_tasks.dart';
 import 'grammar_check.dart';
@@ -210,8 +211,7 @@ class QuizSession {
   /// marks must be filed against the quiz's own notebook.
   final String? notebookId;
 
-  double get awarded =>
-      grades.values.fold(0.0, (sum, g) => sum + g.effective);
+  double get awarded => grades.values.fold(0.0, (sum, g) => sum + g.effective);
   int get outOf => grades.values.fold(0, (sum, g) => sum + g.outOf);
   bool get anyProvisional => grades.values.any((g) => g.isProvisional);
 
@@ -250,9 +250,8 @@ class QuizSession {
         markingDone: markingDone ?? this.markingDone,
         error: clearError ? null : (error ?? this.error),
         attemptId: clearAttemptId ? null : (attemptId ?? this.attemptId),
-        markingCancel: clearMarkingCancel
-            ? null
-            : (markingCancel ?? this.markingCancel),
+        markingCancel:
+            clearMarkingCancel ? null : (markingCancel ?? this.markingCancel),
         notebookId: notebookId ?? this.notebookId,
       );
 }
@@ -447,3 +446,85 @@ class WritingSessionNotifier extends Notifier<WritingSession> {
 final writingSessionProvider =
     NotifierProvider<WritingSessionNotifier, WritingSession>(
         WritingSessionNotifier.new);
+
+// -------------------------------------------------------------------- Agent
+
+@immutable
+class AgentSession {
+  const AgentSession({
+    this.run,
+    this.draft = '',
+    this.instruction = '',
+    this.snapshot,
+    this.undone = false,
+    this.isUndoing = false,
+  });
+
+  final AiRun? run;
+  final String draft;
+  final String instruction;
+
+  /// The page as it was before the run touched it. Held for exactly as long as
+  /// the result is on screen — it is what makes "Undo all" one press rather
+  /// than N presses of Ctrl-Z, which is unusable when the user cannot know
+  /// how many edits a plan made.
+  final AgentSnapshot? snapshot;
+
+  final bool undone;
+  final bool isUndoing;
+
+  AgentSession copyWith({
+    AiRun? run,
+    bool clearRun = false,
+    String? draft,
+    String? instruction,
+    AgentSnapshot? snapshot,
+    bool clearSnapshot = false,
+    bool? undone,
+    bool? isUndoing,
+  }) =>
+      AgentSession(
+        run: clearRun ? null : (run ?? this.run),
+        draft: draft ?? this.draft,
+        instruction: instruction ?? this.instruction,
+        snapshot: clearSnapshot ? null : (snapshot ?? this.snapshot),
+        undone: undone ?? this.undone,
+        isUndoing: isUndoing ?? this.isUndoing,
+      );
+}
+
+class AgentSessionNotifier extends Notifier<AgentSession> {
+  @override
+  AgentSession build() => const AgentSession();
+
+  void setDraft(String draft) => state = state.copyWith(draft: draft);
+
+  void start(AiRun run, {required String instruction}) {
+    state.run?.dispose();
+    state = AgentSession(
+      run: run,
+      draft: state.draft,
+      instruction: instruction,
+    );
+  }
+
+  /// Called between validation and the first edit — the only moment at which
+  /// the page is both still untouched and known to be about to change.
+  void snapshotTaken(AgentSnapshot snapshot) =>
+      state = state.copyWith(snapshot: snapshot);
+
+  void undoing() => state = state.copyWith(isUndoing: true);
+
+  void undone(bool ok) => state = state.copyWith(isUndoing: false, undone: ok);
+
+  void stop() => state.run?.cancel();
+
+  void clear() {
+    state.run?.dispose();
+    state = const AgentSession();
+  }
+}
+
+final agentSessionProvider =
+    NotifierProvider<AgentSessionNotifier, AgentSession>(
+        AgentSessionNotifier.new);

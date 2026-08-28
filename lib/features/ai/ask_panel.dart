@@ -18,6 +18,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
+import '../../ui/widgets/mario_loader.dart';
 import 'ai_history.dart';
 import 'ai_markdown.dart';
 import 'ai_progress.dart';
@@ -484,12 +485,11 @@ class _Actions extends StatelessWidget {
             FilledButton.icon(
               onPressed: busy || !canInsert || inserted ? null : onInsert,
               icon: busy
-                  ? const SizedBox(
-                      width: 12,
-                      height: 12,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Icon(inserted ? Icons.check : Icons.playlist_add, size: 16),
+                  // The button is disabled while busy, so Material paints
+                  // onSurface@12% here, not primary — the theme default reads
+                  // on that fill, onPrimary does not.
+                  ? const MarioLoader(size: 18)
+                  : Icon(inserted ? Icons.check : Icons.playlist_add, size: 18),
               label: Text(inserted ? 'Inserted' : 'Insert into page'),
               style: FilledButton.styleFrom(
                 visualDensity: VisualDensity.compact,

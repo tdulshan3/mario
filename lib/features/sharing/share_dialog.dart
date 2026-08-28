@@ -9,6 +9,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/models/collaborator.dart';
 import '../../core/models/notebook.dart';
 import '../../core/services/mario_firestore.dart';
+import '../../ui/widgets/mario_loader.dart';
 import '../shell/shell_state.dart';
 
 void showShareDialog(BuildContext context, WidgetRef ref) {
@@ -134,11 +135,9 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
         ElevatedButton(
           onPressed: _saving ? null : _invite,
           child: _saving
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
+              // Disabled while saving, so the fill is onSurface@12% rather than
+              // primary; the theme default is what stays legible on it.
+              ? const MarioLoader(size: 18)
               : const Text('Invite'),
         ),
       ],

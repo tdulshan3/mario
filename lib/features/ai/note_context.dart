@@ -100,8 +100,7 @@ class NoteText {
   /// the tail of a page while appearing to have read all of it.
   int get approxTokens => estimateTokens(render());
 
-  int get characters =>
-      blocks.fold(0, (sum, b) => sum + b.text.length + 1);
+  int get characters => blocks.fold(0, (sum, b) => sum + b.text.length + 1);
 
   String render() {
     final buf = StringBuffer();
@@ -205,7 +204,7 @@ bool _isDenseScript(int rune) =>
     (rune >= 0x0980 && rune <= 0x09FF) || // Bengali
     (rune >= 0x0B80 && rune <= 0x0BFF) || // Tamil
     (rune >= 0x0D80 && rune <= 0x0DFF) || // Sinhala
-    (rune >= 0x0E00 && rune <= 0x0E7F);   // Thai
+    (rune >= 0x0E00 && rune <= 0x0E7F); // Thai
 
 /// Reads a document into [NoteBlock]s.
 NoteText extractNoteText(afe.Document document, {String title = ''}) {
@@ -268,8 +267,7 @@ void _walk(afe.Node node, List<NoteBlock> out) {
       );
 
     case AudioBlockKeys.type:
-      final transcript =
-          asStringOr(attrs[AudioBlockKeys.transcript]).trim();
+      final transcript = asStringOr(attrs[AudioBlockKeys.transcript]).trim();
       return transcript.isEmpty
           ? (text: '[audio recording, not transcribed]', headingLevel: null)
           : (text: '[audio transcript]\n$transcript', headingLevel: null);
