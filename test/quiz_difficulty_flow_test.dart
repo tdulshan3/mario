@@ -124,14 +124,14 @@ void main() {
   group('the difficulty reaches the model', () {
     test('easy sends the easy rules, and not the hard ones', () async {
       final it = await run(QuizDifficulty.easy);
-      final system = it.llm.requests.first.system!;
+      final system = it.llm.quizRequest.system!;
       expect(system, contains(quizStyleEasy));
       expect(system, isNot(contains(quizStyleHard)));
     });
 
     test('hard sends the hard rules, and not the easy ones', () async {
       final it = await run(QuizDifficulty.hard);
-      final system = it.llm.requests.first.system!;
+      final system = it.llm.quizRequest.system!;
       expect(system, contains(quizStyleHard));
       expect(system, isNot(contains(quizStyleEasy)));
     });
@@ -139,14 +139,14 @@ void main() {
     test('both send the shared item-writing rules', () async {
       for (final d in QuizDifficulty.values) {
         final it = await run(d);
-        expect(it.llm.requests.first.system, contains(quizStyleCore),
+        expect(it.llm.quizRequest.system, contains(quizStyleCore),
             reason: d.name);
       }
     });
 
     test('web results are put in front of the model, with the notes', () async {
       final it = await run(QuizDifficulty.hard);
-      final user = it.llm.requests.first.messages.last.content;
+      final user = it.llm.quizRequest.messages.last.content;
       expect(user, contains('Glycolysis explained'));
       expect(user, contains('example.com'));
       expect(user, contains('pyruvate'),
@@ -155,7 +155,7 @@ void main() {
 
     test('easy sends no web context at all', () async {
       final it = await run(QuizDifficulty.easy);
-      expect(it.llm.requests.first.messages.last.content,
+      expect(it.llm.quizRequest.messages.last.content,
           isNot(contains('example.com')));
     });
   });
@@ -168,7 +168,7 @@ void main() {
       final it = await run(QuizDifficulty.hard, searchEnabled: false);
       expect(it.state.error, isNull);
       expect(it.state.result, isNotNull);
-      expect(it.llm.requests.first.system, contains(quizStyleHard),
+      expect(it.llm.quizRequest.system, contains(quizStyleHard),
           reason: 'the reasoning rules apply with or without the web');
     });
 
@@ -214,7 +214,13 @@ void main() {
 /// what it was asked.
 class _RecordingLlm implements LlmService {
   final requests = <LlmRequest>[];
+  final schemaNames = <String>[];
   var _n = 0;
+
+  /// The quiz-generation call, as opposed to the search-query planning call
+  /// that now runs before it in hard mode.
+  LlmRequest get quizRequest =>
+      requests[schemaNames.indexWhere((n) => n.contains('quiz'))];
 
   @override
   Future<LlmProvider> requireProvider([String? id]) async => _StubProvider();
@@ -229,6 +235,7 @@ class _RecordingLlm implements LlmService {
     int repairAttempts = 1,
   }) async {
     requests.add(request);
+    schemaNames.add(schemaName);
     // Distinct stems each round, or the de-duplicator drops the second batch
     // and the run ends early for a reason that has nothing to do with the test.
     final i = _n++;
@@ -278,6 +285,13 @@ class _RecordingSearch implements WebSearchService {
 
   @override
   Future<bool> get isEnabled async => enabled;
+
+  @override
+  Future<WebSearchStatus> status() async =>
+      enabled ? WebSearchStatus.ready : WebSearchStatus.turnedOff;
+
+  @override
+  Future<int> remainingToday() async => WebSearchService.dailyLimit;
 
   @override
   Future<List<AiSource>> search(String query,

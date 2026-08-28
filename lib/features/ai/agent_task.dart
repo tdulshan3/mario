@@ -27,6 +27,7 @@ class AgentOutcome {
     required this.applied,
     required this.failed,
     required this.dropped,
+    this.dropReasons = const [],
     required this.destructive,
   });
 
@@ -39,6 +40,9 @@ class AgentOutcome {
 
   /// Actions the plan proposed that validation rejected.
   final int dropped;
+
+  /// Why, deduplicated. Empty when nothing was rejected.
+  final List<String> dropReasons;
 
   final int destructive;
 
@@ -145,24 +149,36 @@ class AgentTask {
       run.begin(AiStepKind.checking);
       var plan = parseAgentPlan(raw, knownBlockIds: knownIds);
       if (plan.actions.length > maxActions) {
+        final over = plan.actions.length - maxActions;
         plan = AgentPlan(
           summary: plan.summary,
           actions: plan.actions.take(maxActions).toList(),
-          dropped: plan.dropped + (plan.actions.length - maxActions),
+          rejected: [
+            ...plan.rejected,
+            // Labelled apart from the validation rejections: these were fine,
+            // there were simply too many of them.
+            for (var i = 0; i < over; i++)
+              const DroppedAction(
+                  kind: '', reason: 'over the $maxActions-change limit'),
+          ],
         );
       }
 
       if (plan.isEmpty) {
+        // The reasons go in the message. This is the one case where the user
+        // sees nothing else at all, so "none of them worked" without saying
+        // why leaves them with no next move.
         throw LlmException(plan.dropped > 0
-            ? 'The model proposed ${plan.dropped} change(s), none of which '
-                'were safe to apply. Try phrasing the instruction more '
-                'concretely.'
+            ? 'The model proposed ${plan.dropped} change(s) and none could be '
+                'used: ${plan.rejectionSummary.join('; ')}. Try phrasing the '
+                'instruction more concretely.'
             : 'The model did not propose any changes.');
       }
 
       run.detail(plan.dropped == 0
           ? '${plan.actions.length} action(s)'
-          : '${plan.actions.length} action(s), ${plan.dropped} rejected');
+          : '${plan.actions.length} action(s), ${plan.dropped} not used '
+              '(${plan.rejectionSummary.join('; ')})');
 
       // The caller snapshots here, between validation and the first edit.
       onPlanned(plan);
@@ -187,6 +203,7 @@ class AgentTask {
         applied: applied,
         failed: failed,
         dropped: plan.dropped,
+        dropReasons: plan.rejectionSummary,
         destructive: plan.destructiveCount,
       ));
       run.appendAnswer(plan.summary);

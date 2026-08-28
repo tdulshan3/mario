@@ -21,6 +21,7 @@ import '../../core/services/ai/anthropic_provider.dart';
 import '../../core/services/ai/llm_provider.dart';
 import '../../core/services/ai/llm_provider_config.dart';
 import '../../core/services/ai/local_model_discovery.dart';
+import '../../core/services/ai/web_search_service.dart';
 import '../../ui/colors.dart';
 import 'ai_state.dart';
 import '../../ui/widgets/mario_loader.dart';
@@ -517,14 +518,50 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
   Future<void> _load() async {
     final service = ref.read(webSearchProvider);
     final key = await service.readKey();
-    final enabled = await service.isEnabled;
+    final status = await service.status();
     final remaining = await service.remainingToday();
     if (!mounted) return;
     setState(() {
       _hasKey = key != null && key.isNotEmpty;
-      _enabled = enabled;
+      // Anything but an explicit "off" counts as on, matching the service:
+      // saving a key is the opt-in, and a fresh install has no preference yet.
+      _enabled = status != WebSearchStatus.turnedOff;
       _remaining = remaining;
     });
+  }
+
+  /// Saves the typed key and turns search on.
+  ///
+  /// Turning it on is the point. Saving a key and then finding search still
+  /// unavailable — because a separate switch, three lines up, was still off —
+  /// is the exact trap this had: the two controls were independent, nothing
+  /// said so, and the failure only showed up later as "unavailable, add a
+  /// Serper key" to someone who had just added one.
+  Future<void> _save() async {
+    final typed = _key.text.trim();
+    // Empty means "nothing typed", never "delete the key I saved". Removal has
+    // its own button, so that an accidental second press cannot wipe a key.
+    if (typed.isEmpty) return;
+    final service = ref.read(webSearchProvider);
+    await service.writeKey(typed);
+    await service.setEnabled(true);
+    _key.clear();
+    if (!mounted) return;
+    setState(() => _testResult = null);
+    await _load();
+  }
+
+  /// Forgets the saved key, and switches search off with it.
+  ///
+  /// Both, or re-adding a key later would silently reactivate a feature the
+  /// user had removed.
+  Future<void> _forget() async {
+    final service = ref.read(webSearchProvider);
+    await service.writeKey(null);
+    await service.setEnabled(false);
+    if (!mounted) return;
+    setState(() => _testResult = null);
+    await _load();
   }
 
   @override
@@ -566,10 +603,12 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
           title:
               Text('Allow web search', style: GoogleFonts.inter(fontSize: 13)),
           subtitle: _hasKey
-              ? Text('$_remaining of ${100} searches left today',
+              ? Text(
+                  '$_remaining of ${WebSearchService.dailyLimit} searches '
+                  'left today',
                   style: GoogleFonts.inter(
                       fontSize: 11, color: scheme.onSurfaceVariant))
-              : Text('Add a key below to enable',
+              : Text('Save a key below and this turns on',
                   style: GoogleFonts.inter(
                       fontSize: 11, color: scheme.onSurfaceVariant)),
           value: _enabled && _hasKey,
@@ -583,24 +622,33 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
         TextField(
           controller: _key,
           obscureText: true,
+          // Enter saves. The gesture people reach for first, and it used to do
+          // nothing at all.
+          onSubmitted: (_) => _save(),
           decoration: InputDecoration(
             labelText: 'Serper API key',
             hintText: _hasKey ? 'saved — type to replace' : 'from serper.dev',
             isDense: true,
-            suffixIcon: IconButton(
-              icon: const Icon(Icons.save_outlined, size: 18),
-              tooltip: 'Save key',
-              onPressed: () async {
-                await service.writeKey(_key.text.trim());
-                _key.clear();
-                await _load();
-              },
-            ),
           ),
         ),
         const SizedBox(height: 6),
         Row(
           children: [
+            // Saving is the primary action and was an unlabelled 18px disk
+            // glyph inside an obscured field, which is why it went unpressed.
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _key,
+              builder: (context, value, _) => FilledButton.icon(
+                onPressed: value.text.trim().isEmpty ? null : _save,
+                icon: const Icon(Icons.check, size: 15),
+                label: const Text('Save key'),
+                style: FilledButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: GoogleFonts.inter(fontSize: 12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
             TextButton.icon(
               onPressed: _testing
                   ? null
@@ -610,14 +658,23 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
                         _testResult = null;
                       });
                       // The typed key if there is one, so a key can be checked
-                      // before it is saved.
+                      // before it is saved. Testing deliberately does not
+                      // store it — a key someone is only checking may not be
+                      // theirs to keep.
                       final result = await service.testConnection(
                         apiKey: _key.text.trim().isEmpty ? null : _key.text,
                       );
                       if (!mounted) return;
                       setState(() {
                         _testing = false;
-                        _testResult = result;
+                        _testResult = result.ok && _key.text.trim().isNotEmpty
+                            ? (
+                                ok: true,
+                                message:
+                                    '${result.message} Press Save key to keep '
+                                    'it.'
+                              )
+                            : result;
                       });
                     },
               icon: _testing
@@ -632,6 +689,18 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
                 textStyle: GoogleFonts.inter(fontSize: 12),
               ),
             ),
+            if (_hasKey && _testResult == null) ...[
+              const SizedBox(width: 4),
+              TextButton(
+                onPressed: _forget,
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  foregroundColor: scheme.onSurfaceVariant,
+                  textStyle: GoogleFonts.inter(fontSize: 12),
+                ),
+                child: const Text('Remove'),
+              ),
+            ],
             if (_testResult != null)
               Expanded(
                 child: Text(

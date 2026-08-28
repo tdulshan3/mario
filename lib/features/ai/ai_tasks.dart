@@ -35,6 +35,7 @@ import 'note_context.dart';
 import 'note_images.dart';
 import 'note_style.dart';
 import 'quiz_style.dart';
+import 'search_planner.dart';
 
 /// Where a summary or answer came from, and what to call it.
 class AiTaskContext {
@@ -233,34 +234,53 @@ class AiTasks {
       // turning it on: "auto" already guesses, and a setting that also guesses
       // is not a setting. With it OFF, nothing is sent anywhere.
       var sources = const <AiSource>[];
+      // Queries that have actually been run and returned. The rescue below used
+      // to re-run the identical query, hit the session cache, and report
+      // "looking it up" while looking nothing up.
+      final issued = <String>{};
       final wantsWeb = useWeb ?? looksLikeItNeedsSearch(question);
+
+      final searchStatus = wantsWeb ? await search.status() : null;
 
       if (!wantsWeb) {
         run.skip(AiStepKind.searchingWeb);
-      } else if (!await search.isEnabled) {
+      } else if (searchStatus != WebSearchStatus.ready) {
         // Explicitly asked for and not available: say so rather than quietly
-        // answering from the note as though the web had been consulted.
+        // answering from the note as though the web had been consulted — and
+        // say *which* thing is missing. Telling someone who has just pasted a
+        // key to add a key is worse than saying nothing.
         run.begin(AiStepKind.searchingWeb,
-            detail: useWeb == true
-                ? 'unavailable — add a Serper key in Settings, answering from '
-                    'the note only'
-                : 'not set up');
+            detail: '${searchStatus!.reason} — answering from the note only');
         run.skip(AiStepKind.searchingWeb);
       } else {
-        run.begin(AiStepKind.searchingWeb, detail: question);
-        run.setSearchQuery(question);
-        try {
-          sources = await search.search(question, cancel: run.cancelToken);
-          run.addSources(sources);
+        run.begin(AiStepKind.searchingWeb,
+            detail: 'working out what to look up');
+        // The model writes the query. The question itself is often a poor
+        // search — "does this still apply?" carries its subject in a pronoun
+        // that points at the highlighted passage, which never reached Serper.
+        final plan = await planSearch(
+          llm: llm,
+          task: question,
+          fallback: question,
+          context: focus?.trim().isNotEmpty == true ? focus : noteText,
+          cancel: run.cancelToken,
+        );
+
+        if (!plan.needsSearch && useWeb != true) {
+          // The model's judgement, but only when the user left the choice to
+          // it. An explicit "Web: on" is an instruction, not a suggestion.
+          run.detail('nothing here needs looking up');
+          run.skip(AiStepKind.searchingWeb);
+        } else {
+          run.setSearchQuery(plan.queries.join(' · '));
+          run.detail(plan.fromModel
+              ? 'searching for ${plan.queries.join(' · ')}'
+              : plan.queries.first);
+          sources = await _runQueries(plan.queries, run, issued);
           run.detail(sources.isEmpty
               ? 'no results — answering from the note only'
               : '${sources.length} result(s) from '
                   '${domainList(sources)}');
-        } on LlmException catch (e) {
-          // A failed search must not sink the answer — the note alone is
-          // usually enough, and saying so is better than an error page.
-          run.detail('search unavailable (${e.message})');
-          sources = const [];
         }
       }
 
@@ -340,15 +360,37 @@ class AiTasks {
       if (sources.isEmpty &&
           useWeb != false &&
           looksLikeANonAnswer(run.value.answer) &&
-          await search.isEnabled) {
+          await search.status() == WebSearchStatus.ready) {
         run.begin(AiStepKind.searchingWeb,
             detail: 'the notes were not enough — looking it up');
-        run.setSearchQuery(question);
-        try {
-          sources = await search.search(question, cancel: run.cancelToken);
-          run.addSources(sources);
-        } on LlmException {
-          sources = const [];
+        // Ask for a query knowing what the first attempt produced. Re-running
+        // the same string would hit the session cache and return the same
+        // nothing, which is what used to happen: the step said "looking it up"
+        // and nothing was looked up.
+        final answerSoFar = run.value.answer.trim();
+        final rescue = await planSearch(
+          llm: llm,
+          task: question,
+          fallback: question,
+          context: [
+            if (focus?.trim().isNotEmpty == true) focus!.trim(),
+            if (answerSoFar.isNotEmpty)
+              'A first attempt from the notes alone said: '
+                  '${answerSoFar.length > 400 ? '${answerSoFar.substring(0, 400)}…' : answerSoFar}',
+          ].join('\n\n'),
+          cancel: run.cancelToken,
+        );
+        final fresh = [
+          for (final q in rescue.queries)
+            if (!issued.contains(q.toLowerCase())) q,
+        ];
+
+        if (fresh.isEmpty) {
+          run.detail('already looked that up — answering from the note');
+          run.skip(AiStepKind.searchingWeb);
+        } else {
+          run.setSearchQuery(fresh.join(' · '));
+          sources = await _runQueries(fresh, run, issued);
         }
 
         if (sources.isNotEmpty) {
@@ -429,6 +471,40 @@ class AiTasks {
   /// script — see [estimateTokens].
   /// The distinct sites a search returned, for the progress line — so the user
   /// can see where an answer is about to come from before it is written.
+  /// Runs each query in turn, keeping whatever comes back.
+  ///
+  /// Guarded per query rather than around the loop: the daily cap throws, and
+  /// letting query two's refusal discard query one's results would trade a
+  /// partial answer for none. Everything here sits under a blanket
+  /// `catch (e) => run.fail(e)`, so an unguarded throw fails the whole run.
+  Future<List<AiSource>> _runQueries(
+    List<String> queries,
+    AiRun run,
+    Set<String> issued,
+  ) async {
+    final all = <AiSource>[];
+    final seen = <String>{};
+    for (final q in queries) {
+      try {
+        final results = await search.search(q, cancel: run.cancelToken);
+        // Only after it returned. A query that threw was never actually run,
+        // and a retry of it may well succeed.
+        issued.add(q.toLowerCase());
+        for (final r in results) {
+          if (seen.add(r.url)) all.add(r);
+        }
+      } on LlmCancelled {
+        rethrow;
+      } on LlmException catch (e) {
+        // A failed search must not sink the answer — the note alone is usually
+        // enough, and saying so is better than an error page.
+        run.detail('search unavailable (${e.message})');
+      }
+    }
+    if (all.isNotEmpty) run.addSources(all);
+    return all;
+  }
+
   static String domainList(List<AiSource> sources) {
     final hosts = <String>{};
     for (final s in sources) {
@@ -727,35 +803,43 @@ extension QuizTasks on AiTasks {
       // prefix-caching server reuse it.
       var webContext = '';
       if (difficulty.usesWeb) {
-        final topic = searchTopicFor(
-          note.title,
-          [
-            for (final b in note.blocks)
-              if (b.isHeading) b.text
-          ],
-        );
-        if (topic.isEmpty || !await search.isEnabled) {
+        final headings = [
+          for (final b in note.blocks)
+            if (b.isHeading) b.text
+        ];
+        final topic = searchTopicFor(note.title, headings);
+        final status = topic.isEmpty ? null : await search.status();
+        if (topic.isEmpty || status != WebSearchStatus.ready) {
           run.begin(AiStepKind.searchingWeb,
               detail: topic.isEmpty
                   ? 'nothing specific enough to look up'
-                  : 'web search is off — questions will stay closer to the '
-                      'notes');
+                  : '${status!.reason} — questions will stay closer to '
+                      'the notes');
           run.skip(AiStepKind.searchingWeb);
         } else {
-          run.begin(AiStepKind.searchingWeb, detail: topic);
-          run.setSearchQuery(topic);
-          try {
-            final sources = await search.search(topic, cancel: run.cancelToken);
-            run.addSources(sources);
-            webContext = renderSourcesForPrompt(sources);
-            run.detail(sources.isEmpty
-                ? 'no results — questions will stay closer to the notes'
-                : '${sources.length} result(s) from '
-                    '${AiTasks.domainList(sources)}');
-          } on LlmException catch (e) {
-            // A failed lookup makes the questions narrower, not impossible.
-            run.detail('search unavailable (${e.message})');
-          }
+          run.begin(AiStepKind.searchingWeb,
+              detail: 'working out what to look up');
+          // The mechanical query glued the title to the first three headings,
+          // which is four topics rather than one and returns the generic page
+          // for none of them. The model picks the subject instead; the glued
+          // string stays as the fallback.
+          final plan = await planSearch(
+            llm: llm,
+            task: 'Write questions that go beyond these notes on '
+                '"${note.title}" — applying the ideas to cases the notes do '
+                'not mention, and using real examples and current figures.',
+            fallback: topic,
+            context: headings.isEmpty ? note.title : headings.join('\n'),
+            cancel: run.cancelToken,
+          );
+          run.setSearchQuery(plan.queries.join(' · '));
+          run.detail(plan.queries.join(' · '));
+          final sources = await _runQueries(plan.queries, run, <String>{});
+          webContext = renderSourcesForPrompt(sources);
+          run.detail(sources.isEmpty
+              ? 'no results — questions will stay closer to the notes'
+              : '${sources.length} result(s) from '
+                  '${AiTasks.domainList(sources)}');
         }
       }
 

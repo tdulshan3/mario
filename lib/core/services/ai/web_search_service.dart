@@ -127,6 +127,39 @@ class SerperSearchProvider implements WebSearchProvider {
   }
 }
 
+/// Why web search can or cannot run.
+///
+/// Kept as four states rather than a bool because every one of them needs a
+/// different sentence in the panel, and the difference between "you have no
+/// key" and "you turned this off" is the difference between a message that
+/// helps and one that sends the user hunting for a key they already have.
+enum WebSearchStatus {
+  ready,
+  noKey,
+  turnedOff,
+  limitReached,
+}
+
+extension WebSearchStatusMessage on WebSearchStatus {
+  /// Why a search cannot happen, with no consequence attached.
+  ///
+  /// The consequence differs by caller — an answer falls back to the note, a
+  /// hard quiz falls back to easier questions — so each one adds its own.
+  String get reason => switch (this) {
+        WebSearchStatus.ready => '',
+        WebSearchStatus.noKey =>
+          'no Serper key yet — add one in Settings → AI models',
+        WebSearchStatus.turnedOff => 'web search is switched off in Settings',
+        WebSearchStatus.limitReached =>
+          'today\'s $dailyLimitLabel searches are used up — it resets tomorrow',
+      };
+}
+
+/// The cap, as it appears in a sentence. Defined here rather than interpolated
+/// from [WebSearchService.dailyLimit] so the enum's messages do not depend on
+/// the service being constructed.
+const String dailyLimitLabel = '100';
+
 /// Coordinates search: key storage, the enabled flag, caching and the daily cap.
 class WebSearchService {
   WebSearchService({
@@ -156,11 +189,33 @@ class WebSearchService {
       ? _secure.delete(key: _kKey)
       : _secure.write(key: _kKey, value: key);
 
-  Future<bool> get isEnabled async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!(prefs.getBool(_kEnabled) ?? false)) return false;
+  /// Whether a search can run right now.
+  ///
+  /// Two separate conditions, and callers used to be told only that the
+  /// combined answer was "no" — which produced the worst possible message: a
+  /// user who had pasted a valid key being told to add a key. [status] says
+  /// which one it is.
+  Future<bool> get isEnabled async =>
+      await status() == WebSearchStatus.ready;
+
+  /// Why search is or is not available.
+  ///
+  /// The key is checked first so a machine with no key never reaches the
+  /// preference at all, and an absent preference counts as *on*: saving a key
+  /// is the opt-in. Requiring a second, separate switch after that meant the
+  /// common path — paste key, press save, ask a question — ended in
+  /// "unavailable", with nothing on screen connecting the two.
+  Future<WebSearchStatus> status() async {
     final key = await readKey();
-    return key != null && key.isNotEmpty;
+    if (key == null || key.isEmpty) return WebSearchStatus.noKey;
+    final prefs = await SharedPreferences.getInstance();
+    // Absent means "never decided", not "declined". An explicit false — the
+    // user turning the switch off — still wins.
+    if (!(prefs.getBool(_kEnabled) ?? true)) return WebSearchStatus.turnedOff;
+    if (_countForToday(prefs) >= dailyLimit) {
+      return WebSearchStatus.limitReached;
+    }
+    return WebSearchStatus.ready;
   }
 
   Future<void> setEnabled(bool value) async {
@@ -213,7 +268,12 @@ class WebSearchService {
     final trimmed = query.trim();
     if (trimmed.isEmpty) return const [];
 
-    final cached = _cache[trimmed];
+    // Case-folded, because a planner that writes "Krebs cycle regulation" on
+    // one run and "Krebs Cycle regulation" on the next would otherwise bill a
+    // second credit for the identical search. What goes to the provider is
+    // still what was asked for.
+    final cacheKey = trimmed.toLowerCase();
+    final cached = _cache[cacheKey];
     if (cached != null) return cached;
 
     final key = await readKey();
@@ -236,7 +296,7 @@ class WebSearchService {
 
     await prefs.setInt(_kDailyCount, used + 1);
     await prefs.setString(_kDailyStamp, _today());
-    _cache[trimmed] = results;
+    _cache[cacheKey] = results;
     return results;
   }
 

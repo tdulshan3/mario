@@ -69,6 +69,64 @@ const _wireNames = <String, AgentActionKind>{
   'setting': AgentActionKind.setting,
 };
 
+/// Names a model reaches for that mean one of the [AgentActionKind]s.
+///
+/// The schema lists the sixteen names above, but on a backend without strict
+/// decoding the schema is advice, not a constraint — and a model that has seen
+/// AppFlowy or Notion document JSON writes what it saw there. This app's own
+/// blocks are called `bulleted_list`, `numbered_list` and `todo_list`, so those
+/// are the first names to hand.
+///
+/// The shape of that failure is what made it worth fixing: `heading` and
+/// `paragraph` are spelled the same in both vocabularies, so a model using the
+/// other names loses precisely its lists and keeps its headings — which is
+/// exactly the plan that came back as nothing but a heading.
+///
+/// `title` is deliberately absent. It is at least as likely to mean the page
+/// title, and guessing wrong turns an intended rename into an inserted
+/// heading; better to drop it and be told than to do the wrong thing quietly.
+const _kindAliases = <String, AgentActionKind>{
+  'text': AgentActionKind.paragraph,
+  'p': AgentActionKind.paragraph,
+  'markdown': AgentActionKind.paragraph,
+  'header': AgentActionKind.heading,
+  'h1': AgentActionKind.heading,
+  'h2': AgentActionKind.heading,
+  'h3': AgentActionKind.heading,
+  'h4': AgentActionKind.heading,
+  'h5': AgentActionKind.heading,
+  'h6': AgentActionKind.heading,
+  'bulleted_list': AgentActionKind.bullets,
+  'bullet_list': AgentActionKind.bullets,
+  'bulleted': AgentActionKind.bullets,
+  'unordered_list': AgentActionKind.bullets,
+  'list': AgentActionKind.bullets,
+  'numbered_list': AgentActionKind.numbered,
+  'ordered_list': AgentActionKind.numbered,
+  'todo_list': AgentActionKind.todo,
+  'to_do': AgentActionKind.todo,
+  'to_do_list': AgentActionKind.todo,
+  'checklist': AgentActionKind.todo,
+  'check_list': AgentActionKind.todo,
+  'checkbox': AgentActionKind.todo,
+  'task': AgentActionKind.todo,
+  'tasks': AgentActionKind.todo,
+  'code_block': AgentActionKind.code,
+  'codeblock': AgentActionKind.code,
+  'math_equation': AgentActionKind.math,
+  'equation': AgentActionKind.math,
+  'formula': AgentActionKind.math,
+  'blockquote': AgentActionKind.quote,
+  'callout': AgentActionKind.quote,
+  'hr': AgentActionKind.divider,
+  'horizontal_rule': AgentActionKind.divider,
+  'rename': AgentActionKind.renamePage,
+  'rename_title': AgentActionKind.renamePage,
+  'update_block': AgentActionKind.replaceBlock,
+  'edit_block': AgentActionKind.replaceBlock,
+  'remove_block': AgentActionKind.deleteBlock,
+};
+
 /// Settings an agent may change.
 ///
 /// Deliberately tiny, and deliberately not a general key/value setter. Nothing
@@ -89,7 +147,7 @@ class AgentAction {
     this.text = '',
     this.items = const [],
     this.rows = const [],
-    this.level = 1,
+    this.level = 2,
     this.language = 'plaintext',
     this.blockId,
     this.afterBlockId,
@@ -184,6 +242,7 @@ const agentPlanSchema = <String, dynamic>{
               'rename_page',
               'replace_block',
               'delete_block',
+              'move_block',
               'setting',
             ],
           },
@@ -206,7 +265,13 @@ const agentPlanSchema = <String, dynamic>{
             'description':
                 'Table or spreadsheet rows, first row being the header.',
           },
-          'level': {'type': 'integer', 'description': 'Heading level, 1-6.'},
+          'level': {
+            'type': 'integer',
+            'minimum': 2,
+            'maximum': 6,
+            'description': 'Heading level, 2-6. The page title is the only '
+                'level 1, so a heading added to the body starts at 2.',
+          },
           'language': {'type': 'string', 'description': 'Code language.'},
           'blockId': {
             'type': 'string',
@@ -236,24 +301,61 @@ const agentPlanSchema = <String, dynamic>{
   'required': ['summary', 'actions'],
 };
 
+/// One action the validator refused, and why.
+///
+/// The reason is the whole point. A bare count made every rejection look the
+/// same and, worse, made them all look deliberate — the panel could only say
+/// "rejected as unsafe", which is true of a setting outside the allowlist and
+/// false of the far commoner case: a to-do the model wrote in a shape the
+/// parser did not read. One is a guard doing its job; the other is a bug, and
+/// a count cannot tell them apart.
+class DroppedAction {
+  const DroppedAction({required this.kind, required this.reason});
+
+  /// Whatever the model called it, as written. Empty when it named nothing.
+  final String kind;
+
+  /// A short phrase, lowercase, no trailing stop — it is composed into a
+  /// sentence by the caller.
+  final String reason;
+
+  @override
+  String toString() => kind.isEmpty ? reason : '$kind: $reason';
+}
+
 /// A validated plan, plus what had to be thrown away.
 class AgentPlan {
   const AgentPlan({
     required this.summary,
     required this.actions,
-    this.dropped = 0,
+    this.rejected = const [],
   });
 
   final String summary;
   final List<AgentAction> actions;
 
-  /// Actions the model proposed that could not be made safe. Reported rather
-  /// than hidden: "9 of 11 steps" is information the user needs to judge the
-  /// result.
-  final int dropped;
+  /// Actions the model proposed that could not be made safe or made sense of.
+  /// Reported rather than hidden: "9 of 11 steps" is information the user needs
+  /// to judge the result.
+  final List<DroppedAction> rejected;
+
+  int get dropped => rejected.length;
 
   bool get isEmpty => actions.isEmpty;
   int get destructiveCount => actions.where((a) => a.isDestructive).length;
+
+  /// The reasons, deduplicated and counted — "2 x unknown kind" rather than the
+  /// same phrase twice.
+  List<String> get rejectionSummary {
+    final counts = <String, int>{};
+    for (final r in rejected) {
+      counts[r.reason] = (counts[r.reason] ?? 0) + 1;
+    }
+    return [
+      for (final e in counts.entries)
+        e.value == 1 ? e.key : '${e.key} (x${e.value})',
+    ];
+  }
 }
 
 /// Turns a model reply into a plan, discarding anything unusable.
@@ -264,18 +366,28 @@ class AgentPlan {
 /// executed on a guess costs the user's notes.
 AgentPlan parseAgentPlan(Map<String, dynamic> raw,
     {Set<String>? knownBlockIds}) {
-  final proposed = asMapList(raw['actions']);
+  // The raw list, not just its object entries: `"actions": ["add a todo"]` used
+  // to vanish entirely and be reported as "the model proposed no changes",
+  // which sent anyone debugging it in exactly the wrong direction.
+  final rawList = raw['actions'] is List ? raw['actions'] as List : const [];
   final actions = <AgentAction>[];
+  final rejected = <DroppedAction>[];
 
-  for (final m in proposed) {
-    final action = _parseOne(m, knownBlockIds);
+  for (final entry in rawList) {
+    final m = asMap(entry);
+    if (m == null) {
+      rejected
+          .add(const DroppedAction(kind: '', reason: 'not an action object'));
+      continue;
+    }
+    final action = _parseOne(m, knownBlockIds, rejected);
     if (action != null) actions.add(action);
   }
 
   return AgentPlan(
     summary: asStringOr(raw['summary']).trim(),
     actions: actions,
-    dropped: proposed.length - actions.length,
+    rejected: rejected,
   );
 }
 
@@ -287,9 +399,72 @@ const _targetedKinds = <AgentActionKind>{
   AgentActionKind.moveBlock,
 };
 
-AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds) {
-  final kind = _wireNames[asStringOr(m['kind']).trim().toLowerCase()];
-  if (kind == null) return null;
+/// List entries, however the model chose to shape them.
+///
+/// [asStringList] keeps only entries that are already strings, which loses the
+/// most natural shape a model reaches for on a to-do: `[{"text": "Draft it",
+/// "checked": false}]`. A to-do *has* a done flag, so an object per entry is
+/// the obvious echo of what a note app's own JSON looks like — and losing it
+/// silently deleted whole lists.
+List<String> _readEntries(Object? v) {
+  if (v is! List) return asStringList(v);
+  final out = <String>[];
+  for (final e in v) {
+    final direct = asString(e);
+    if (direct != null) {
+      if (direct.trim().isNotEmpty) out.add(direct);
+      continue;
+    }
+    final o = asMap(e);
+    if (o == null) continue;
+    final s = asStringOr(
+        o['text'] ?? o['content'] ?? o['name'] ?? o['title'] ?? o['label']);
+    if (s.trim().isNotEmpty) out.add(s);
+  }
+  return out;
+}
+
+/// A block id as the model wrote it, matched to one the page actually has.
+///
+/// The prompt prints ids as `[id:ab12cd]`, so a model copying an id back
+/// copies the brackets with it — and a target that does not match exactly is
+/// dropped, because acting on a wrong id would edit the wrong block. Stripping
+/// the decoration the prompt itself added is not a guess.
+///
+/// The case-insensitive fallback is used only when it is unambiguous: nanoid
+/// ids are case-sensitive, so two live blocks can differ by case alone, and
+/// picking one of them would be exactly the wrong-block edit this guards.
+String? _normaliseId(String? raw, Set<String>? known) {
+  if (raw == null) return null;
+  var s = raw.trim();
+  if (s.isEmpty) return s;
+
+  final bracketed = RegExp(r'^\[\s*id\s*:\s*([^\]\s]+)\s*\]$').firstMatch(s);
+  if (bracketed != null) s = bracketed.group(1)!;
+  s = s.replaceFirst(RegExp(r'^id\s*[:=]\s*'), '');
+  // Quotes, brackets and sentence punctuation a model trailed onto the id.
+  s = s.replaceAll(RegExp(r'^[\s"\x27`(\[]+|[\s"\x27`).,;:\]]+$'), '');
+
+  if (known == null || known.contains(s)) return s;
+  final ci = known.where((k) => k.toLowerCase() == s.toLowerCase()).toList();
+  return ci.length == 1 ? ci.first : s;
+}
+
+AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds,
+    List<DroppedAction> rejected) {
+  // `kind` is the discriminator and had no alias of its own, unlike every
+  // other field here.
+  final wire = asStringOr(m['kind'] ?? m['type'] ?? m['action'] ?? m['op'])
+      .trim()
+      .toLowerCase();
+  final kind = _wireNames[wire] ?? _kindAliases[wire];
+  if (kind == null) {
+    rejected.add(DroppedAction(
+      kind: wire,
+      reason: wire.isEmpty ? 'no action kind given' : 'not an action Mario has',
+    ));
+    return null;
+  }
 
   // Field aliases, because the schema is advisory on any backend without
   // strict decoding and models reach for the obvious synonym.
@@ -298,12 +473,21 @@ AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds) {
   // Two views of the same field. List entries are trimmed, because leading
   // space in a bullet is noise; a code body is not, because indentation is
   // the difference between Python that runs and Python that does not.
-  final rawItems = asStringList(m['items'] ?? m['list'] ?? m['bullets']);
+  final rawItems = _readEntries(m['items'] ??
+      m['list'] ??
+      m['bullets'] ??
+      m['todos'] ??
+      m['tasks'] ??
+      m['steps'] ??
+      m['entries']);
   final items =
       rawItems.map((i) => i.trim()).where((i) => i.isNotEmpty).toList();
 
-  var blockId = asString(m['blockId'] ?? m['block_id'])?.trim();
-  var afterBlockId = asString(m['afterBlockId'] ?? m['after_block_id'])?.trim();
+  var blockId = _normaliseId(
+      asString(m['blockId'] ?? m['block_id'])?.trim(), knownBlockIds);
+  var afterBlockId = _normaliseId(
+      asString(m['afterBlockId'] ?? m['after_block_id'])?.trim(),
+      knownBlockIds);
 
   // A blockId on an *insert* almost always means "put it here" — the model
   // reaching for the only id field it can see. Treating that as a target used
@@ -322,51 +506,72 @@ AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds) {
         blockId != null &&
         blockId.isNotEmpty &&
         !knownBlockIds.contains(blockId)) {
+      rejected.add(DroppedAction(
+          kind: wire, reason: 'points at a block that is not on this page'));
       return null;
     }
     if (afterBlockId != null &&
         afterBlockId.isNotEmpty &&
         !knownBlockIds.contains(afterBlockId)) {
       // Not fatal: append rather than discard the content.
-      return _build(kind, m, text, items, rawItems, blockId, null);
+      return _build(
+          kind, m, wire, text, items, rawItems, blockId, null, rejected);
     }
   }
 
-  return _build(kind, m, text, items, rawItems, blockId, afterBlockId);
+  return _build(
+      kind, m, wire, text, items, rawItems, blockId, afterBlockId, rejected);
 }
 
 AgentAction? _build(
   AgentActionKind kind,
   Map<String, dynamic> m,
+  String wire,
   String text,
   List<String> items,
   List<String> rawItems,
   String? blockId,
   String? afterBlockId,
+  List<DroppedAction> rejected,
 ) {
+  AgentAction? reject(String reason) {
+    rejected.add(DroppedAction(kind: wire, reason: reason));
+    return null;
+  }
+
   switch (kind) {
     case AgentActionKind.paragraph:
     case AgentActionKind.quote:
       // Body delivered as a list rather than a string: join it instead of
       // discarding a paragraph the model did write.
       final body = text.isNotEmpty ? text : items.join('\n');
-      if (body.isEmpty) return null;
+      if (body.isEmpty) return reject('no text to add');
       return AgentAction(kind: kind, text: body, afterBlockId: afterBlockId);
 
     case AgentActionKind.heading:
-      if (text.isEmpty) return null;
+      if (text.isEmpty) return reject('a heading with no words');
       return AgentAction(
         kind: kind,
         text: text,
-        level: (asInt(m['level']) ?? 1).clamp(1, 6),
+        // 2, not 1: the page already has a title, and a level-1 heading in the
+        // body competes with it. The same house style is in the prompt, but
+        // `level` is optional and an omitted field defaulted to a second title.
+        level: (asInt(m['level']) ?? 2).clamp(2, 6),
         afterBlockId: afterBlockId,
       );
 
     case AgentActionKind.bullets:
     case AgentActionKind.numbered:
     case AgentActionKind.todo:
-      if (items.isEmpty) return null;
-      return AgentAction(kind: kind, items: items, afterBlockId: afterBlockId);
+      // Recover a list whose body arrived in `text`, exactly as paragraph and
+      // code already recover a body that arrived in `items`. A one-entry list
+      // is a string to most models — "add a todo for X" produces
+      // {"kind":"todo","text":"X"} far more often than a one-element array —
+      // and requiring the array dropped the action outright.
+      final entries = items.isNotEmpty ? items : _splitEntries(text);
+      if (entries.isEmpty) return reject('a list with no entries');
+      return AgentAction(
+          kind: kind, items: entries, afterBlockId: afterBlockId);
 
     case AgentActionKind.divider:
       return AgentAction(kind: kind, afterBlockId: afterBlockId);
@@ -374,7 +579,7 @@ AgentAction? _build(
     case AgentActionKind.code:
       // rawItems, not items: trimming would flatten the indentation.
       final code = text.isNotEmpty ? text : rawItems.join('\n');
-      if (code.isEmpty) return null;
+      if (code.isEmpty) return reject('a code block with no code');
       final language = asStringOr(m['language'], 'plaintext').trim();
       return AgentAction(
         kind: kind,
@@ -384,13 +589,17 @@ AgentAction? _build(
       );
 
     case AgentActionKind.math:
-      if (text.isEmpty) return null;
+      if (text.isEmpty) return reject('a formula with no LaTeX');
       return AgentAction(kind: kind, text: text, afterBlockId: afterBlockId);
 
     case AgentActionKind.table:
     case AgentActionKind.spreadsheet:
       final rows = _normaliseRows(m['rows']);
-      if (rows == null) return null;
+      if (rows == null) {
+        return reject(
+            'rows that are missing, ragged or far too many — there is '
+            'no safe way to square them up');
+      }
       return AgentAction(
         kind: kind,
         rows: rows,
@@ -399,7 +608,7 @@ AgentAction? _build(
       );
 
     case AgentActionKind.renamePage:
-      if (text.isEmpty) return null;
+      if (text.isEmpty) return reject('a rename with no new title');
       // A title is one line; a model that returns a paragraph here would give
       // the page a name nothing can display.
       return AgentAction(
@@ -408,18 +617,31 @@ AgentAction? _build(
       );
 
     case AgentActionKind.replaceBlock:
-      if (blockId == null || blockId.isEmpty || text.isEmpty) return null;
-      return AgentAction(kind: kind, blockId: blockId, text: text);
+      // Same recovery in the other direction: "rewrite this as a task plus an
+      // action" naturally produces a list, and dropping it wasted a valid
+      // target the model had correctly identified.
+      final body = text.isNotEmpty ? text : items.join('\n');
+      if (blockId == null || blockId.isEmpty) {
+        return reject('a rewrite with no block to rewrite');
+      }
+      if (body.isEmpty) return reject('a rewrite with no replacement text');
+      return AgentAction(kind: kind, blockId: blockId, text: body);
 
     case AgentActionKind.deleteBlock:
-      if (blockId == null || blockId.isEmpty) return null;
+      if (blockId == null || blockId.isEmpty) {
+        return reject('a delete with no block to delete');
+      }
       return AgentAction(kind: kind, blockId: blockId);
 
     case AgentActionKind.moveBlock:
-      if (blockId == null || blockId.isEmpty) return null;
+      if (blockId == null || blockId.isEmpty) {
+        return reject('a move with no block to move');
+      }
       // Moving a block to just after itself is a no-op that still costs a
       // transaction and reads as a change in the result list.
-      if (afterBlockId == blockId) return null;
+      if (afterBlockId == blockId) {
+        return reject('a move to where the block already is');
+      }
       return AgentAction(
         kind: kind,
         blockId: blockId,
@@ -429,10 +651,31 @@ AgentAction? _build(
     case AgentActionKind.setting:
       final key = asString(m['settingKey'])?.trim();
       final value = asString(m['settingValue'])?.trim();
-      if (key == null || value == null || value.isEmpty) return null;
-      if (!agentWritableSettings.contains(key)) return null;
+      if (key == null || value == null || value.isEmpty) {
+        return reject('a setting with no name or no value');
+      }
+      // The one rejection that really is about safety.
+      if (!agentWritableSettings.contains(key)) {
+        return reject('"$key" is not a setting Mario lets the model change');
+      }
       return AgentAction(kind: kind, settingKey: key, settingValue: value);
   }
+}
+
+/// One block of prose read as list entries.
+///
+/// Lines first, then the numbered or bulleted markers a model writes when it
+/// puts a whole list into a single string. A body with neither is one entry —
+/// which is the common case, and the one that used to be thrown away.
+List<String> _splitEntries(String text) {
+  if (text.trim().isEmpty) return const [];
+  final lines = text
+      .split('\n')
+      .map((l) =>
+          l.replaceFirst(RegExp(r'^\s*(?:[-*\u2022]|\d+[.)])\s+'), '').trim())
+      .where((l) => l.isNotEmpty)
+      .toList();
+  return lines;
 }
 
 /// Squares up a table, or rejects it.
