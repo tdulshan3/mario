@@ -34,6 +34,7 @@ import '../editor/blocks/math_block.dart';
 import '../editor/blocks/mario_image_block.dart';
 import '../editor/blocks/spreadsheet_block.dart';
 import '../../core/services/ai/json_coercion.dart';
+import '../../core/services/ai/llm_types.dart';
 
 /// One readable block of a note.
 class NoteBlock {
@@ -356,4 +357,38 @@ int _comparePaths(List<int> a, List<int> b) {
     if (a[i] != b[i]) return a[i].compareTo(b[i]);
   }
   return a.length.compareTo(b.length);
+}
+
+/// How much room an answer needs, given how much of it the model will spend
+/// thinking.
+///
+/// A reasoning model writes its deliberation first and its answer last, out of
+/// one budget. At Fast the whole allowance is the answer; at Thorough most of
+/// it goes on thinking, so a budget sized for the answer alone leaves nothing
+/// to answer with — the reply arrives empty, which reads as a broken model
+/// rather than as a budget set too low.
+int answerBudgetFor(LlmEffort effort) => switch (effort) {
+      LlmEffort.low => 1200,
+      LlmEffort.medium => 2400,
+      LlmEffort.high => 4000,
+    };
+
+/// The usable part of a model's thinking, when that is all there is.
+///
+/// Only ever a fallback. Reasoning is not written to be read — it is second
+/// person, hedged, and full of discarded turns — but a truncated deliberation
+/// that contains the answer is worth more than "the model returned an empty
+/// answer", which is what this replaces.
+///
+/// The last part, not the first: a model reasoning its way to a conclusion
+/// puts the conclusion at the end.
+String salvageFromReasoning(String reasoning) {
+  final text = reasoning.trim();
+  // Below this it is a fragment of a thought, not an answer, and showing it as
+  // one would be worse than saying nothing came back.
+  if (text.length < 40) return '';
+  const limit = 1500;
+  return text.length <= limit
+      ? text
+      : '…${text.substring(text.length - limit)}';
 }

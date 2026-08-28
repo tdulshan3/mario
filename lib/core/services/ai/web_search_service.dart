@@ -17,6 +17,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show SocketException, HandshakeException;
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:http/http.dart' as http;
@@ -118,9 +119,41 @@ class SerperSearchProvider implements WebSearchProvider {
       return out;
     } on TimeoutException {
       throw const LlmException('Web search timed out.', isNetwork: true);
+    } on SocketException catch (e) {
+      // The machine could not open the connection at all. Dart's own message
+      // for this is "ClientException with SocketException: Connection refused
+      // (OS Error: Connection refused, errno = 111), address = google.serper.dev,
+      // port = 46040" — the port in it is the *local* one, which reads as a
+      // wrong address and sends people looking in the wrong place entirely.
+      //
+      // Refused rather than unreachable means something answered and said no,
+      // which on a desktop is nearly always local: a DNS blocklist, a hosts
+      // entry, a VPN or a firewall pointing the name somewhere that is not
+      // Serper.
+      throw LlmException(
+        e.osError?.errorCode == 111 ||
+                e.message.toLowerCase().contains('refused')
+            ? 'Could not reach google.serper.dev — the connection was refused '
+                'before it left this machine. That is usually a DNS blocklist, '
+                'a /etc/hosts entry, a VPN or a firewall rather than anything '
+                'wrong with the key. Try: curl -sI https://google.serper.dev'
+            : 'Could not reach google.serper.dev: ${e.osError?.message ?? e.message}. '
+                'Check the network connection.',
+        isNetwork: true,
+      );
+    } on HandshakeException catch (e) {
+      throw LlmException(
+        'Could not establish a secure connection to google.serper.dev '
+        '(${e.message}). A TLS-intercepting proxy or an out-of-date '
+        'certificate store will do this.',
+        isNetwork: true,
+      );
     } catch (e) {
       if (e is LlmException) rethrow;
-      throw LlmException('Web search failed: $e', isNetwork: true);
+      // http wraps socket failures in a ClientException, so unwrap one level
+      // before giving up and showing the raw text.
+      final inner = e is http.ClientException ? e.message : '$e';
+      throw LlmException('Web search failed: $inner', isNetwork: true);
     } finally {
       client.close();
     }

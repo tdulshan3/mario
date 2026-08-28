@@ -19,6 +19,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/services/ai/llm_provider_config.dart';
 import '../../core/services/ai/llm_service.dart';
+import '../../core/services/ai/llm_types.dart';
 import '../../ui/colors.dart';
 import 'ai_progress.dart';
 import 'ai_state.dart';
@@ -70,6 +71,14 @@ class ModelBar extends ConsumerWidget {
               },
             ),
           ),
+          _EffortChip(
+            effort: active.effort,
+            onPick: (effort) async {
+              await backends.setEffort(active.id, effort);
+              ref.invalidate(aiConfigsProvider);
+            },
+          ),
+          const SizedBox(width: 6),
           if (run == null)
             _ContextChip(
                 contextTokens: active.effectiveCapabilities.contextTokens)
@@ -193,6 +202,112 @@ class _ActiveLabel extends StatelessWidget {
         fontSize: 11.5,
         fontWeight: FontWeight.w600,
         color: scheme.onSurface,
+      ),
+    );
+  }
+}
+
+/// How hard the model should think before answering.
+///
+/// Beside the model rather than in Settings because it is a per-question
+/// decision as often as a standing one: the same backend that should answer
+/// "what does this paragraph mean" instantly should take its time over "write
+/// me a hard quiz on this". It is saved against the backend, so the choice
+/// sticks and can differ between a local model and a paid one.
+class _EffortChip extends StatelessWidget {
+  const _EffortChip({required this.effort, required this.onPick});
+
+  final LlmEffort effort;
+  final ValueChanged<LlmEffort> onPick;
+
+  static const _labels = {
+    LlmEffort.low: 'Fast',
+    LlmEffort.medium: 'Balanced',
+    LlmEffort.high: 'Thorough',
+  };
+
+  static const _blurbs = {
+    LlmEffort.low: 'Answers straight away. Thinking off where the model '
+        'supports turning it off.',
+    LlmEffort.medium: 'Some deliberation before answering.',
+    LlmEffort.high: 'Thinks it through first. Slower, and better on anything '
+        'that needs reasoning rather than recall.',
+  };
+
+  static const _icons = {
+    LlmEffort.low: Icons.bolt,
+    LlmEffort.medium: Icons.balance,
+    LlmEffort.high: Icons.psychology,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return PopupMenuButton<LlmEffort>(
+      tooltip: 'How hard to think',
+      position: PopupMenuPosition.under,
+      onSelected: onPick,
+      itemBuilder: (context) => [
+        for (final e in LlmEffort.values)
+          PopupMenuItem(
+            value: e,
+            height: 48,
+            child: Row(
+              children: [
+                Icon(
+                  e == effort
+                      ? Icons.radio_button_checked
+                      : Icons.radio_button_unchecked,
+                  size: 15,
+                  color: e == effort
+                      ? MarioColors.primaryPressed
+                      : scheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_labels[e]!,
+                          style: GoogleFonts.inter(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: scheme.onSurface)),
+                      Text(_blurbs[e]!,
+                          style: GoogleFonts.inter(
+                              fontSize: 10.5,
+                              height: 1.25,
+                              color: scheme.onSurfaceVariant)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+      ],
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+        margin: const EdgeInsets.only(right: 4),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(5),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_icons[effort], size: 12, color: scheme.onSurfaceVariant),
+            const SizedBox(width: 4),
+            Text(
+              _labels[effort]!,
+              style: GoogleFonts.inter(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

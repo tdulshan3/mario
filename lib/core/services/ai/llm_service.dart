@@ -60,6 +60,21 @@ class AiBackends {
     _providers.clear(); // rebuild lazily against the new settings
   }
 
+  /// How hard the active backend has been told to think.
+  ///
+  /// Falls back to medium when nothing is configured, so a caller never has to
+  /// branch on "no backend yet" just to build a request.
+  LlmEffort get effort => activeConfig?.effort ?? LlmEffort.medium;
+
+  /// Records the user's choice for one backend.
+  Future<void> setEffort(String configId, LlmEffort effort) async {
+    _configs = [
+      for (final c in _configs)
+        c.id == configId ? c.copyWith(effort: effort) : c,
+    ];
+    await _store.save(_configs);
+  }
+
   Future<void> setActive(String id) async {
     _activeId = id;
     await _store.setActiveId(id);
@@ -137,6 +152,11 @@ class LlmService {
   LlmService(this.backends);
 
   final AiBackends backends;
+
+  /// The depth the user chose for the active backend. Tasks that generate
+  /// something a person reads pass this; the machinery around them does not —
+  /// see [LlmProviderConfig.effort].
+  LlmEffort get userEffort => backends.effort;
 
   Future<LlmProvider> requireProvider([String? id]) async {
     final p = await backends.provider(id);

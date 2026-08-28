@@ -109,6 +109,7 @@ class LlmProviderConfig {
     this.hasApiKey = false,
     this.capabilities,
     this.contextTokens,
+    this.effort = LlmEffort.medium,
   });
 
   /// Stable id — also the secure-storage key suffix for this config's secret.
@@ -134,6 +135,19 @@ class LlmProviderConfig {
   /// advertise nothing and the real limit is whatever the model was loaded with.
   final int? contextTokens;
 
+  /// How hard this backend should think before answering.
+  ///
+  /// Per backend rather than per app, because the word means different things
+  /// to different models and costs different amounts: "high" on a 36B on the
+  /// LAN is thirty seconds of thinking that is free, and on a hosted model it
+  /// is money. Someone running both wants a different answer for each.
+  ///
+  /// Only user-facing generation honours it — an answer, a quiz, an agent plan.
+  /// The machinery around them (deciding what to search for, marking an essay,
+  /// checking grammar) stays where it is: nobody asking for deeper thinking
+  /// means they want the search-query planner to deliberate.
+  final LlmEffort effort;
+
   LlmCapabilities get effectiveCapabilities {
     final base = capabilities ?? kind.assumedCapabilities;
     return contextTokens == null
@@ -150,6 +164,7 @@ class LlmProviderConfig {
     bool? hasApiKey,
     LlmCapabilities? capabilities,
     int? contextTokens,
+    LlmEffort? effort,
   }) =>
       LlmProviderConfig(
         id: id,
@@ -161,6 +176,7 @@ class LlmProviderConfig {
         hasApiKey: hasApiKey ?? this.hasApiKey,
         capabilities: capabilities ?? this.capabilities,
         contextTokens: contextTokens ?? this.contextTokens,
+        effort: effort ?? this.effort,
       );
 
   Map<String, dynamic> toJson() => {
@@ -173,6 +189,7 @@ class LlmProviderConfig {
         'hasApiKey': hasApiKey,
         if (capabilities != null) 'capabilities': capabilities!.toJson(),
         if (contextTokens != null) 'contextTokens': contextTokens,
+        'effort': effort.name,
       };
 
   factory LlmProviderConfig.fromJson(Map<String, dynamic> m) =>
@@ -191,6 +208,11 @@ class LlmProviderConfig {
             ? null
             : LlmCapabilities.fromJson(asMap(m['capabilities'])!),
         contextTokens: asInt(m['contextTokens']),
+        // Absent in files written before this existed, which is most of them.
+        effort: LlmEffort.values.firstWhere(
+          (e) => e.name == m['effort'],
+          orElse: () => LlmEffort.medium,
+        ),
       );
 
   /// Builds the live provider for this config.

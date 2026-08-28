@@ -177,6 +177,21 @@ class OpenAiCompatibleProvider implements LlmProvider {
       // [sendThinkingControls].
       body['chat_template_kwargs'] = {'enable_thinking': false};
       body['think'] = false; // Ollama's own spelling
+    } else if (sendThinkingControls) {
+      // Free-text generation: pass the requested depth on. Effort used to
+      // reach Anthropic only, so a "think harder" choice did nothing at all on
+      // the backends most people here actually run.
+      //
+      // Three spellings because three servers. `reasoning_effort` is the
+      // OpenAI one that llama.cpp and vLLM also read; `enable_thinking` is the
+      // Qwen chat-template switch; `think` is Ollama's. A server ignores the
+      // ones it does not know, which is the whole reason all three can be sent
+      // — except to api.openai.com, which 400s on anything unrecognised, and
+      // is excluded by [sendThinkingControls].
+      final thinks = req.effort != LlmEffort.low;
+      body['reasoning_effort'] = req.effort.name;
+      body['chat_template_kwargs'] = {'enable_thinking': thinks};
+      body['think'] = thinks;
     }
     if (fmt != null) {
       if (_capabilities.strictJsonSchema) {

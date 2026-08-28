@@ -226,6 +226,9 @@ class _RecordingLlm implements LlmService {
   Future<LlmProvider> requireProvider([String? id]) async => _StubProvider();
 
   @override
+  LlmEffort get userEffort => LlmEffort.medium;
+
+  @override
   Future<Map<String, dynamic>> structured({
     required LlmRequest request,
     required String schemaName,

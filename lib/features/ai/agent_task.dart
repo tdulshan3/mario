@@ -139,7 +139,9 @@ class AgentTask {
                 '---\n\nDo this: $instruction'),
           ],
           maxTokens: 3000,
-          effort: LlmEffort.medium,
+          // Planning an edit to someone's page is user-facing work, so it
+          // follows the depth they chose.
+          effort: llm.userEffort,
         ),
         schemaName: 'agent_plan',
         schema: agentPlanSchema,

@@ -117,7 +117,7 @@ class AiTasks {
             LlmMessage.user('Summarise these notes.\n\n${trimmed.render()}'),
           ],
           maxTokens: 900,
-          effort: LlmEffort.low,
+          effort: llm.userEffort,
         ),
         schemaName: 'note_summary',
         schema: summarySchema,
@@ -328,8 +328,15 @@ class AiTasks {
           messages: [
             LlmMessage.user(prompt.toString(), images: attachments),
           ],
-          maxTokens: 1200,
-          effort: LlmEffort.low,
+          // Room to think *and* answer. A reasoning model spends the budget on
+          // thinking first, and 1200 is a whole answer's worth — so at any
+          // depth above Fast the visible reply can be cut off before it
+          // starts, which is exactly what "the model returned an empty answer"
+          // was.
+          maxTokens: answerBudgetFor(llm.userEffort),
+          // The depth the user asked for. Everything else in this file that
+          // talks to a model is machinery, and stays where it is.
+          effort: llm.userEffort,
         ),
         cancel: run.cancelToken,
       )) {
@@ -350,7 +357,22 @@ class AiTasks {
       }
 
       if (!run.value.hasAnswer) {
-        throw const LlmException('The model returned an empty answer.');
+        // Nothing visible came back. Before failing, look in the thinking
+        // channel: a reasoning model that spends its whole budget deliberating
+        // emits everything it produced there, and throwing that away to show
+        // "empty answer" discards a reply the model did in fact write.
+        final salvaged = salvageFromReasoning(run.value.reasoning);
+        if (salvaged.isEmpty) {
+          throw LlmException(llm.userEffort == LlmEffort.low
+              ? 'The model returned an empty answer.'
+              : 'The model spent its whole budget thinking and never wrote an '
+                  'answer. Set thinking to Fast in the bar above the panel, or '
+                  'ask something narrower.');
+        }
+        run.begin(AiStepKind.answering);
+        run.appendAnswer(salvaged);
+        run.detail('recovered from the thinking channel — the model ran out '
+            'of room before writing a final answer');
       }
 
       // A small model sometimes stalls anyway — "the notes do not contain the
@@ -411,7 +433,7 @@ class AiTasks {
                     'Question: $question'),
               ],
               maxTokens: 1200,
-              effort: LlmEffort.low,
+              effort: llm.userEffort,
             ),
             cancel: run.cancelToken,
           )) {
@@ -957,7 +979,7 @@ extension QuizTasks on AiTasks {
             ),
           ],
           maxTokens: ask * tokensPerItem + 400,
-          effort: LlmEffort.medium,
+          effort: llm.userEffort,
         ),
         schemaName: 'quiz',
         schema: quizSchema,
