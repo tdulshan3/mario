@@ -254,7 +254,8 @@ class _AskPanelState extends ConsumerState<AskPanel> {
                   valueListenable: run,
                   builder: (context, state, _) => ListView(
                     controller: _scroll,
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                    padding: EdgeInsets.fromLTRB(
+                        12, 12, 12, ComposerReserve.of(context)),
                     children: [
                       AiProgressView(
                         state: state,
@@ -289,7 +290,19 @@ class _AskPanelState extends ConsumerState<AskPanel> {
                         const SizedBox(height: 12),
                         // Models answer in Markdown; showing it raw makes the
                         // reader parse the punctuation instead of the meaning.
-                        AiMarkdown(state.answer),
+                        //
+                        // StreamingMarkdown rather than AiMarkdown: while the
+                        // answer is arriving, re-parsing and rebuilding all of
+                        // it per token is quadratic in its length, which is
+                        // what made a long answer slow to a halt and then take
+                        // the app down. Once finished it renders in one piece
+                        // so a selection can span the whole thing.
+                        RepaintBoundary(
+                          child: StreamingMarkdown(
+                            state.answer,
+                            done: state.status != AiRunStatus.running,
+                          ),
+                        ),
                       ],
                       if (state.sources.isNotEmpty) ...[
                         const SizedBox(height: 12),
@@ -325,141 +338,12 @@ class _AskPanelState extends ConsumerState<AskPanel> {
             text: session.quoted!,
             onClear: ref.read(askSessionProvider.notifier).clearQuote,
           ),
-        const Divider(height: 1),
-        _Composer(
-          controller: _controller,
-          focusNode: _focus,
-          enabled: bridge != null,
-          useWeb: session.useWeb,
-          onWebChanged: ref.read(askSessionProvider.notifier).cycleWeb,
-          onDraftChanged: ref.read(askSessionProvider.notifier).setDraft,
-          onSubmit: _submit,
-          onSummarize: _runSummary,
-        ),
+        // The composer now lives at the foot of the panel itself, shared by
+        // all four tabs (ai_side_panel.dart). Keeping a second one here left
+        // the Ask tab with two fields, two send buttons and two web toggles —
+        // and they only synced one way, so typing in this one left the panel's
+        // send button inert.
       ],
-    );
-  }
-}
-
-class _Composer extends StatelessWidget {
-  const _Composer({
-    required this.controller,
-    required this.focusNode,
-    required this.enabled,
-    required this.useWeb,
-    required this.onWebChanged,
-    required this.onDraftChanged,
-    required this.onSubmit,
-    required this.onSummarize,
-  });
-
-  final TextEditingController controller;
-  final FocusNode focusNode;
-  final bool enabled;
-  final bool? useWeb;
-  final VoidCallback onWebChanged;
-  final ValueChanged<String> onDraftChanged;
-  final VoidCallback onSubmit;
-  final VoidCallback onSummarize;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // Wrap, not Row-with-Spacer: the panel can be dragged down to its
-          // 280px minimum, where the two buttons together are ~34px too wide
-          // and a Row overflows. They sit side by side when there is room and
-          // stack when there is not.
-          Wrap(
-            spacing: 4,
-            runSpacing: 2,
-            alignment: WrapAlignment.spaceBetween,
-            crossAxisAlignment: WrapCrossAlignment.center,
-            children: [
-              _WebToggle(value: useWeb, onChanged: onWebChanged),
-              TextButton.icon(
-                onPressed: enabled ? onSummarize : null,
-                icon: const Icon(Icons.subject, size: 15),
-                label: const Text('Summarise'),
-                style: TextButton.styleFrom(
-                  visualDensity: VisualDensity.compact,
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  textStyle: GoogleFonts.inter(fontSize: 12),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          TextField(
-            controller: controller,
-            focusNode: focusNode,
-            enabled: enabled,
-            minLines: 1,
-            maxLines: 5,
-            textInputAction: TextInputAction.send,
-            onChanged: onDraftChanged,
-            onSubmitted: (_) => onSubmit(),
-            style: GoogleFonts.inter(fontSize: 13),
-            decoration: InputDecoration(
-              hintText: enabled
-                  ? 'Ask about this page...'
-                  : 'Open a page to ask about it',
-              isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(8),
-                borderSide: BorderSide(color: scheme.outlineVariant),
-              ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.arrow_upward, size: 16),
-                onPressed: enabled ? onSubmit : null,
-                tooltip: 'Ask',
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Auto / on / off for the web.
-///
-/// Three states rather than a plain switch because "off" is a real
-/// requirement, not a preference: a search sends a question derived from
-/// private notes to a third party, and some notes should never leave the
-/// machine.
-class _WebToggle extends StatelessWidget {
-  const _WebToggle({required this.value, required this.onChanged});
-
-  final bool? value;
-  final VoidCallback onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final (icon, label) = switch (value) {
-      true => (Icons.public, 'Web: on'),
-      false => (Icons.public_off, 'Web: off'),
-      null => (Icons.auto_awesome, 'Web: auto'),
-    };
-    return TextButton.icon(
-      onPressed: onChanged,
-      icon: Icon(icon, size: 15),
-      label: Text(label),
-      style: TextButton.styleFrom(
-        visualDensity: VisualDensity.compact,
-        padding: const EdgeInsets.symmetric(horizontal: 8),
-        foregroundColor: value == true
-            ? MarioColors.primaryPressed
-            : scheme.onSurfaceVariant,
-        textStyle: GoogleFonts.inter(fontSize: 12),
-      ),
     );
   }
 }
@@ -810,7 +694,11 @@ class _QuotedSelection extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final oneLine = text.replaceAll(RegExp(r'\s+'), ' ').trim();
     return Padding(
-      padding: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      // Docked below the scroll area, so the floating composer overlays it
+      // unless it clears the composer itself. The earlier sweep looked for a
+      // Divider+Padding footer and this chip is neither, which is how it was
+      // missed — hence the measured reserve rather than another guess.
+      padding: EdgeInsets.fromLTRB(10, 0, 10, ComposerReserve.of(context) + 6),
       // The accent is a child, not a coloured left border: Flutter only allows
       // a borderRadius when every side of the border is the same colour, and a
       // yellow-left/grey-elsewhere Border with rounded corners throws on every

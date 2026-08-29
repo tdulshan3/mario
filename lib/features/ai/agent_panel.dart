@@ -13,12 +13,16 @@
 ///    deleting three things are not the same event, and the summary says which.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/organic.dart';
 import '../settings/settings_state.dart';
+import '../shell/dialogs/text_input_dialog.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'agent_actions.dart';
@@ -27,6 +31,7 @@ import 'ai_progress.dart';
 import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
+import 'note_images.dart';
 
 class AgentPanel extends ConsumerStatefulWidget {
   const AgentPanel({super.key});
@@ -36,25 +41,51 @@ class AgentPanel extends ConsumerStatefulWidget {
 }
 
 class _AgentPanelState extends ConsumerState<AgentPanel> {
-  late final TextEditingController _controller;
-  final _focus = FocusNode();
-
   @override
   void initState() {
     super.initState();
-    _controller =
-        TextEditingController(text: ref.read(agentSessionProvider).draft);
+    // An instruction handed over by the panel's composer, collected once on
+    // mount — the same route `/ask` takes into the Ask tab. The panel remounts
+    // this tab on every hand-off, which is what makes a second instruction run
+    // while the tab is already open.
+    final pending = ref.read(aiPanelProvider.notifier).takePendingInstruction();
+    if (pending != null && pending.trim().isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_runInstruction(pending.trim()));
+      });
+    }
   }
 
-  @override
-  void dispose() {
-    _controller.dispose();
-    _focus.dispose();
-    super.dispose();
+  /// Runs one of the launcher's presets.
+  ///
+  /// It goes through [_runInstruction], the same path a typed instruction
+  /// takes. It deliberately does *not* write itself into the composer first:
+  /// a preset is three or four lines of prompt, and dropping that into the box
+  /// and leaving it there reads as "nothing happened, here is your text" —
+  /// which is exactly how it was read. What was asked shows in the run's own
+  /// progress list instead, where it belongs.
+  Future<void> _runPreset(_PagePreset preset) async {
+    if (ref.read(aiEditorBridgeProvider) == null) return;
+
+    var instruction = preset.instruction;
+    if (preset.asksLanguage) {
+      // The design names no target language. Picking one here would translate
+      // somebody's page into a language they never chose, so it is asked for.
+      final language = await showTextInputDialog(
+        context,
+        title: 'Translate this page',
+        label: 'Into which language?',
+        submitLabel: 'Translate',
+      );
+      if (language == null || language.trim().isEmpty) return;
+      if (!mounted) return;
+      instruction = instruction.replaceAll('{language}', language.trim());
+    }
+
+    await _runInstruction(instruction);
   }
 
-  Future<void> _run() async {
-    final instruction = _controller.text.trim();
+  Future<void> _runInstruction(String instruction) async {
     final bridge = ref.read(aiEditorBridgeProvider);
     if (instruction.isEmpty || bridge == null) return;
 
@@ -70,7 +101,19 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     // Text only: the agent is choosing *where* things go, and OCR labelled by
     // block id answers that. Sending the pictures themselves would multiply
     // the prefill of an already slow planning call.
-    final images = await reader.read(document, loadBytes: false);
+    //
+    // Guarded because this happens *before* there is a run to fail into. An
+    // unreadable image — not on this device, Drive unreachable — used to throw
+    // out of this method into nothing, and a tap on a preset then did visibly
+    // nothing at all. The pictures are optional context; the instruction is
+    // not, so a failure here costs the OCR and keeps the run.
+    var images = const <NoteImage>[];
+    try {
+      images = await reader.read(document, loadBytes: false);
+    } catch (_) {
+      // Falls through with no images.
+    }
+    if (!mounted) return;
 
     final run = task.run(
       instruction: instruction,
@@ -151,28 +194,32 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final bridge = ref.watch(aiEditorBridgeProvider);
     final session = ref.watch(agentSessionProvider);
     final run = session.run;
-
-    if (_controller.text != session.draft) {
-      _controller.value = TextEditingValue(
-        text: session.draft,
-        selection: TextSelection.collapsed(offset: session.draft.length),
-      );
-    }
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
           child: run == null
-              ? const _Intro()
+              ? ListView(
+                  padding: EdgeInsets.fromLTRB(
+                      18, 18, 18, ComposerReserve.of(context)),
+                  children: [
+                    const _Intro(),
+                    const SizedBox(height: MarioSpace.x6),
+                    _ActOnThisPage(
+                      enabled: bridge != null,
+                      onRun: _runPreset,
+                    ),
+                  ],
+                )
               : ValueListenableBuilder<AiRunState>(
                   valueListenable: run,
                   builder: (context, state, _) => ListView(
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                    padding: EdgeInsets.fromLTRB(
+                        12, 12, 12, ComposerReserve.of(context)),
                     children: [
                       AiProgressView(
                         state: state,
@@ -192,46 +239,18 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                           onUndo: _undo,
                         ),
                       ],
+                      // The launcher rides along under the result too. The
+                      // agent session is app-level and never cleared, so the
+                      // intro above is gone for good after the first run —
+                      // without this the presets would be usable exactly once.
+                      const SizedBox(height: MarioSpace.x6),
+                      _ActOnThisPage(
+                        enabled: bridge != null && !state.isRunning,
+                        onRun: _runPreset,
+                      ),
                     ],
                   ),
                 ),
-        ),
-        const Divider(height: 1),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(10, 8, 10, 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              TextField(
-                controller: _controller,
-                focusNode: _focus,
-                enabled: bridge != null,
-                minLines: 1,
-                maxLines: 4,
-                textInputAction: TextInputAction.send,
-                onChanged: ref.read(agentSessionProvider.notifier).setDraft,
-                onSubmitted: (_) => _run(),
-                style: GoogleFonts.inter(fontSize: 13),
-                decoration: InputDecoration(
-                  hintText: bridge == null
-                      ? 'Open a page to edit it'
-                      : 'Add a table of..., rename this page to...',
-                  isDense: true,
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8),
-                    borderSide: BorderSide(color: scheme.outlineVariant),
-                  ),
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.auto_fix_high, size: 16),
-                    tooltip: 'Make the change',
-                    onPressed: bridge == null ? null : _run,
-                  ),
-                ),
-              ),
-            ],
-          ),
         ),
       ],
     );
@@ -252,8 +271,8 @@ class _Intro extends StatelessWidget {
       'Add a spreadsheet for the experiment results',
     ];
 
-    return ListView(
-      padding: const EdgeInsets.all(18),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Icon(Icons.auto_fix_high, size: 26, color: scheme.onSurfaceVariant),
         const SizedBox(height: 10),
@@ -289,6 +308,206 @@ class _Intro extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// One row of the "Act on this page" launcher.
+///
+/// [instruction] is what the agent is handed, worded against the contract in
+/// agent_task.dart rather than as a wish: it asks for the specific operations
+/// [AgentActionKind] actually allows, and names blockId/afterBlockId where
+/// placement matters, because the plan is validated in Dart and anything the
+/// model invents outside that list is dropped rather than attempted.
+class _PagePreset {
+  const _PagePreset({
+    required this.icon,
+    required this.title,
+    required this.description,
+    required this.instruction,
+    this.asksLanguage = false,
+  });
+
+  final IconData icon;
+  final String title;
+  final String description;
+
+  /// Sent exactly as if it had been typed into the box below. Contains
+  /// `{language}`, filled in before the run, when [asksLanguage].
+  final String instruction;
+
+  /// Whether to ask for a target language before running.
+  final bool asksLanguage;
+}
+
+/// The design draws five rows. Four of them are here.
+///
+/// **"Split into pages" is deliberately missing.** It would have to write new
+/// pages into the section, and nothing in this feature can: [AgentActionKind]
+/// is an allowlist with no create-page member, and [AiEditorBridge] exposes
+/// only the open page — read it, edit its blocks, rename it. A row for it
+/// would plan something, drop every action as unknown, and fail every time it
+/// was pressed. Better absent than broken.
+const _presets = <_PagePreset>[
+  _PagePreset(
+    icon: Icons.checklist,
+    title: 'Pull out the to-dos',
+    description: 'Every action in the page as a checklist',
+    instruction: 'Read the whole page and collect every task, action or next '
+        'step it mentions. Add a level 2 heading "To do" at the end of the '
+        'page, then one todo action underneath it with a single item per '
+        'task, each worded as a short instruction. Do not change or remove '
+        'anything already on the page.',
+  ),
+  _PagePreset(
+    icon: Icons.table_chart,
+    title: 'Make a table',
+    description: 'Turn the bullet list into rows and columns',
+    instruction: 'Find the bullet list on this page and turn it into a table. '
+        'Add a table immediately after the list, using afterBlockId, whose '
+        'first row is the column headers and which has one row per bullet, '
+        'with each bullet split across those columns and every row the same '
+        'width. Then delete the original bullet blocks by their ids. Change '
+        'nothing else on the page.',
+  ),
+  _PagePreset(
+    icon: Icons.translate,
+    title: 'Translate',
+    description: 'Keep the blocks, swap the language',
+    // The language is asked for at the tap; see _AgentPanelState._runPreset.
+    asksLanguage: true,
+    instruction: 'Translate this page into {language}. For every block that '
+        'has text, use replace_block with that block\'s id and the {language} '
+        'translation of its text. Keep exactly the same blocks in the same '
+        'order — the same headings, lists, tables, quotes and code — and do '
+        'not add or delete a single block.',
+  ),
+  _PagePreset(
+    icon: Icons.content_cut,
+    title: 'Tighten the writing',
+    description: 'Same meaning, fewer words',
+    instruction: 'Tighten the writing on this page. For each paragraph or '
+        'quote block that could be shorter, use replace_block with that '
+        'block\'s id and a shorter version carrying the same meaning and '
+        'every fact, name and number. Do not delete any block, do not touch '
+        'headings, code, formulas, tables or lists, and do not add anything '
+        'new.',
+  ),
+];
+
+/// The launcher: preset instructions, one tap each.
+///
+/// The note at the foot is **not** the line the design writes. The design
+/// promises "every action previews its change and asks before writing to the
+/// page", and this agent does no such thing: [AgentTask] asks for a plan,
+/// validates it, snapshots the page and then writes, with no preview and no
+/// confirmation anywhere between. What it does have is the running commentary
+/// and the one-press Undo, so that is what the line says.
+class _ActOnThisPage extends StatelessWidget {
+  const _ActOnThisPage({required this.enabled, required this.onRun});
+
+  /// False with no page open, and while a run is in flight — a preset that
+  /// queued a second plan on top of the first would leave two sets of edits
+  /// and one snapshot.
+  final bool enabled;
+
+  final ValueChanged<_PagePreset> onRun;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const MarioKicker('Act on this page'),
+        const SizedBox(height: MarioSpace.x2),
+        for (final preset in _presets)
+          _PresetRow(
+            preset: preset,
+            onTap: enabled ? () => onRun(preset) : null,
+          ),
+        const SizedBox(height: MarioSpace.x2),
+        Text(
+          'Changes are written straight to the page. Each one is named as it '
+          'happens, and Undo all puts the page back.',
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontSize: 12,
+                height: 1.35,
+                color: scheme.onSurfaceVariant,
+              ),
+        ),
+      ],
+    );
+  }
+}
+
+class _PresetRow extends StatelessWidget {
+  const _PresetRow({required this.preset, required this.onTap});
+
+  final _PagePreset preset;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final text = theme.textTheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MarioSpace.x1),
+      // Its own Material: the panel's ink needs somewhere to land, and a
+      // transparent one keeps whichever of the four grounds is showing.
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(MarioRadius.sm),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(MarioRadius.sm),
+          child: Opacity(
+            opacity: onTap == null ? 0.45 : 1,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: MarioSpace.x2,
+                vertical: MarioSpace.x2,
+              ),
+              child: Row(
+                children: [
+                  // The second accent, not the gold: gold on cream is the one
+                  // pairing in this palette that does not carry a 17px glyph.
+                  Icon(preset.icon, size: 17, color: scheme.secondary),
+                  const SizedBox(width: MarioSpace.x3),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          preset.title,
+                          style: text.bodySmall?.copyWith(
+                            fontSize: 12.5,
+                            height: 1.3,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        Text(
+                          preset.description,
+                          style: text.bodySmall?.copyWith(
+                            fontSize: 11.5,
+                            height: 1.3,
+                            color: scheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: MarioSpace.x2),
+                  Icon(Icons.chevron_right,
+                      size: 16, color: scheme.onSurfaceVariant),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -368,17 +587,23 @@ class _Outcome extends StatelessWidget {
                       fontSize: 11, color: scheme.onSurfaceVariant),
                 ),
               ),
+            // "Rejected as unsafe" was almost always a lie. One rejection —
+            // a setting outside the allowlist — really is a guard refusing.
+            // The rest are the model writing an action in a shape the parser
+            // could not read, which is a defect, not a defence, and calling it
+            // safety hid it. The reason is now on the line.
             if (outcome.failed > 0 || outcome.dropped > 0)
               Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   [
                     if (outcome.dropped > 0)
-                      '${outcome.dropped} proposed change(s) were rejected as '
-                          'unsafe',
+                      '${outcome.dropped} proposed change(s) could not be '
+                          'used${outcome.dropReasons.isEmpty ? '' : ': '
+                              '${outcome.dropReasons.join('; ')}'}',
                     if (outcome.failed > 0)
-                      '${outcome.failed} could not be applied',
-                  ].join('; '),
+                      '${outcome.failed} could not be applied to the page',
+                  ].join('. '),
                   style: GoogleFonts.inter(
                       fontSize: 11, color: scheme.onSurfaceVariant),
                 ),

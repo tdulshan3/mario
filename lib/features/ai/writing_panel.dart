@@ -93,7 +93,8 @@ class _WritingPanelState extends ConsumerState<WritingPanel> {
               : ValueListenableBuilder<AiRunState>(
                   valueListenable: run,
                   builder: (context, state, _) => ListView(
-                    padding: const EdgeInsets.all(12),
+                    padding: EdgeInsets.fromLTRB(
+                        12, 12, 12, ComposerReserve.of(context)),
                     children: [
                       if (state.isRunning || state.error != null)
                         AiProgressView(
@@ -126,7 +127,9 @@ class _WritingPanelState extends ConsumerState<WritingPanel> {
         ),
         const Divider(height: 1),
         Padding(
-          padding: const EdgeInsets.all(10),
+          // Same reserve as the other tabs: the composer floats over this
+          // content, so a docked footer has to clear it explicitly.
+          padding: EdgeInsets.fromLTRB(10, 10, 10, ComposerReserve.of(context)),
           child: Row(
             children: [
               if (run != null && session.suggestions.isNotEmpty)

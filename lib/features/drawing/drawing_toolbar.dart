@@ -23,14 +23,20 @@ class DrawingToolbar extends StatelessWidget {
     super.key,
     required this.controller,
     required this.onCollapse,
-    required this.onExport,
+    this.onExport,
     required this.onSave,
     this.collapsed = false,
   });
 
   final DrawingController controller;
   final VoidCallback onCollapse;
-  final VoidCallback onExport;
+
+  /// PNG export, when the caller has a repaint boundary to capture.
+  ///
+  /// Null hides the button. The full-page canvas has no boundary to render
+  /// from, and an always-enabled "Save as PNG" that silently does nothing is
+  /// worse than no button — it was wired to an empty closure before this.
+  final VoidCallback? onExport;
   final VoidCallback onSave;
   final bool collapsed;
 
@@ -105,12 +111,14 @@ class DrawingToolbar extends StatelessWidget {
               icon: const Icon(Icons.delete_outline, size: 18),
               onPressed: controller.canUndo ? controller.clearAll : null,
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: 'Save as PNG',
-              icon: const Icon(Icons.download_outlined, size: 18),
-              onPressed: onExport,
-            ),
+            if (onExport != null) ...[
+              const SizedBox(width: 8),
+              IconButton(
+                tooltip: 'Save as PNG',
+                icon: const Icon(Icons.download_outlined, size: 18),
+                onPressed: onExport,
+              ),
+            ],
             IconButton(
               tooltip: 'Save changes',
               icon: const Icon(Icons.check, size: 18),

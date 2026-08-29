@@ -1,15 +1,26 @@
-/// Global search — title-only first pass over notebook/section/page indexes.
+/// Global search — the redesign's command palette (artboard 2e).
 ///
-/// Full-text content search is deferred until the Drift FTS5 index is built;
-/// this modal already covers most of the OneNote "where is that page?" use case.
+/// One palette over pages and actions, with the keyboard as the primary input:
+/// ↑↓ moves, ↵ opens, esc closes. The design draws a content snippet under each
+/// hit ("…net torque about an axis…") and a footer reading "Searches titles and
+/// content" — this searches TITLES ONLY until the Drift FTS5 index lands, so it
+/// says titles, and shows the breadcrumb where the snippet would go. Promising
+/// content search that does not happen would be worse than the honest label.
+///
+/// The design also offers an "Ask Mario about …" action. The AI panel can be
+/// opened ([AiPanelNotifier.open]) but has no API for handing it a question, so
+/// the row would drop the text the user just typed. It is omitted until there
+/// is something to hand the question to.
 library;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/models/note_page.dart';
 import '../../ui/colors.dart';
+import '../../ui/organic.dart';
+import '../../ui/theme.dart';
 import '../shell/shell_state.dart';
 
 class _SearchHit {
@@ -29,8 +40,17 @@ class _SearchHit {
 }
 
 void showGlobalSearch(BuildContext context) {
+  // The design dims the page behind the palette with its own neutral-900,
+  // which is the mark's navy. That is right on three grounds and wrong on the
+  // fourth: over Black's pure #000 a navy scrim is simply a blue wash, because
+  // there is no navy in that ground for it to agree with. Black dims with
+  // black — and harder, since it has no ambient light to lose.
+  final black = marioMode(context) == MarioThemeMode.black;
   showDialog(
     context: context,
+    barrierColor: black
+        ? Colors.black.withValues(alpha: 0.66)
+        : MarioColors.navy.withValues(alpha: 0.42),
     builder: (_) => const _GlobalSearchDialog(),
   );
 }
@@ -44,27 +64,31 @@ class _GlobalSearchDialog extends ConsumerStatefulWidget {
 }
 
 class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
+  final _focus = FocusNode();
   String _query = '';
+  int _cursor = 0;
 
-  Future<List<_SearchHit>> _search() async {
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  List<_SearchHit> _search() {
+    final lower = _query.toLowerCase();
+    if (lower.isEmpty) return const [];
     final notebooks = ref.read(notebooksStreamProvider).valueOrNull ?? [];
     final hits = <_SearchHit>[];
-    final lower = _query.toLowerCase();
-    if (lower.isEmpty) return hits;
-
     for (final nb in notebooks) {
       final sections =
           ref.read(sectionsStreamProvider(nb.id)).valueOrNull ?? [];
       for (final s in sections) {
         final pages = ref
-                .read(pagesStreamProvider(
-                    (notebookId: nb.id, sectionId: s.id)))
+                .read(pagesStreamProvider((notebookId: nb.id, sectionId: s.id)))
                 .valueOrNull ??
             [];
         for (final p in pages) {
-          final hay =
-              '${nb.name} ${s.name} ${p.title}'.toLowerCase();
-          if (hay.contains(lower)) {
+          if ('${nb.name} ${s.name} ${p.title}'.toLowerCase().contains(lower)) {
             hits.add(_SearchHit(
               notebookId: nb.id,
               notebookName: nb.name,
@@ -79,66 +103,349 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
     return hits;
   }
 
+  /// A page can only be created into a section, so the action exists only when
+  /// the shell has one open. Offering it otherwise would have nowhere to file
+  /// the result.
+  bool get _canCreate {
+    final sel = ref.read(selectionProvider);
+    return _query.isNotEmpty && sel.notebookId != null && sel.sectionId != null;
+  }
+
+  int get _rowCount => _search().length + (_canCreate ? 1 : 0);
+
+  void _move(int delta) {
+    final n = _rowCount;
+    if (n == 0) return;
+    setState(() => _cursor = (_cursor + delta) % n < 0
+        ? (_cursor + delta) % n + n
+        : (_cursor + delta) % n);
+  }
+
+  void _activate() {
+    final hits = _search();
+    if (_cursor < hits.length) {
+      _open(hits[_cursor]);
+    } else if (_canCreate) {
+      _create();
+    }
+  }
+
+  void _open(_SearchHit h) {
+    final sel = ref.read(selectionProvider.notifier);
+    sel.selectNotebook(h.notebookId);
+    sel.selectSection(h.sectionId);
+    sel.selectPage(h.page.id);
+    Navigator.of(context).pop();
+  }
+
+  Future<void> _create() async {
+    final sel = ref.read(selectionProvider);
+    final nid = sel.notebookId;
+    final sid = sel.sectionId;
+    if (nid == null || sid == null) return;
+    final pages = ref
+            .read(pagesStreamProvider((notebookId: nid, sectionId: sid)))
+            .valueOrNull ??
+        const [];
+    final now = DateTime.now();
+    final id = await ref.read(syncServiceProvider).createPage(NotePage(
+          id: '',
+          sectionId: sid,
+          notebookId: nid,
+          title: _query,
+          order: pages.length,
+          createdAt: now,
+          updatedAt: now,
+        ));
+    if (!mounted) return;
+    ref.read(selectionProvider.notifier).selectPage(id);
+    Navigator.of(context).pop();
+  }
+
+  KeyEventResult _onKey(FocusNode _, KeyEvent e) {
+    if (e is! KeyDownEvent && e is! KeyRepeatEvent) {
+      return KeyEventResult.ignored;
+    }
+    switch (e.logicalKey) {
+      case LogicalKeyboardKey.arrowDown:
+        _move(1);
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.arrowUp:
+        _move(-1);
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.enter:
+      case LogicalKeyboardKey.numpadEnter:
+        _activate();
+        return KeyEventResult.handled;
+      case LogicalKeyboardKey.escape:
+        Navigator.of(context).pop();
+        return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Dialog(
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final hits = _search();
+
+    return Align(
+      alignment: const Alignment(0, -0.72),
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 560, maxHeight: 480),
+        constraints: const BoxConstraints(maxWidth: 680, maxHeight: 560),
+        child: MarioGlass(
+          borderRadius: BorderRadius.circular(32),
+          // A heavier blur buys transparency: once what is behind is smeared
+          // to a wash, the veil no longer has to be near-opaque to keep text
+          // legible over it. 0.86 was safe and looked like a solid panel.
+          blur: 64,
+          // Stated outright rather than left to the chrome default: this
+          // surface has to carry text over whatever page is behind it, and
+          // the dark grounds' ~6% chrome veil would leave it unreadable.
+          tint: scheme.surfaceContainerHigh,
+          strength: 0.68,
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(32),
+            clipBehavior: Clip.antiAlias,
+            child: Focus(
+              onKeyEvent: _onKey,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // ── query row ──────────────────────────────────────────────
+                  Container(
+                    padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
+                    decoration: BoxDecoration(
+                      border: Border(
+                          bottom: BorderSide(color: marioDivider(context))),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.search, size: 20, color: scheme.primary),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: TextField(
+                            autofocus: true,
+                            focusNode: _focus,
+                            style: text.bodyLarge?.copyWith(fontSize: 18),
+                            decoration: const InputDecoration(
+                              isDense: true,
+                              filled: false,
+                              border: InputBorder.none,
+                              enabledBorder: InputBorder.none,
+                              focusedBorder: InputBorder.none,
+                              contentPadding: EdgeInsets.zero,
+                              hintText: 'Search pages',
+                            ),
+                            onChanged: (v) => setState(() {
+                              _query = v.trim();
+                              _cursor = 0;
+                            }),
+                            onSubmitted: (_) => _activate(),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        const MarioKeyHint('esc'),
+                      ],
+                    ),
+                  ),
+                  Flexible(
+                    child: _query.isEmpty
+                        ? const _Hint('Type to search your pages by title.')
+                        : (hits.isEmpty && !_canCreate)
+                            ? const _Hint('No matches.')
+                            : ListView(
+                                shrinkWrap: true,
+                                padding:
+                                    const EdgeInsets.fromLTRB(12, 14, 12, 16),
+                                children: [
+                                  if (hits.isNotEmpty) ...[
+                                    const _GroupLabel('Pages'),
+                                    for (var i = 0; i < hits.length; i++)
+                                      _HitRow(
+                                        hit: hits[i],
+                                        selected: i == _cursor,
+                                        onTap: () => _open(hits[i]),
+                                      ),
+                                  ],
+                                  if (_canCreate) ...[
+                                    const _GroupLabel('Actions'),
+                                    _ActionRow(
+                                      icon: Icons.note_add_outlined,
+                                      label: 'New page called “$_query”',
+                                      selected: _cursor == hits.length,
+                                      onTap: _create,
+                                    ),
+                                  ],
+                                ],
+                              ),
+                  ),
+                  // ── footer ─────────────────────────────────────────────────
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 22, vertical: 12),
+                    decoration: BoxDecoration(
+                      border:
+                          Border(top: BorderSide(color: marioDivider(context))),
+                    ),
+                    child: Row(
+                      children: [
+                        _FootHint('↑↓ move'),
+                        const SizedBox(width: 18),
+                        _FootHint('↵ open'),
+                        const SizedBox(width: 18),
+                        _FootHint('esc close'),
+                        const Spacer(),
+                        // Titles only, until the FTS5 content index exists.
+                        _FootHint('Searches titles'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GroupLabel extends StatelessWidget {
+  const _GroupLabel(this.label);
+  final String label;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        child: MarioKicker(label),
+      );
+}
+
+class _HitRow extends StatelessWidget {
+  const _HitRow({
+    required this.hit,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _SearchHit hit;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final dark = marioMode(context).isDark;
+    final fill = dark
+        ? MarioColors.accent400.withValues(alpha: 0.20)
+        : MarioColors.accent200;
+    final ink = selected
+        ? (dark ? MarioColors.accent100 : MarioColors.accent900)
+        : scheme.onSurface;
+    final sub = selected
+        ? (dark ? MarioColors.accent200 : MarioColors.accent800)
+        : scheme.onSurfaceVariant;
+
+    return Material(
+      color: selected ? fill : Colors.transparent,
+      borderRadius: BorderRadius.circular(MarioRadius.md),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(MarioRadius.md),
         child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
             children: [
-              TextField(
-                autofocus: true,
-                onChanged: (v) => setState(() => _query = v.trim()),
-                decoration: const InputDecoration(
-                  hintText: 'Search notebooks, sections, pages…',
-                  prefixIcon: Icon(Icons.search, size: 18),
+              Icon(Icons.description_outlined, size: 17, color: sub),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      hit.page.title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: text.bodyLarge?.copyWith(
+                        fontSize: 15,
+                        height: 1.3,
+                        fontWeight:
+                            selected ? FontWeight.w700 : FontWeight.w600,
+                        color: ink,
+                      ),
+                    ),
+                    Text(
+                      '${hit.notebookName} › ${hit.sectionName ?? ''}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(fontSize: 12, height: 1.3, color: sub),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 12),
+              if (selected)
+                Text('↵',
+                    style: TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.w600, color: sub)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ActionRow extends StatelessWidget {
+  const _ActionRow({
+    required this.icon,
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final String label;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = marioMode(context).isDark;
+    final fill = dark
+        ? MarioColors.accent400.withValues(alpha: 0.20)
+        : MarioColors.accent200;
+
+    return Material(
+      color: selected ? fill : Colors.transparent,
+      borderRadius: BorderRadius.circular(MarioRadius.md),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(MarioRadius.md),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          child: Row(
+            children: [
+              Icon(icon,
+                  size: 17,
+                  color: dark ? MarioColors.accent300 : MarioColors.accent600),
+              const SizedBox(width: 12),
               Expanded(
-                child: FutureBuilder<List<_SearchHit>>(
-                  future: _search(),
-                  builder: (context, snap) {
-                    final hits = snap.data ?? const [];
-                    if (_query.isEmpty) {
-                      return _Hint(
-                          'Search by title — full-text search lands with the FTS5 index.');
-                    }
-                    if (hits.isEmpty) {
-                      return _Hint('No matches.');
-                    }
-                    return ListView.builder(
-                      itemCount: hits.length,
-                      itemBuilder: (_, i) {
-                        final h = hits[i];
-                        return ListTile(
-                          dense: true,
-                          title: Text(h.page.title,
-                              style:
-                                  GoogleFonts.inter(fontWeight: FontWeight.w500)),
-                          subtitle: Text(
-                              '${h.notebookName} › ${h.sectionName ?? ''}',
-                              style: GoogleFonts.inter(fontSize: 11)),
-                          onTap: () {
-                            ref
-                                .read(selectionProvider.notifier)
-                                .selectNotebook(h.notebookId);
-                            ref
-                                .read(selectionProvider.notifier)
-                                .selectSection(h.sectionId);
-                            ref
-                                .read(selectionProvider.notifier)
-                                .selectPage(h.page.id);
-                            Navigator.of(context).pop();
-                          },
-                        );
-                      },
-                    );
-                  },
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.3,
+                    fontWeight: FontWeight.w600,
+                    color: scheme.onSurface,
+                  ),
                 ),
               ),
             ],
@@ -149,24 +456,36 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
   }
 }
 
+class _FootHint extends StatelessWidget {
+  const _FootHint(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) => Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
+      );
+}
+
 class _Hint extends StatelessWidget {
   const _Hint(this.text);
   final String text;
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final muted =
-        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(24),
-        child: Text(
-          text,
-          textAlign: TextAlign.center,
-          style: GoogleFonts.inter(fontSize: 12, color: muted),
+  Widget build(BuildContext context) => Center(
+        child: Padding(
+          padding: const EdgeInsets.all(28),
+          child: Text(
+            text,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
-      ),
-    );
-  }
+      );
 }

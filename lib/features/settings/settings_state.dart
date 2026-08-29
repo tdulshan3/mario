@@ -119,8 +119,20 @@ class SettingsNotifier extends AsyncNotifier<SettingsState> {
           ? _secure.delete(key: _kAnthropicKey)
           : _secure.write(key: _kAnthropicKey, value: key);
 
+  /// The redesign renamed the grounds: dark→night, and the sepia book theme
+  /// was replaced by white. Without this, anyone who had picked one of those
+  /// would silently land back on System — their choice quietly discarded
+  /// rather than carried to the ground that replaced it.
+  static const _themeAliases = {
+    'dark': MarioThemeMode.night,
+    'book': MarioThemeMode.white,
+  };
+
   MarioThemeMode _readTheme(SharedPreferences p) {
     final s = p.getString(_kThemeMode);
+    if (s == null) return MarioThemeMode.system;
+    final alias = _themeAliases[s];
+    if (alias != null) return alias;
     return MarioThemeMode.values
         .firstWhere((m) => m.name == s, orElse: () => MarioThemeMode.system);
   }

@@ -20,6 +20,7 @@ import '../../core/models/note_page.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
+import '../../ui/organic.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
 import '../drawing/stroke.dart';
@@ -30,7 +31,11 @@ import '../ai/grammar_check.dart';
 import '../ai/ai_state.dart';
 import '../ai/ask_panel.dart';
 import '../ai/note_context.dart';
+import '../export/export_dialog.dart';
+import '../export/markdown_exporter.dart';
+import '../export/pdf_exporter.dart';
 import '../math/math_shortcut.dart';
+import '../shell/shell_state.dart' as shell;
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
 import 'blocks/code_block.dart';
@@ -182,10 +187,18 @@ class _EditorState extends ConsumerState<_Editor> {
   // _updatePreview (called on each transaction while preview is on) so the
   // pane re-renders without rebuilding the editor.
   bool _previewMode = false;
+
   final ValueNotifier<String> _previewHtml = ValueNotifier<String>('');
 
   static const _imageExtensions = <String>{
-    '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.heif',
+    '.png',
+    '.jpg',
+    '.jpeg',
+    '.gif',
+    '.webp',
+    '.bmp',
+    '.heic',
+    '.heif',
   };
 
   bool _isImagePath(String p) {
@@ -209,8 +222,8 @@ class _EditorState extends ConsumerState<_Editor> {
     }
     if (imagePaths.isEmpty || _editorState.isDisposed) return;
     final selection = _editorState.selection;
-    final basePath = selection?.end.path ??
-        _editorState.document.root.children.last.path;
+    final basePath =
+        selection?.end.path ?? _editorState.document.root.children.last.path;
     final tx = _editorState.transaction
       ..insertNodes(
         basePath.next,
@@ -228,7 +241,8 @@ class _EditorState extends ConsumerState<_Editor> {
   @override
   void initState() {
     super.initState();
-    _editorState = afe.EditorState(document: afe.Document.fromJson(widget.rawJson));
+    _editorState =
+        afe.EditorState(document: afe.Document.fromJson(widget.rawJson));
     _txSub = _editorState.transactionStream.listen(_onTransaction);
     HardwareKeyboard.instance.addHandler(_onHardwareKey);
     _drawingController = DrawingController(
@@ -242,8 +256,9 @@ class _EditorState extends ConsumerState<_Editor> {
     // Then watch the bridge so paste-detected full HTML auto-routes into the
     // preview pane (and pops the pane open if it was closed).
     final savedOverride = widget.rawJson[_rawHtmlOverrideKey] as String?;
-    rawHtmlOverride.value =
-        (savedOverride != null && savedOverride.isNotEmpty) ? savedOverride : null;
+    rawHtmlOverride.value = (savedOverride != null && savedOverride.isNotEmpty)
+        ? savedOverride
+        : null;
     rawHtmlOverride.addListener(_onRawHtmlOverrideChanged);
     if (rawHtmlOverride.value != null) {
       // Auto-open preview on a page that has a stashed override — same UX as
@@ -542,8 +557,7 @@ class _EditorState extends ConsumerState<_Editor> {
         }
         return ok;
       },
-      applyAgentAction: (action) =>
-          AgentExecutor(_editorState).apply(action),
+      applyAgentAction: (action) => AgentExecutor(_editorState).apply(action),
       renamePage: _renamePage,
     );
   }
@@ -652,17 +666,43 @@ class _EditorState extends ConsumerState<_Editor> {
   void _onQuizCommand() =>
       ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.quiz);
 
+  /// Ask what to export, then export it through the same exporters the nav
+  /// tree's page menu uses.
+  ///
+  /// The flush stays where it was — after the choice, before the export. A
+  /// pending debounced save has to land first: both exporters read the page
+  /// back from Drive, so without this the file would be the last autosave
+  /// rather than what is on screen.
+  Future<void> _export() async {
+    final request = await showExportDialog(context, page: widget.page);
+    if (request == null || !mounted) return;
+    if (_status == SaveStatus.dirty) {
+      _saveTimer?.cancel();
+      await _save();
+      if (!mounted) return;
+    }
+    final content = GetIt.I<PageContentRepository>();
+    final assets = GetIt.I<AssetSyncService>();
+    switch (request.format) {
+      case ExportFormat.markdown:
+        await MarkdownExporter(content, assets)
+            .exportPageToFile(context, widget.page);
+      case ExportFormat.pdf:
+        await PdfExporter(content, assets)
+            .exportPageToFile(context, widget.page, paper: request.paper);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final scheme = Theme.of(context).colorScheme;
-    final muted = scheme.onSurfaceVariant;
-    // Canvas behind the paper card: surfaceContainerHighest is the panel-bg
-    // token (slightly tinted from the base surface), which gives the Book
-    // theme its sepia surround without affecting Light/Dark.
-    final canvasBg = scheme.surfaceContainerHighest;
-    // Paper is the elevated/raised surface — pure white in Light, near-black
-    // in Dark, light cream in Book.
+    // Ground behind the paper. The header above it and the composer below it
+    // sit on the same `surface`, so the three read as one page with the paper
+    // floating on top rather than as three stacked bands.
+    final canvasBg = scheme.surface;
+    // Paper is the design's writing surface — surfaceContainerHigh on all
+    // four grounds.
     final paper = scheme.surfaceContainerHigh;
 
     // AppFlowy applies editorStyle.padding to EVERY block (page_block_component
@@ -673,7 +713,12 @@ class _EditorState extends ConsumerState<_Editor> {
         ? afe.EditorStyle.desktop(
             cursorColor: MarioColors.primary,
             selectionColor: MarioColors.primary.withValues(alpha: 0.25),
-            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 8),
+            // Horizontal inset lives HERE, not in a Padding around the
+            // editor: getNodeInOffset resolves a tap to the NEAREST node,
+            // so margin inside the editor still places the caret on the
+            // adjacent line. Wrapping the editor instead shrinks its
+            // gesture box and those taps hit dead space.
+            padding: const EdgeInsets.symmetric(horizontal: 52, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.2),
@@ -684,7 +729,12 @@ class _EditorState extends ConsumerState<_Editor> {
         : afe.EditorStyle.desktop(
             cursorColor: MarioColors.primaryPressed,
             selectionColor: MarioColors.primary.withValues(alpha: 0.35),
-            padding: const EdgeInsets.symmetric(horizontal: 64, vertical: 8),
+            // Horizontal inset lives HERE, not in a Padding around the
+            // editor: getNodeInOffset resolves a tap to the NEAREST node,
+            // so margin inside the editor still places the caret on the
+            // adjacent line. Wrapping the editor instead shrinks its
+            // gesture box and those taps hit dead space.
+            padding: const EdgeInsets.symmetric(horizontal: 52, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurface, height: 1.2),
@@ -719,8 +769,8 @@ class _EditorState extends ConsumerState<_Editor> {
       blockBuilders[entry.key]?.configuration = tightConfig;
     }
 
-    final standardSpaceHandlers = afe.standardCharacterShortcutEvents
-        .where((e) => e.character != '/');
+    final standardSpaceHandlers =
+        afe.standardCharacterShortcutEvents.where((e) => e.character != '/');
     final shortcutEvents = <afe.CharacterShortcutEvent>[
       marioMathShortcut,
       ...standardSpaceHandlers,
@@ -738,9 +788,8 @@ class _EditorState extends ConsumerState<_Editor> {
           spreadsheetSelectionMenuItem,
           audioSelectionMenuItem,
         ],
-        style: isDark
-            ? afe.SelectionMenuStyle.dark
-            : afe.SelectionMenuStyle.light,
+        style:
+            isDark ? afe.SelectionMenuStyle.dark : afe.SelectionMenuStyle.light,
       ),
     ];
 
@@ -772,31 +821,44 @@ class _EditorState extends ConsumerState<_Editor> {
             onZoomReset: _zoomReset,
             drawMode: _drawMode,
             onToggleDraw: _toggleDraw,
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: Icon(
-                    _previewMode ? Icons.code_off : Icons.code,
-                    color: _previewMode ? MarioColors.primary : null,
-                  ),
-                  tooltip: _previewMode
-                      ? 'Hide HTML preview'
-                      : 'Show HTML preview',
-                  onPressed: _togglePreview,
-                ),
-                VoiceDictationButton(editorState: _editorState),
-              ],
-            ),
           ),
           if (_drawMode)
             DrawingToolbar(
               controller: _drawingController,
               onCollapse: _toggleDraw,
-              onExport: () {},
+              // No PNG export here: _exportPng captures a RenderRepaintBoundary
+              // and the full-page canvas has none. The button hides rather
+              // than pretending.
+              onExport: null,
               onSave: _toggleDraw,
               collapsed: false,
             ),
+          ValueListenableBuilder<int>(
+            valueListenable: _assetSweeper.pendingCount,
+            builder: (context, pendingImages, _) => _PageHeader(
+              dictate: IconButtonTheme(
+                data: IconButtonThemeData(
+                  style: IconButton.styleFrom(
+                    padding: const EdgeInsets.all(5),
+                    minimumSize: const Size(28, 28),
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    foregroundColor: scheme.onSurfaceVariant,
+                  ),
+                ),
+                child: VoiceDictationButton(editorState: _editorState),
+              ),
+              page: widget.page,
+              status: _status,
+              lastSavedAt: _lastSavedAt,
+              pendingImages: pendingImages,
+              drawMode: _drawMode,
+              previewMode: _previewMode,
+              onExport: _export,
+              onToggleDraw: _toggleDraw,
+              onTogglePreview: _togglePreview,
+              onSaveNow: _saveNow,
+            ),
+          ),
           Expanded(
             child: _previewMode
                 ? _HtmlPreviewPane(
@@ -804,144 +866,152 @@ class _EditorState extends ConsumerState<_Editor> {
                     isDark: isDark,
                   )
                 : DropTarget(
-              onDragEntered: (_) => setState(() => _dragOver = true),
-              onDragExited: (_) => setState(() => _dragOver = false),
-              onDragDone: (details) {
-                setState(() => _dragOver = false);
-                _onFilesDropped(
-                    [for (final f in details.files) f.path]);
-              },
-              child: Container(
-                color: canvasBg,
-                foregroundDecoration: _dragOver
-                    ? BoxDecoration(
-                        border: Border.all(
-                            color: MarioColors.primary, width: 3),
-                        color: MarioColors.primary.withValues(alpha: 0.08),
-                      )
-                    : null,
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                  const cardWidth = 820.0;
-                  final scaledWidth = cardWidth * _zoom;
-                  final viewportW = constraints.maxWidth;
-                  final viewportH = constraints.maxHeight;
-                  final outerWidth =
-                      math.max(scaledWidth + 32, viewportW);
-                  final cardHeight = viewportH - 16;
-                  // Outer scroll only does work when the scaled card overflows
-                  // horizontally. Otherwise it'd intercept stray dx deltas
-                  // from trackpads and block AppFlowy's vertical scroll.
-                  final hasHorizontalOverflow = scaledWidth > viewportW;
-                  final outerPhysics = hasHorizontalOverflow
-                      ? const ClampingScrollPhysics()
-                      : const NeverScrollableScrollPhysics();
-                  return Listener(
-                    onPointerSignal: _onPointerSignal,
-                    child: Scrollbar(
-                      controller: _hScroll,
-                      thumbVisibility: hasHorizontalOverflow,
-                      scrollbarOrientation: ScrollbarOrientation.bottom,
-                      child: SingleChildScrollView(
-                        controller: _hScroll,
-                        scrollDirection: Axis.horizontal,
-                        physics: outerPhysics,
-                        child: SizedBox(
-                          width: outerWidth,
-                          height: viewportH,
-                          child: Center(
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8),
-                              // Outer SizedBox is the *post-scale* width so
-                              // the parent's hit-test region covers the whole
-                              // visually-zoomed card. OverflowBox then hands
-                              // the unscaled child its natural cardWidth
-                              // constraints inside that wider region.
-                              child: SizedBox(
-                                width: scaledWidth,
-                                height: cardHeight,
-                                child: OverflowBox(
-                                  minWidth: 0,
-                                  maxWidth: cardWidth,
-                                  minHeight: 0,
-                                  maxHeight: cardHeight,
-                                  alignment: Alignment.topCenter,
-                                  child: Transform.scale(
-                                    scale: _zoom,
-                                    alignment: Alignment.topCenter,
-                                    child: SizedBox(
-                                      width: cardWidth,
-                                      height: cardHeight,
-                                      child: Stack(
-                                        children: [
-                                          Material(
-                                            color: paper,
-                                            elevation: isDark ? 0 : 2,
-                                            borderRadius:
-                                                BorderRadius.circular(2),
-                                            clipBehavior: Clip.antiAlias,
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.stretch,
-                                              children: [
-                                                _PageHeader(page: widget.page),
-                                                Expanded(
-                                                  child: afe.AppFlowyEditor(
-                                                    editorState: _editorState,
-                                                    editorStyle: style,
-                                                    blockComponentBuilders:
-                                                        blockBuilders,
-                                                    characterShortcutEvents:
-                                                        shortcutEvents,
-                                                    commandShortcutEvents:
-                                                        commandShortcuts,
-                                                    autoFocus: true,
-                                                    header: const SizedBox(
-                                                        height: 16),
-                                                    footer: const SizedBox(
-                                                        height: 24),
+                    onDragEntered: (_) => setState(() => _dragOver = true),
+                    onDragExited: (_) => setState(() => _dragOver = false),
+                    onDragDone: (details) {
+                      setState(() => _dragOver = false);
+                      _onFilesDropped([for (final f in details.files) f.path]);
+                    },
+                    child: Container(
+                      color: canvasBg,
+                      foregroundDecoration: _dragOver
+                          ? BoxDecoration(
+                              border: Border.all(
+                                  color: MarioColors.primary, width: 3),
+                              color:
+                                  MarioColors.primary.withValues(alpha: 0.08),
+                            )
+                          : null,
+                      child: LayoutBuilder(
+                        builder: (context, constraints) {
+                          const cardWidth = 780.0;
+                          final scaledWidth = cardWidth * _zoom;
+                          final viewportW = constraints.maxWidth;
+                          final viewportH = constraints.maxHeight;
+                          final outerWidth =
+                              math.max(scaledWidth + 32, viewportW);
+                          final cardHeight = viewportH - 16;
+                          // Outer scroll only does work when the scaled card overflows
+                          // horizontally. Otherwise it'd intercept stray dx deltas
+                          // from trackpads and block AppFlowy's vertical scroll.
+                          final hasHorizontalOverflow = scaledWidth > viewportW;
+                          final outerPhysics = hasHorizontalOverflow
+                              ? const ClampingScrollPhysics()
+                              : const NeverScrollableScrollPhysics();
+                          return Listener(
+                            onPointerSignal: _onPointerSignal,
+                            child: Scrollbar(
+                              controller: _hScroll,
+                              thumbVisibility: hasHorizontalOverflow,
+                              scrollbarOrientation: ScrollbarOrientation.bottom,
+                              child: SingleChildScrollView(
+                                controller: _hScroll,
+                                scrollDirection: Axis.horizontal,
+                                physics: outerPhysics,
+                                child: SizedBox(
+                                  width: outerWidth,
+                                  height: viewportH,
+                                  child: Center(
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                          vertical: 8),
+                                      // Outer SizedBox is the *post-scale* width so
+                                      // the parent's hit-test region covers the whole
+                                      // visually-zoomed card. OverflowBox then hands
+                                      // the unscaled child its natural cardWidth
+                                      // constraints inside that wider region.
+                                      child: SizedBox(
+                                        width: scaledWidth,
+                                        height: cardHeight,
+                                        child: OverflowBox(
+                                          minWidth: 0,
+                                          maxWidth: cardWidth,
+                                          minHeight: 0,
+                                          maxHeight: cardHeight,
+                                          alignment: Alignment.topCenter,
+                                          child: Transform.scale(
+                                            scale: _zoom,
+                                            alignment: Alignment.topCenter,
+                                            child: SizedBox(
+                                              width: cardWidth,
+                                              height: cardHeight,
+                                              child: Stack(
+                                                children: [
+                                                  // The paper. Soft-cornered, lifted
+                                                  // off the ground by the system's
+                                                  // own shadow (which is nothing at
+                                                  // all on the black ground).
+                                                  Positioned.fill(
+                                                    child: DecoratedBox(
+                                                      decoration: BoxDecoration(
+                                                        color: paper,
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(
+                                                                    MarioRadius
+                                                                        .lg),
+                                                        boxShadow: marioShadow(
+                                                            context,
+                                                            level: 1),
+                                                      ),
+                                                      child: Material(
+                                                        type: MaterialType
+                                                            .transparency,
+                                                        borderRadius:
+                                                            BorderRadius
+                                                                .circular(
+                                                                    MarioRadius
+                                                                        .lg),
+                                                        clipBehavior:
+                                                            Clip.antiAlias,
+                                                        child:
+                                                            afe.AppFlowyEditor(
+                                                          editorState:
+                                                              _editorState,
+                                                          editorStyle: style,
+                                                          blockComponentBuilders:
+                                                              blockBuilders,
+                                                          characterShortcutEvents:
+                                                              shortcutEvents,
+                                                          commandShortcutEvents:
+                                                              commandShortcuts,
+                                                          autoFocus: true,
+                                                          header:
+                                                              const SizedBox(
+                                                                  height: 16),
+                                                          footer:
+                                                              const SizedBox(
+                                                                  height: 24),
+                                                        ),
+                                                      ),
+                                                    ),
                                                   ),
-                                                ),
-                                              ],
+                                                  // Drawing surface on top — strokes
+                                                  // always visible; pointer capture
+                                                  // only when draw mode is on.
+                                                  Positioned.fill(
+                                                    child: CanvasDrawingLayer(
+                                                      controller:
+                                                          _drawingController,
+                                                      active: _drawMode,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
                                             ),
                                           ),
-                                          // Drawing surface on top — strokes
-                                          // always visible; pointer capture
-                                          // only when draw mode is on.
-                                          Positioned.fill(
-                                            child: CanvasDrawingLayer(
-                                              controller: _drawingController,
-                                              active: _drawMode,
-                                            ),
-                                          ),
-                                        ],
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                        ),
+                          );
+                        },
                       ),
                     ),
-                  );
-                },
-              ),
-              ),
-            ),
-          ),
-          // Rebuilds on its own when the sweeper's backlog changes, so the
-          // status line never claims "Saved" while some of the page's images
-          // are still local-only.
-          ValueListenableBuilder<int>(
-            valueListenable: _assetSweeper.pendingCount,
-            builder: (context, pendingImages, _) => _StatusBar(
-              status: _status,
-              lastSavedAt: _lastSavedAt,
-              muted: muted,
-              pendingImages: pendingImages,
-            ),
+                  ),
           ),
         ],
       ),
@@ -1156,8 +1226,7 @@ class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
                         style: TextButton.styleFrom(
                           foregroundColor: muted,
                           textStyle: GoogleFonts.inter(fontSize: 11),
-                          padding:
-                              const EdgeInsets.symmetric(horizontal: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
                           minimumSize: const Size(0, 28),
                         ),
                       ),
@@ -1208,87 +1277,299 @@ class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
   }
 }
 
-class _PageHeader extends StatelessWidget {
-  const _PageHeader({required this.page});
+/// The header overflow menu: the page-level actions the design's three
+/// buttons have no room for. Both are real actions this screen owns.
+enum _PageMenuAction { preview, saveNow }
+
+/// Trims a name to null when there is nothing real in it, so a breadcrumb tag
+/// is omitted rather than rendered blank.
+String? _nonEmpty(String? value) {
+  final trimmed = value?.trim();
+  return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+}
+
+/// The design's page header (artboard 2a) — breadcrumb, title, save state and
+/// the page-level actions.
+///
+/// It sits above the paper rather than on it, so it stays put while the page
+/// scrolls and does not scale with the canvas zoom.
+class _PageHeader extends ConsumerWidget {
+  const _PageHeader({
+    required this.page,
+    required this.status,
+    required this.lastSavedAt,
+    required this.pendingImages,
+    required this.drawMode,
+    required this.previewMode,
+    required this.onExport,
+    required this.onToggleDraw,
+    required this.onTogglePreview,
+    required this.onSaveNow,
+    required this.dictate,
+  });
+
   final NotePage page;
+  final SaveStatus status;
+  final DateTime? lastSavedAt;
+
+  /// Images in this page that haven't reached Drive yet. The save line is
+  /// otherwise about the page JSON only, and "All changes saved" while a
+  /// picture is still local-only would promise something the other devices
+  /// won't see.
+  final int pendingImages;
+
+  final bool drawMode;
+  final bool previewMode;
+  final VoidCallback onExport;
+  final VoidCallback onToggleDraw;
+  final VoidCallback onTogglePreview;
+  final VoidCallback onSaveNow;
+
+  /// The app's single dictation control.
+  ///
+  /// The updated design moves the ask composer out of the editor and into the
+  /// right panel, and the composer was where this chip briefly lived — so it
+  /// comes back to the page's own action row rather than leaving the app with
+  /// no way to dictate at all. One instance only: two would fight over the
+  /// same VoiceService session.
+  final Widget dictate;
 
   @override
-  Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    final muted =
-        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+
+    // Breadcrumb names come from the live index. A name that hasn't arrived
+    // yet — or a notebook/section that has gone away — drops its tag instead
+    // of printing a stand-in.
+    String? notebookName;
+    if (page.notebookId.isNotEmpty) {
+      final notebooks = ref.watch(shell.notebooksStreamProvider).valueOrNull;
+      for (final n in notebooks ?? const []) {
+        if (n.id == page.notebookId) notebookName = _nonEmpty(n.name);
+      }
+    }
+    String? sectionName;
+    if (page.notebookId.isNotEmpty && page.sectionId.isNotEmpty) {
+      final sections =
+          ref.watch(shell.sectionsStreamProvider(page.notebookId)).valueOrNull;
+      for (final s in sections ?? const []) {
+        if (s.id == page.sectionId) sectionName = _nonEmpty(s.name);
+      }
+    }
+
+    // The real save state, not a promise. `idle` means nothing has been typed
+    // since the page was loaded from Drive, so there is genuinely nothing
+    // outstanding either way — the two readings differ only in whether this
+    // session has written anything.
+    var saveLabel = switch (status) {
+      SaveStatus.idle =>
+        lastSavedAt == null ? 'No unsaved changes' : 'All changes saved',
+      SaveStatus.dirty => 'Unsaved changes',
+      SaveStatus.saving => 'Saving…',
+      SaveStatus.saved => 'All changes saved',
+      SaveStatus.error => 'Save failed',
+    };
+    if (pendingImages > 0 && status != SaveStatus.error) {
+      saveLabel = '$saveLabel · $pendingImages '
+          'image${pendingImages == 1 ? '' : 's'} not synced';
+    }
+    final dotColour =
+        status == SaveStatus.error ? scheme.error : MarioColors.accent2500;
+
+    final title = _nonEmpty(page.title);
+
     return Padding(
-      padding: const EdgeInsets.fromLTRB(64, 16, 64, 0),
+      padding: const EdgeInsets.fromLTRB(44, 16, 44, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            page.title,
-            style: GoogleFonts.spaceGrotesk(
-              fontSize: 22,
-              fontWeight: FontWeight.w700,
+          // Crumbs and save state share one line. Both are small muted
+          // metadata about the same page, and giving the save state a row of
+          // its own cost ~25px of chrome above every page for one short
+          // sentence. Wrap, not Row: on a narrow window the trailing items
+          // drop to a second line instead of overflowing.
+          Padding(
+            padding: const EdgeInsets.only(bottom: MarioSpace.x2),
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              runSpacing: MarioSpace.x1,
+              children: [
+                if (notebookName != null)
+                  MarioTag(notebookName, tone: MarioTagTone.accent2),
+                if (notebookName != null && sectionName != null)
+                  Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: MarioSpace.x1),
+                    child: Icon(Icons.chevron_right,
+                        size: 14, color: scheme.onSurfaceVariant),
+                  ),
+                if (sectionName != null) MarioTag(sectionName),
+                if (notebookName != null || sectionName != null)
+                  const SizedBox(width: MarioSpace.x3),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                          color: dotColour, shape: BoxShape.circle),
+                    ),
+                    const SizedBox(width: MarioSpace.x1),
+                    Text(
+                      saveLabel,
+                      style: textTheme.bodySmall?.copyWith(
+                        fontSize: 12.5,
+                        color: status == SaveStatus.error
+                            ? scheme.error
+                            : scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 2),
-          Text(
-            'Last edited ${_formatTime(page.updatedAt)}',
-            style: GoogleFonts.inter(fontSize: 11, color: muted),
+          Row(
+            children: [
+              Expanded(
+                child: title == null
+                    ? const SizedBox.shrink()
+                    : Text(
+                        title,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: textTheme.displayMedium
+                            ?.copyWith(fontSize: 30, height: 1.1),
+                      ),
+              ),
+              const SizedBox(width: MarioSpace.x4),
+              _HeaderPill(
+                icon: Icons.ios_share,
+                label: 'Export',
+                tooltip: 'Export this page',
+                onTap: onExport,
+              ),
+              const SizedBox(width: MarioSpace.x2),
+              dictate,
+              const SizedBox(width: MarioSpace.x2),
+              _HeaderPill(
+                icon: Icons.draw_outlined,
+                label: 'Draw',
+                active: drawMode,
+                onTap: onToggleDraw,
+                tooltip: drawMode ? 'Exit drawing mode' : 'Draw on this page',
+              ),
+              const SizedBox(width: MarioSpace.x2),
+              PopupMenuButton<_PageMenuAction>(
+                tooltip: 'More',
+                position: PopupMenuPosition.under,
+                onSelected: (action) => switch (action) {
+                  _PageMenuAction.preview => onTogglePreview(),
+                  _PageMenuAction.saveNow => onSaveNow(),
+                },
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: _PageMenuAction.preview,
+                    child: Text(previewMode
+                        ? 'Hide HTML preview'
+                        : 'Show HTML preview'),
+                  ),
+                  const PopupMenuItem(
+                    value: _PageMenuAction.saveNow,
+                    child: Text('Save now  (Ctrl+S)'),
+                  ),
+                ],
+                child: const _HeaderRoundButton(icon: Icons.more_horiz),
+              ),
+            ],
           ),
         ],
       ),
     );
   }
-
-  String _formatTime(DateTime t) =>
-      '${t.year}-${t.month.toString().padLeft(2, '0')}-${t.day.toString().padLeft(2, '0')}';
 }
 
-class _StatusBar extends StatelessWidget {
-  const _StatusBar({
-    required this.status,
-    required this.lastSavedAt,
-    required this.muted,
-    this.pendingImages = 0,
+/// A secondary pill button in the page header — 38 tall, 15px icon.
+///
+/// [onTap] is optional so the same shape can be the child of a
+/// [PopupMenuButton], which supplies the tap itself.
+class _HeaderPill extends StatelessWidget {
+  const _HeaderPill({
+    required this.icon,
+    required this.label,
+    this.onTap,
+    this.active = false,
+    this.tooltip,
   });
 
-  final SaveStatus status;
-  final DateTime? lastSavedAt;
-  final Color muted;
-
-  /// Images in this page that haven't reached Drive yet. The text is otherwise
-  /// about the page JSON only, and "Saved" while a picture is still local-only
-  /// would promise something the other devices won't see.
-  final int pendingImages;
+  final IconData icon;
+  final String label;
+  final VoidCallback? onTap;
+  final bool active;
+  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
-    var (text, icon) = switch (status) {
-      SaveStatus.idle => (lastSavedAt == null ? '' : 'Saved', Icons.check_circle_outline),
-      SaveStatus.dirty => ('Edited', Icons.edit_note),
-      SaveStatus.saving => ('Saving…', Icons.cloud_upload_outlined),
-      SaveStatus.saved => ('Saved', Icons.cloud_done_outlined),
-      SaveStatus.error => ('Save failed', Icons.error_outline),
-    };
-    if (pendingImages > 0 && status != SaveStatus.error) {
-      text = '$text · $pendingImages image${pendingImages == 1 ? '' : 's'} '
-          'not synced';
-      icon = Icons.cloud_upload_outlined;
-    }
-    final isError = status == SaveStatus.error;
-    final color = isError ? Theme.of(context).colorScheme.error : muted;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-      alignment: Alignment.centerRight,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          Icon(icon, size: 13, color: color),
-          const SizedBox(width: 6),
-          Text(text,
-              style: GoogleFonts.inter(fontSize: 11, color: color)),
-        ],
+    final scheme = Theme.of(context).colorScheme;
+    final foreground = active ? scheme.primary : scheme.onSurface;
+    final pill = Material(
+      color: active
+          ? scheme.primary.withValues(alpha: 0.14)
+          : scheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: active ? scheme.primary : scheme.outline),
+        borderRadius: BorderRadius.circular(MarioRadius.pill),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Container(
+          height: 38,
+          padding: const EdgeInsets.symmetric(horizontal: MarioSpace.x4),
+          alignment: Alignment.center,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 15, color: foreground),
+              const SizedBox(width: MarioSpace.x2),
+              Text(
+                label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelLarge
+                    ?.copyWith(fontSize: 13.5, color: foreground),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return tooltip == null ? pill : Tooltip(message: tooltip!, child: pill);
+  }
+}
+
+/// The round 38px header button — the overflow control. The tap comes from
+/// the [PopupMenuButton] this is the child of, so it carries no callback of
+/// its own.
+class _HeaderRoundButton extends StatelessWidget {
+  const _HeaderRoundButton({required this.icon});
+
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: scheme.surfaceContainerHighest,
+      shape: CircleBorder(side: BorderSide(color: scheme.outline)),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        width: 38,
+        height: 38,
+        child: Icon(icon, size: 18, color: scheme.onSurface),
       ),
     );
   }
 }
-

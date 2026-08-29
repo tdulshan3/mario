@@ -1,16 +1,48 @@
-/// Settings — appearance, editor, voice, AI models, account.
+/// Settings — the redesign's two-pane layout (artboard 2f).
+///
+/// Categories on the left, one pane at a time on the right; the old single
+/// scroll put six unrelated groups in one column and made the theme picker
+/// hard to find. On a narrow window the rail collapses to a scrolling list of
+/// every pane, so nothing becomes unreachable.
+///
+/// The design also shows a "Reduce motion" switch. Nothing in the app reads
+/// such a setting yet, so it is not here — a persisted toggle that changes
+/// nothing is worse than an honest omission. Wiring it means threading a flag
+/// through the panel and tray animations first.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 
+import '../../ui/colors.dart';
+import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../ai/ai_settings_section.dart';
 import '../auth/auth_notifier.dart';
 import 'settings_state.dart';
+
+/// Kept in step with `version:` in pubspec.yaml by hand — the app has no
+/// package_info dependency, so there is nothing to read it from at runtime.
+const _kVersion = '1.2.0+11';
+
+enum _Pane {
+  appearance(
+      'Appearance', Icons.palette_outlined, 'How Mario looks while you write.'),
+  editor('Editor', Icons.edit_outlined, 'How the writing surface behaves.'),
+  voice('Voice', Icons.mic_none, 'Dictation and recording.'),
+  ai('AI models', Icons.auto_awesome_outlined,
+      'Which model answers, and with whose key.'),
+  sync('Sync', Icons.sync, 'What leaves this machine.'),
+  account('Account', Icons.person_outline, 'Who you are signed in as.'),
+  about('About', Icons.info_outline, 'Version and build.');
+
+  const _Pane(this.label, this.icon, this.blurb);
+  final String label;
+  final IconData icon;
+  final String blurb;
+}
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -23,12 +55,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   // The old single Anthropic-key field lived here. It is now one entry in the
   // backend list owned by AiSettingsSection; any key already in secure storage
   // is migrated into that list on first load by LlmProviderStore.
+  _Pane _pane = _Pane.appearance;
+
+  /// Below this the rail would leave the panes too narrow to read, so every
+  /// pane is stacked into one scroll instead.
+  static const _railBreakpoint = 780.0;
 
   @override
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider).valueOrNull;
-    final notifier = ref.read(settingsProvider.notifier);
-    final user = ref.watch(authStateProvider).valueOrNull;
 
     return Scaffold(
       appBar: AppBar(
@@ -40,247 +75,461 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       ),
       body: settings == null
           ? const Center(child: MarioLoader())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                _Section(title: 'Appearance', children: [
-                  _DropdownTile<MarioThemeMode>(
-                    label: 'Theme',
-                    value: settings.themeMode,
-                    items: const [
-                      ('System', MarioThemeMode.system),
-                      ('Light', MarioThemeMode.light),
-                      ('Dark', MarioThemeMode.dark),
-                      ('Book — calm sepia', MarioThemeMode.book),
+          : LayoutBuilder(
+              builder: (context, constraints) {
+                if (constraints.maxWidth < _railBreakpoint) {
+                  return ListView(
+                    padding: const EdgeInsets.all(20),
+                    children: [
+                      for (final p in _Pane.values) ...[
+                        _PaneBody(pane: p, settings: settings),
+                        const SizedBox(height: 32),
+                      ],
                     ],
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(themeMode: v)),
-                  ),
-                  _SliderTile(
-                    label: 'Font scale',
-                    value: settings.fontScale,
-                    min: 0.8,
-                    max: 1.3,
-                    divisions: 10,
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(fontScale: v)),
-                  ),
-                  _DropdownTile<CanvasWidth>(
-                    label: 'Canvas width',
-                    value: settings.canvasWidth,
-                    items: const [
-                      ('Narrow', CanvasWidth.narrow),
-                      ('Medium', CanvasWidth.medium),
-                      ('Full', CanvasWidth.full),
-                    ],
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(canvasWidth: v)),
-                  ),
-                ]),
-                _Section(title: 'Editor', children: [
-                  _SwitchTile(
-                    label: 'Auto-correct math symbols',
-                    value: settings.autoCorrectMath,
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(autoCorrectMath: v)),
-                  ),
-                  _SwitchTile(
-                    label: 'Spell check',
-                    value: settings.spellCheck,
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(spellCheck: v)),
-                  ),
-                ]),
-                _Section(title: 'Voice', children: [
-                  _SwitchTile(
-                    label: 'Hold-to-record (off = tap-to-record)',
-                    value: settings.holdToRecord,
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(holdToRecord: v)),
-                  ),
-                  _DropdownTile<String>(
-                    label: 'Language',
-                    value: settings.voiceLocale,
-                    items: const [
-                      ('English (US)', 'en_US'),
-                      ('English (UK)', 'en_GB'),
-                      ('Spanish', 'es_ES'),
-                      ('French', 'fr_FR'),
-                      ('German', 'de_DE'),
-                      ('Japanese', 'ja_JP'),
-                    ],
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(voiceLocale: v)),
-                  ),
-                ]),
-                _Section(title: 'AI models', children: const [
-                  AiSettingsSection(),
-                ]),
-                _Section(title: 'Sync', children: [
-                  _SwitchTile(
-                    label: 'Offline mode',
-                    value: settings.offlineMode,
-                    onChanged: (v) =>
-                        notifier.change((s) => s.copyWith(offlineMode: v)),
-                  ),
-                ]),
-                _Section(title: 'Account', children: [
-                  ListTile(
-                    title: Text(user?.email ?? 'Not signed in'),
-                    subtitle: Text(user?.displayName ?? ''),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      icon: const Icon(Icons.logout, size: 16),
-                      label: const Text('Sign out'),
-                      onPressed: () =>
-                          ref.read(authNotifierProvider.notifier).signOut(),
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _CategoryRail(
+                      selected: _pane,
+                      onSelect: (p) => setState(() => _pane = p),
                     ),
-                  ),
-                ]),
-                _Section(title: 'About', children: [
-                  ListTile(
-                    title: const Text('Version'),
-                    subtitle: const Text('1.0.0+1'),
-                    contentPadding: EdgeInsets.zero,
-                  ),
-                ]),
-              ],
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.fromLTRB(36, 28, 36, 40),
+                        child: _PaneBody(pane: _pane, settings: settings),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
     );
   }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.children});
-  final String title;
-  final List<Widget> children;
+class _CategoryRail extends StatelessWidget {
+  const _CategoryRail({required this.selected, required this.onSelect});
+
+  final _Pane selected;
+  final ValueChanged<_Pane> onSelect;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 28),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              title.toUpperCase(),
-              style: GoogleFonts.spaceGrotesk(
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.4,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.55),
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 224,
+      child: MarioGlass(
+        opacity: 0.62,
+        border: Border(right: BorderSide(color: scheme.outlineVariant)),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 16),
+            for (final p in _Pane.values)
+              _RailRow(
+                pane: p,
+                selected: p == selected,
+                onTap: () => onSelect(p),
+              ),
+            const Spacer(),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+              child: Text(
+                'Mario $_kVersion',
+                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RailRow extends StatelessWidget {
+  const _RailRow({
+    required this.pane,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final _Pane pane;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final dark = marioMode(context).isDark;
+    final fill = dark
+        ? MarioColors.accent400.withValues(alpha: 0.20)
+        : MarioColors.accent300.withValues(alpha: 0.62);
+    final ink = selected
+        ? (dark ? MarioColors.accent200 : MarioColors.accent800)
+        : scheme.onSurface;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
+      child: Material(
+        color: selected ? fill : Colors.transparent,
+        borderRadius: BorderRadius.circular(MarioRadius.md),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(MarioRadius.md),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: Row(
+              children: [
+                Icon(pane.icon, size: 16, color: ink),
+                const SizedBox(width: 10),
+                Text(
+                  pane.label,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                    color: ink,
+                  ),
+                ),
+              ],
+            ),
           ),
-          ...children,
+        ),
+      ),
+    );
+  }
+}
+
+class _PaneBody extends ConsumerWidget {
+  const _PaneBody({required this.pane, required this.settings});
+
+  final _Pane pane;
+  final SettingsState settings;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final notifier = ref.read(settingsProvider.notifier);
+    final user = ref.watch(authStateProvider).valueOrNull;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(pane.label, style: theme.textTheme.displaySmall),
+        const SizedBox(height: 6),
+        Text(
+          pane.blurb,
+          style: TextStyle(
+            fontSize: 14,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 26),
+        ...switch (pane) {
+          _Pane.appearance => _appearance(context, notifier),
+          _Pane.editor => _editor(notifier),
+          _Pane.voice => _voice(notifier),
+          _Pane.ai => const [AiSettingsSection()],
+          _Pane.sync => _sync(notifier),
+          _Pane.account => _account(context, ref, user),
+          _Pane.about => _about(context),
+        },
+      ],
+    );
+  }
+
+  List<Widget> _appearance(BuildContext context, SettingsNotifier notifier) {
+    final matchSystem = settings.themeMode == MarioThemeMode.system;
+    return [
+      _Row(
+        label: 'Theme',
+        child: _Segmented<MarioThemeMode>(
+          // With "match the system" on there is no explicit ground selected,
+          // so nothing is highlighted until the user picks one.
+          value: matchSystem ? null : settings.themeMode,
+          items: const [
+            ('Light', Icons.wb_sunny_outlined, MarioThemeMode.light),
+            ('White', Icons.light_mode_outlined, MarioThemeMode.white),
+            ('Calm night', Icons.nightlight_outlined, MarioThemeMode.night),
+            ('Black', Icons.nights_stay_outlined, MarioThemeMode.black),
+          ],
+          onChanged: (v) => notifier.change((s) => s.copyWith(themeMode: v)),
+        ),
+      ),
+      _Row(
+        label: 'Match the system',
+        description: 'Light by day, Calm night after dark.',
+        child: Switch(
+          value: matchSystem,
+          onChanged: (on) => notifier.change(
+            // Turning it off has to land on a real ground; Light is the
+            // documented default and the daytime half of the system pair.
+            (s) => s.copyWith(
+              themeMode: on ? MarioThemeMode.system : MarioThemeMode.light,
+            ),
+          ),
+        ),
+      ),
+      _Row(
+        label: 'Text size',
+        description: 'Applies to the page, not the interface.',
+        child: Row(
+          children: [
+            const Text('A', style: TextStyle(fontSize: 12)),
+            Expanded(
+              child: Slider(
+                value: settings.fontScale,
+                min: 0.8,
+                max: 1.3,
+                divisions: 10,
+                label: '${(settings.fontScale * 100).round()}%',
+                onChanged: (v) =>
+                    notifier.change((s) => s.copyWith(fontScale: v)),
+              ),
+            ),
+            const Text('A', style: TextStyle(fontSize: 20)),
+          ],
+        ),
+      ),
+      _Row(
+        label: 'Page width',
+        description: 'How wide the writing surface runs.',
+        child: _Segmented<CanvasWidth>(
+          value: settings.canvasWidth,
+          items: const [
+            ('Narrow', null, CanvasWidth.narrow),
+            ('Medium', null, CanvasWidth.medium),
+            ('Full', null, CanvasWidth.full),
+          ],
+          onChanged: (v) => notifier.change((s) => s.copyWith(canvasWidth: v)),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _editor(SettingsNotifier notifier) => [
+        _Row(
+          label: 'Auto-correct math symbols',
+          child: Switch(
+            value: settings.autoCorrectMath,
+            onChanged: (v) =>
+                notifier.change((s) => s.copyWith(autoCorrectMath: v)),
+          ),
+        ),
+        _Row(
+          label: 'Spell check',
+          child: Switch(
+            value: settings.spellCheck,
+            onChanged: (v) => notifier.change((s) => s.copyWith(spellCheck: v)),
+          ),
+        ),
+      ];
+
+  List<Widget> _voice(SettingsNotifier notifier) => [
+        _Row(
+          label: 'Hold to record',
+          description: 'Off means tap to start, tap again to stop.',
+          child: Switch(
+            value: settings.holdToRecord,
+            onChanged: (v) =>
+                notifier.change((s) => s.copyWith(holdToRecord: v)),
+          ),
+        ),
+        _Row(
+          label: 'Language',
+          child: DropdownButton<String>(
+            value: settings.voiceLocale,
+            underline: const SizedBox.shrink(),
+            items: const [
+              ('English (US)', 'en_US'),
+              ('English (UK)', 'en_GB'),
+              ('Spanish', 'es_ES'),
+              ('French', 'fr_FR'),
+              ('German', 'de_DE'),
+              ('Japanese', 'ja_JP'),
+            ]
+                .map((e) => DropdownMenuItem(value: e.$2, child: Text(e.$1)))
+                .toList(),
+            onChanged: (v) => v == null
+                ? null
+                : notifier.change((s) => s.copyWith(voiceLocale: v)),
+          ),
+        ),
+      ];
+
+  List<Widget> _sync(SettingsNotifier notifier) => [
+        _Row(
+          label: 'Offline mode',
+          description: 'Keep everything on this machine.',
+          child: Switch(
+            value: settings.offlineMode,
+            onChanged: (v) =>
+                notifier.change((s) => s.copyWith(offlineMode: v)),
+          ),
+        ),
+      ];
+
+  List<Widget> _account(BuildContext context, WidgetRef ref, dynamic user) => [
+        _Row(
+          label: user?.email as String? ?? 'Not signed in',
+          description: user?.displayName as String? ?? '',
+          child: const SizedBox.shrink(),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: OutlinedButton.icon(
+            icon: const Icon(Icons.logout, size: 16),
+            label: const Text('Sign out'),
+            onPressed: () => ref.read(authNotifierProvider.notifier).signOut(),
+          ),
+        ),
+      ];
+
+  List<Widget> _about(BuildContext context) => [
+        _Row(
+            label: 'Version',
+            description: _kVersion,
+            child: const SizedBox.shrink()),
+      ];
+}
+
+/// One setting: a label, an optional line of explanation, and its control.
+class _Row extends StatelessWidget {
+  const _Row({required this.label, this.description, required this.child});
+
+  final String label;
+  final String? description;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hasDescription = description != null && description!.isNotEmpty;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 22),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(label,
+                    style: const TextStyle(
+                        fontSize: 14, fontWeight: FontWeight.w600)),
+                if (hasDescription) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    description!,
+                    style:
+                        TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 20),
+          ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 340),
+            child: child,
+          ),
         ],
       ),
     );
   }
 }
 
-class _DropdownTile<T> extends StatelessWidget {
-  const _DropdownTile({
-    required this.label,
+/// `.seg` — the design's segmented control. One pill, hairline-divided.
+class _Segmented<T> extends StatelessWidget {
+  const _Segmented({
     required this.value,
     required this.items,
     required this.onChanged,
   });
-  final String label;
-  final T value;
-  final List<(String, T)> items;
+
+  /// Null when nothing is explicitly chosen — the theme row uses this while
+  /// "match the system" is on.
+  final T? value;
+  final List<(String, IconData?, T)> items;
   final ValueChanged<T> onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
+    final scheme = Theme.of(context).colorScheme;
+    // Scrolls rather than overflows, the same way the AI panel's tab row does.
+    // Four labelled options fit at the settings sheet's full width and do not
+    // in a narrow window — and an option clipped behind a striped overflow
+    // banner is one nobody can reach. The scroll view also gives the row
+    // unbounded width, so `mainAxisSize: min` keeps the pill shrink-wrapped
+    // instead of stretching, which is what the Wrap here used to be for.
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          Expanded(child: Text(label, style: GoogleFonts.inter(fontSize: 13))),
-          DropdownButton<T>(
-            value: value,
-            items: items
-                .map((e) =>
-                    DropdownMenuItem<T>(value: e.$2, child: Text(e.$1)))
-                .toList(),
-            onChanged: (v) {
-              if (v != null) onChanged(v);
-            },
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SwitchTile extends StatelessWidget {
-  const _SwitchTile({
-    required this.label,
-    required this.value,
-    required this.onChanged,
-  });
-  final String label;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: GoogleFonts.inter(fontSize: 13))),
-          Switch(value: value, onChanged: onChanged),
-        ],
-      ),
-    );
-  }
-}
-
-class _SliderTile extends StatelessWidget {
-  const _SliderTile({
-    required this.label,
-    required this.value,
-    required this.min,
-    required this.max,
-    required this.divisions,
-    required this.onChanged,
-  });
-  final String label;
-  final double value;
-  final double min;
-  final double max;
-  final int divisions;
-  final ValueChanged<double> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Expanded(child: Text(label, style: GoogleFonts.inter(fontSize: 13))),
-          SizedBox(
-            width: 200,
-            child: Slider(
-              value: value,
-              min: min,
-              max: max,
-              divisions: divisions,
-              label: '${(value * 100).toStringAsFixed(0)}%',
-              onChanged: onChanged,
+          Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: scheme.outline),
+              borderRadius: BorderRadius.circular(MarioRadius.pill),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                for (var i = 0; i < items.length; i++) ...[
+                  if (i > 0)
+                    Container(width: 1, height: 32, color: scheme.outline),
+                  _SegOption(
+                    label: items[i].$1,
+                    icon: items[i].$2,
+                    selected: items[i].$3 == value,
+                    onTap: () => onChanged(items[i].$3),
+                  ),
+                ],
+              ],
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _SegOption extends StatelessWidget {
+  const _SegOption({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData? icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final ink = selected ? scheme.onPrimary : scheme.onSurface;
+    return Material(
+      color: selected ? scheme.primary : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 14, color: ink),
+                const SizedBox(width: 6),
+              ],
+              Text(label, style: TextStyle(fontSize: 13, color: ink)),
+            ],
+          ),
+        ),
       ),
     );
   }

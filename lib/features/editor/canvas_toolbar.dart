@@ -17,12 +17,27 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
 import 'blocks/drawing_block.dart';
+import '../../ui/organic.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
 import 'word_shortcuts.dart';
 
-const _fontSizes = [10.0, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 28.0, 32.0, 36.0, 48.0];
+const _fontSizes = [
+  10.0,
+  11.0,
+  12.0,
+  14.0,
+  16.0,
+  18.0,
+  20.0,
+  22.0,
+  24.0,
+  28.0,
+  32.0,
+  36.0,
+  48.0
+];
 
 const _fontFamilies = <String>[
   'Inter',
@@ -116,8 +131,7 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     });
   }
 
-  Future<void> _toggle(String key) =>
-      widget.editorState.toggleAttribute(key);
+  Future<void> _toggle(String key) => widget.editorState.toggleAttribute(key);
 
   Future<void> _formatColor(String key, Color? color) async {
     final selection = _resolveSelection();
@@ -147,16 +161,14 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
   }
 
   Future<void> _setHeading(int? level) async {
-    final selection =
-        widget.editorState.selection ?? _lastEditableSelection;
+    final selection = widget.editorState.selection ?? _lastEditableSelection;
     if (selection == null) return;
     await widget.editorState.formatNode(selection, (node) {
       if (level == null) {
         return node.copyWith(
           type: afe.ParagraphBlockKeys.type,
           attributes: {
-            afe.ParagraphBlockKeys.delta:
-                (node.delta ?? afe.Delta()).toJson(),
+            afe.ParagraphBlockKeys.delta: (node.delta ?? afe.Delta()).toJson(),
           },
         );
       }
@@ -171,8 +183,7 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
   }
 
   Future<void> _setListType(String type) async {
-    final selection =
-        widget.editorState.selection ?? _lastEditableSelection;
+    final selection = widget.editorState.selection ?? _lastEditableSelection;
     if (selection == null) return;
     await widget.editorState.formatNode(selection, (node) {
       // Toggle: re-applying same list type reverts to paragraph.
@@ -189,8 +200,7 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
   }
 
   Future<void> _setAlign(String align) async {
-    final selection =
-        widget.editorState.selection ?? _lastEditableSelection;
+    final selection = widget.editorState.selection ?? _lastEditableSelection;
     if (selection == null) return;
     await widget.editorState.updateNode(selection, (node) {
       return node.copyWith(attributes: {
@@ -304,10 +314,9 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     final hasRange = (selection != null && !selection.isCollapsed) ||
         _lastEditableSelection != null;
 
-    return Container(
-      decoration: BoxDecoration(
-        border: Border(bottom: BorderSide(color: border)),
-      ),
+    return MarioGlass(
+      opacity: 0.72,
+      border: Border(bottom: BorderSide(color: border)),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       // Wrap (not Row+horizontal scroll) so the ribbon flows onto multiple
       // lines on narrow windows instead of getting cut off / requiring scroll.
@@ -320,171 +329,168 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
         spacing: 2,
         runSpacing: 2,
         children: [
-            _HeadingDropdown(onChanged: _setHeading),
-            const _Divider(),
-            _FontFamilyDropdown(onChanged: _setFontFamily),
-            const SizedBox(width: 4),
-            _FontSizeDropdown(
-              enabled: hasRange,
-              onChanged: _setFontSize,
-            ),
-            const _Divider(),
-            _ToggleButton(
-              icon: Icons.format_bold,
-              tooltip: 'Bold (Ctrl+B)',
-              active: _isAttributeOn(afe.AppFlowyRichTextKeys.bold),
-              onPressed: () => _toggle(afe.AppFlowyRichTextKeys.bold),
-            ),
-            _ToggleButton(
-              icon: Icons.format_italic,
-              tooltip: 'Italic (Ctrl+I)',
-              active: _isAttributeOn(afe.AppFlowyRichTextKeys.italic),
-              onPressed: () => _toggle(afe.AppFlowyRichTextKeys.italic),
-            ),
-            _ToggleButton(
-              icon: Icons.format_underline,
-              tooltip: 'Underline (Ctrl+U)',
-              active: _isAttributeOn(afe.AppFlowyRichTextKeys.underline),
-              onPressed: () => _toggle(afe.AppFlowyRichTextKeys.underline),
-            ),
-            _ToggleButton(
-              icon: Icons.format_strikethrough,
-              tooltip: 'Strikethrough',
-              active: _isAttributeOn(afe.AppFlowyRichTextKeys.strikethrough),
-              onPressed: () =>
-                  _toggle(afe.AppFlowyRichTextKeys.strikethrough),
-            ),
-            _ToggleButton(
-              icon: Icons.code,
-              tooltip: 'Inline code',
-              active: _isAttributeOn(afe.AppFlowyRichTextKeys.code),
-              onPressed: () => _toggle(afe.AppFlowyRichTextKeys.code),
-            ),
-            const _Divider(),
-            _ColorButton(
-              icon: Icons.format_color_text,
-              tooltip: 'Text color',
-              enabled: hasRange,
-              onPicked: (c) =>
-                  _formatColor(afe.AppFlowyRichTextKeys.textColor, c),
-            ),
-            _ColorButton(
-              icon: Icons.format_color_fill,
-              tooltip: 'Highlight',
-              enabled: hasRange,
-              defaultColor: MarioColors.primary,
-              onPicked: (c) =>
-                  _formatColor(afe.AppFlowyRichTextKeys.backgroundColor, c),
-            ),
-            const _Divider(),
-            _IconAction(
-              icon: Icons.format_align_left,
-              tooltip: 'Align left',
-              onPressed: () => _setAlign('left'),
-            ),
-            _IconAction(
-              icon: Icons.format_align_center,
-              tooltip: 'Align center',
-              onPressed: () => _setAlign('center'),
-            ),
-            _IconAction(
-              icon: Icons.format_align_right,
-              tooltip: 'Align right',
-              onPressed: () => _setAlign('right'),
-            ),
-            const _Divider(),
-            _IconAction(
-              icon: Icons.format_list_bulleted,
-              tooltip: 'Bullet list',
-              onPressed: () => _setListType('bulleted_list'),
-            ),
-            _IconAction(
-              icon: Icons.format_list_numbered,
-              tooltip: 'Numbered list',
-              onPressed: () => _setListType('numbered_list'),
-            ),
-            _IconAction(
-              icon: Icons.checklist,
-              tooltip: 'Todo list',
-              onPressed: () => _setListType('todo_list'),
-            ),
-            _IconAction(
-              icon: Icons.format_quote,
-              tooltip: 'Quote',
-              onPressed: () => _setListType('quote'),
-            ),
-            const _Divider(),
-            _IconAction(
-              icon: Icons.image_outlined,
-              tooltip: 'Insert image',
-              onPressed: _pickAndInsertImage,
-            ),
-            _IconAction(
-              icon: Icons.table_chart_outlined,
-              tooltip: 'Insert table',
-              onPressed: _insertTable,
-            ),
-            _IconAction(
-              icon: Icons.view_column_outlined,
-              tooltip: 'Auto-fit table columns to content',
-              onPressed: _autoFitTableColumns,
-            ),
-            _ToggleButton(
-              icon: Icons.draw_outlined,
-              tooltip: widget.drawMode
-                  ? 'Exit drawing mode'
-                  : 'Draw on canvas',
-              active: widget.drawMode,
-              onPressed: widget.onToggleDraw,
-            ),
-            _IconAction(
-              icon: Icons.gesture,
-              tooltip: 'Insert drawing block',
-              onPressed: () => _insertNode(drawingNode()),
-            ),
-            _IconAction(
-              icon: Icons.grid_on_outlined,
-              tooltip: 'Insert spreadsheet',
-              onPressed: () => _insertNode(spreadsheetNode()),
-            ),
-            _IconAction(
-              icon: Icons.functions,
-              tooltip: 'Insert math equation',
-              onPressed: () => _insertNode(mathEquationNode()),
-            ),
-            _IconAction(
-              icon: Icons.horizontal_rule,
-              tooltip: 'Insert divider',
-              onPressed: _insertDivider,
-            ),
-            const _Divider(),
-            _IconAction(
-              icon: Icons.zoom_out,
-              tooltip: 'Zoom out (Ctrl+-)',
-              onPressed: widget.onZoomOut,
-            ),
-            InkWell(
-              onTap: widget.onZoomReset,
-              borderRadius: BorderRadius.circular(4),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
-                child: Text(
-                  '${(widget.zoom * 100).round()}%',
-                  style: GoogleFonts.inter(fontSize: 11),
-                ),
+          _HeadingDropdown(onChanged: _setHeading),
+          const _Divider(),
+          _FontFamilyDropdown(onChanged: _setFontFamily),
+          const SizedBox(width: 4),
+          _FontSizeDropdown(
+            enabled: hasRange,
+            onChanged: _setFontSize,
+          ),
+          const _Divider(),
+          _ToggleButton(
+            icon: Icons.format_bold,
+            tooltip: 'Bold (Ctrl+B)',
+            active: _isAttributeOn(afe.AppFlowyRichTextKeys.bold),
+            onPressed: () => _toggle(afe.AppFlowyRichTextKeys.bold),
+          ),
+          _ToggleButton(
+            icon: Icons.format_italic,
+            tooltip: 'Italic (Ctrl+I)',
+            active: _isAttributeOn(afe.AppFlowyRichTextKeys.italic),
+            onPressed: () => _toggle(afe.AppFlowyRichTextKeys.italic),
+          ),
+          _ToggleButton(
+            icon: Icons.format_underline,
+            tooltip: 'Underline (Ctrl+U)',
+            active: _isAttributeOn(afe.AppFlowyRichTextKeys.underline),
+            onPressed: () => _toggle(afe.AppFlowyRichTextKeys.underline),
+          ),
+          _ToggleButton(
+            icon: Icons.format_strikethrough,
+            tooltip: 'Strikethrough',
+            active: _isAttributeOn(afe.AppFlowyRichTextKeys.strikethrough),
+            onPressed: () => _toggle(afe.AppFlowyRichTextKeys.strikethrough),
+          ),
+          _ToggleButton(
+            icon: Icons.code,
+            tooltip: 'Inline code',
+            active: _isAttributeOn(afe.AppFlowyRichTextKeys.code),
+            onPressed: () => _toggle(afe.AppFlowyRichTextKeys.code),
+          ),
+          const _Divider(),
+          _ColorButton(
+            icon: Icons.format_color_text,
+            tooltip: 'Text color',
+            enabled: hasRange,
+            onPicked: (c) =>
+                _formatColor(afe.AppFlowyRichTextKeys.textColor, c),
+          ),
+          _ColorButton(
+            icon: Icons.format_color_fill,
+            tooltip: 'Highlight',
+            enabled: hasRange,
+            defaultColor: MarioColors.primary,
+            onPicked: (c) =>
+                _formatColor(afe.AppFlowyRichTextKeys.backgroundColor, c),
+          ),
+          const _Divider(),
+          _IconAction(
+            icon: Icons.format_align_left,
+            tooltip: 'Align left',
+            onPressed: () => _setAlign('left'),
+          ),
+          _IconAction(
+            icon: Icons.format_align_center,
+            tooltip: 'Align center',
+            onPressed: () => _setAlign('center'),
+          ),
+          _IconAction(
+            icon: Icons.format_align_right,
+            tooltip: 'Align right',
+            onPressed: () => _setAlign('right'),
+          ),
+          const _Divider(),
+          _IconAction(
+            icon: Icons.format_list_bulleted,
+            tooltip: 'Bullet list',
+            onPressed: () => _setListType('bulleted_list'),
+          ),
+          _IconAction(
+            icon: Icons.format_list_numbered,
+            tooltip: 'Numbered list',
+            onPressed: () => _setListType('numbered_list'),
+          ),
+          _IconAction(
+            icon: Icons.checklist,
+            tooltip: 'Todo list',
+            onPressed: () => _setListType('todo_list'),
+          ),
+          _IconAction(
+            icon: Icons.format_quote,
+            tooltip: 'Quote',
+            onPressed: () => _setListType('quote'),
+          ),
+          const _Divider(),
+          _IconAction(
+            icon: Icons.image_outlined,
+            tooltip: 'Insert image',
+            onPressed: _pickAndInsertImage,
+          ),
+          _IconAction(
+            icon: Icons.table_chart_outlined,
+            tooltip: 'Insert table',
+            onPressed: _insertTable,
+          ),
+          _IconAction(
+            icon: Icons.view_column_outlined,
+            tooltip: 'Auto-fit table columns to content',
+            onPressed: _autoFitTableColumns,
+          ),
+          _ToggleButton(
+            icon: Icons.draw_outlined,
+            tooltip: widget.drawMode ? 'Exit drawing mode' : 'Draw on canvas',
+            active: widget.drawMode,
+            onPressed: widget.onToggleDraw,
+          ),
+          _IconAction(
+            icon: Icons.gesture,
+            tooltip: 'Insert drawing block',
+            onPressed: () => _insertNode(drawingNode()),
+          ),
+          _IconAction(
+            icon: Icons.grid_on_outlined,
+            tooltip: 'Insert spreadsheet',
+            onPressed: () => _insertNode(spreadsheetNode()),
+          ),
+          _IconAction(
+            icon: Icons.functions,
+            tooltip: 'Insert math equation',
+            onPressed: () => _insertNode(mathEquationNode()),
+          ),
+          _IconAction(
+            icon: Icons.horizontal_rule,
+            tooltip: 'Insert divider',
+            onPressed: _insertDivider,
+          ),
+          const _Divider(),
+          _IconAction(
+            icon: Icons.zoom_out,
+            tooltip: 'Zoom out (Ctrl+-)',
+            onPressed: widget.onZoomOut,
+          ),
+          InkWell(
+            onTap: widget.onZoomReset,
+            borderRadius: BorderRadius.circular(4),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              child: Text(
+                '${(widget.zoom * 100).round()}%',
+                style: GoogleFonts.inter(fontSize: 11),
               ),
             ),
-            _IconAction(
-              icon: Icons.zoom_in,
-              tooltip: 'Zoom in (Ctrl+=)',
-              onPressed: widget.onZoomIn,
-            ),
-            if (widget.trailing != null) ...[
-              const _Divider(),
-              widget.trailing!,
-            ],
+          ),
+          _IconAction(
+            icon: Icons.zoom_in,
+            tooltip: 'Zoom in (Ctrl+=)',
+            onPressed: widget.onZoomIn,
+          ),
+          if (widget.trailing != null) ...[
+            const _Divider(),
+            widget.trailing!,
           ],
-        ),
+        ],
+      ),
     );
   }
 }
@@ -631,8 +637,7 @@ class _FontSizeDropdown extends StatelessWidget {
       child: DropdownButton<double>(
         isDense: true,
         underline: const SizedBox.shrink(),
-        hint: Text('Size',
-            style: GoogleFonts.inter(fontSize: 11)),
+        hint: Text('Size', style: GoogleFonts.inter(fontSize: 11)),
         items: [
           for (final s in _fontSizes)
             DropdownMenuItem(
@@ -641,9 +646,11 @@ class _FontSizeDropdown extends StatelessWidget {
                   style: GoogleFonts.inter(fontSize: 12)),
             ),
         ],
-        onChanged: enabled ? (v) {
-          if (v != null) onChanged(v);
-        } : null,
+        onChanged: enabled
+            ? (v) {
+                if (v != null) onChanged(v);
+              }
+            : null,
       ),
     );
   }

@@ -87,14 +87,30 @@ void main() {
       return (dots as dynamic).color as Color;
     }
 
-    expect(await colorUnder(MarioTheme.light()), MarioColors.primary);
-    expect(await colorUnder(MarioTheme.dark()), MarioColors.primary);
-    expect(await colorUnder(MarioTheme.book()), MarioColors.primaryBook);
+    // All four grounds carry the same gold primary, so what this pins is that
+    // the loader READS the theme at all. The Book-theme bug it was written for
+    // was exactly a hardcoded constant that happened to match three grounds
+    // out of four.
+    for (final t in [
+      MarioTheme.light(),
+      MarioTheme.white(),
+      MarioTheme.night(),
+      MarioTheme.black(),
+    ]) {
+      expect(await colorUnder(t), MarioColors.gold);
+    }
+    // And it really is reading, not returning a constant: a theme with a
+    // different primary moves it.
+    final custom = MarioTheme.light().copyWith(
+      colorScheme:
+          MarioTheme.light().colorScheme.copyWith(primary: MarioColors.blue),
+    );
+    expect(await colorUnder(custom), MarioColors.blue);
   });
 
   testWidgets('an explicit colour still wins over the theme', (tester) async {
     await tester.pumpWidget(MaterialApp(
-      theme: MarioTheme.book(),
+      theme: MarioTheme.night(),
       home: const Scaffold(
         body: Center(child: MarioLoader(color: Color(0xFF1A1A1A))),
       ),
@@ -110,12 +126,12 @@ void main() {
   /// Every in-button loader in this app shows while the button is DISABLED
   /// (`onPressed: busy ? null : ...`). A disabled Material button paints
   /// onSurface at 12%, never primary — so dressing the loader in `onPrimary`,
-  /// the obvious-looking choice, makes it vanish on the dark and book themes.
+  /// the obvious-looking choice, makes it vanish on the dark grounds.
   /// The theme default is what actually reads on that fill.
   testWidgets('a loader in a button disabled while loading stays legible',
       (tester) async {
     await tester.pumpWidget(MaterialApp(
-      theme: MarioTheme.book(),
+      theme: MarioTheme.night(),
       home: Scaffold(
         body: Center(
           child: FilledButton.icon(
@@ -131,8 +147,8 @@ void main() {
         (w) => w.runtimeType.toString() == 'FourRotatingDots'));
     final color = (dots as dynamic).color as Color;
 
-    expect(color, MarioColors.primaryBook);
-    expect(color, isNot(MarioTheme.book().colorScheme.onPrimary),
+    expect(color, MarioColors.gold);
+    expect(color, isNot(MarioTheme.night().colorScheme.onPrimary),
         reason: 'onPrimary disappears into the disabled fill');
     expect(tester.takeException(), isNull);
   });

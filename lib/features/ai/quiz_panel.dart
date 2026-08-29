@@ -293,7 +293,7 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
     final scheme = Theme.of(context).colorScheme;
     final notifier = ref.read(quizSessionProvider.notifier);
     return ListView(
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
       children: [
         Text('What should the quiz cover?',
             style: GoogleFonts.spaceGrotesk(
@@ -385,7 +385,7 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
     return ValueListenableBuilder<AiRunState>(
       valueListenable: run,
       builder: (context, state, _) => ListView(
-        padding: const EdgeInsets.all(14),
+        padding: EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
         children: [
           AiProgressView(
             state: state,
@@ -406,7 +406,8 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
       children: [
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.all(14),
+            padding:
+                EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
             children: [
               Text(session.title,
                   style: GoogleFonts.spaceGrotesk(
@@ -441,7 +442,8 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
         ),
         const Divider(height: 1),
         Padding(
-          padding: const EdgeInsets.all(10),
+          // Clears the floating composer that overlays this tab.
+          padding: EdgeInsets.fromLTRB(10, 10, 10, ComposerReserve.of(context)),
           child: Row(
             children: [
               TextButton(onPressed: _restart, child: const Text('Discard')),
@@ -482,7 +484,8 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
       children: [
         Expanded(
           child: ListView(
-            padding: const EdgeInsets.all(14),
+            padding:
+                EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
             children: [
               _ScoreBanner(
                 awarded: session.awarded,
@@ -503,7 +506,8 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
         ),
         const Divider(height: 1),
         Padding(
-          padding: const EdgeInsets.all(10),
+          // Clears the floating composer that overlays this tab.
+          padding: EdgeInsets.fromLTRB(10, 10, 10, ComposerReserve.of(context)),
           child: Row(
             children: [
               Icon(Icons.cloud_done_outlined,
@@ -543,7 +547,7 @@ class _ScoreBanner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final pct = outOf == 0 ? 0.0 : awarded / outOf;
     return Container(
-      padding: const EdgeInsets.all(14),
+      padding: EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
       decoration: BoxDecoration(
         color: scheme.surface,
         borderRadius: BorderRadius.circular(10),

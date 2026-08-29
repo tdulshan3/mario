@@ -1,11 +1,18 @@
-/// MarioTheme — three ThemeData factories (Light, Dark, Book) and a custom
-/// [MarioThemeMode] enum that extends Flutter's system/light/dark with a
-/// fourth "book" option.
+/// MarioTheme — the four grounds of the redesign, built on the mark's palette.
 ///
-/// All themes share Inter (body) + Space Grotesk (display), tightly-spaced
-/// pill buttons, and rounded inputs. The Book theme swaps the underlying
-/// surface palette for a sepia / cream paper feel — calmer for long reading
-/// or writing sessions.
+///   Light       cream ground, translucent chrome, solid paper. The default.
+///   White       for bright rooms and printing; the cream drops out.
+///   Calm night  the mark's navy, full bleed. Lower contrast than Black.
+///   Black       pure #000 with white-alpha glass and no shadows. For OLED.
+///
+/// All four share one layout, one type system and one set of shapes — only the
+/// ground changes. Type is Caprasimo (display) over Figtree (body); small
+/// controls are pills, paper and dialogs stay soft.
+///
+/// The primary is gold on every ground — it is light enough to read on navy
+/// and on black without shifting. Only the blue second accent lifts a ramp
+/// step on the dark grounds, where the full-strength blue sits too close to
+/// the navy ink to separate from it.
 library;
 
 import 'package:flutter/material.dart';
@@ -13,310 +20,320 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'colors.dart';
 
-/// Theme selector — extends Flutter's [ThemeMode] with a [book] case.
+/// Theme selector. [system] follows the OS, resolving to Light or Calm night.
 enum MarioThemeMode {
   system,
   light,
-  dark,
-  book;
+  white,
+  night,
+  black;
 
-  /// Whether the Book theme is currently selected (regardless of system mode).
-  bool get isBook => this == MarioThemeMode.book;
+  /// Whether this mode paints on a dark ground.
+  bool get isDark => this == night || this == black;
 }
 
 class MarioTheme {
   const MarioTheme._();
 
-  /// Reading-focused sepia / cream palette. Identified at runtime by
-  /// `Theme.of(context).extension<MarioThemeMarker>()?.isBook == true`.
-  static ThemeData book() {
-    final base = ThemeData.light(useMaterial3: true);
-    final textTheme = _textTheme(base.textTheme, MarioColors.onSurfaceBook);
+  static ThemeData light() => _build(
+        mode: MarioThemeMode.light,
+        brightness: Brightness.light,
+        primary: MarioColors.primary,
+        secondary: MarioColors.secondary,
+        onAccent: MarioColors.onPrimary,
+        surface: MarioColors.surface,
+        chrome: MarioColors.surfaceVariant,
+        paper: MarioColors.surfaceElevated,
+        onSurface: MarioColors.onSurface,
+        onSurfaceMuted: MarioColors.onSurfaceMuted,
+        border: MarioColors.border,
+      );
+
+  static ThemeData white() => _build(
+        mode: MarioThemeMode.white,
+        brightness: Brightness.light,
+        primary: MarioColors.primary,
+        secondary: MarioColors.secondary,
+        onAccent: MarioColors.onPrimary,
+        surface: MarioColors.surfaceWhite,
+        chrome: MarioColors.surfaceVariantWhite,
+        paper: MarioColors.surfaceElevatedWhite,
+        onSurface: MarioColors.onSurfaceWhite,
+        onSurfaceMuted: MarioColors.onSurfaceMutedWhite,
+        border: MarioColors.borderWhite,
+      );
+
+  static ThemeData night() => _build(
+        mode: MarioThemeMode.night,
+        brightness: Brightness.dark,
+        primary: MarioColors.primaryDark,
+        secondary: MarioColors.secondaryDark,
+        onAccent: MarioColors.onPrimary,
+        surface: MarioColors.surfaceDark,
+        chrome: MarioColors.surfaceVariantDark,
+        paper: MarioColors.surfaceElevatedDark,
+        onSurface: MarioColors.onSurfaceDark,
+        onSurfaceMuted: MarioColors.onSurfaceMutedDark,
+        border: MarioColors.borderDark,
+      );
+
+  static ThemeData black() => _build(
+        mode: MarioThemeMode.black,
+        brightness: Brightness.dark,
+        primary: MarioColors.primaryDark,
+        secondary: MarioColors.secondaryDark,
+        onAccent: MarioColors.onPrimary,
+        surface: MarioColors.surfaceBlack,
+        chrome: MarioColors.surfaceVariantBlack,
+        paper: MarioColors.surfaceElevatedBlack,
+        onSurface: MarioColors.onSurfaceBlack,
+        onSurfaceMuted: MarioColors.onSurfaceMutedBlack,
+        border: MarioColors.borderBlack,
+      );
+
+  /// One builder for all four, so a change to shape or type lands everywhere
+  /// at once and the grounds cannot drift apart.
+  static ThemeData _build({
+    required MarioThemeMode mode,
+    required Brightness brightness,
+    required Color primary,
+    required Color secondary,
+    required Color onAccent,
+    required Color surface,
+    required Color chrome,
+    required Color paper,
+    required Color onSurface,
+    required Color onSurfaceMuted,
+    required Color border,
+  }) {
+    final base = brightness == Brightness.dark
+        ? ThemeData.dark(useMaterial3: true)
+        : ThemeData.light(useMaterial3: true);
+
+    final scheme = ColorScheme(
+      brightness: brightness,
+      primary: primary,
+      onPrimary: onAccent,
+      secondary: secondary,
+      onSecondary: MarioColors.neutral100,
+      surface: surface,
+      onSurface: onSurface,
+      onSurfaceVariant: onSurfaceMuted,
+      surfaceContainerHighest: chrome,
+      surfaceContainerHigh: paper,
+      outline: border,
+      outlineVariant: border,
+      error: brightness == Brightness.dark
+          ? MarioColors.accent300
+          : MarioColors.accent700,
+      onError: brightness == Brightness.dark
+          ? MarioColors.navy
+          : MarioColors.neutral100,
+    );
+
+    final textTheme = _textTheme(base.textTheme, onSurface);
+
+    // Pill everything small; the design puts buttons in the display face.
+    final buttonShape = RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(MarioRadius.pill));
+    final buttonLabel = GoogleFonts.caprasimo(fontSize: 14, height: 1.2);
+    const buttonPadding = EdgeInsets.symmetric(
+        horizontal: MarioSpace.x4, vertical: MarioSpace.x2);
+
     return base.copyWith(
-      brightness: Brightness.light,
-      colorScheme: const ColorScheme.light(
-        primary: MarioColors.primaryBook,
-        onPrimary: MarioColors.surfaceElevatedBook,
-        secondary: MarioColors.primaryPressedBook,
-        onSecondary: MarioColors.surfaceElevatedBook,
-        surface: MarioColors.surfaceBook,
-        onSurface: MarioColors.onSurfaceBook,
-        onSurfaceVariant: MarioColors.onSurfaceMutedBook,
-        surfaceContainerHighest: MarioColors.surfaceVariantBook,
-        surfaceContainerHigh: MarioColors.surfaceElevatedBook,
-        outline: MarioColors.borderBook,
-        outlineVariant: MarioColors.borderBook,
-        error: Color(0xFFA84C3D),
-        onError: MarioColors.surfaceElevatedBook,
-      ),
-      extensions: const [MarioThemeMarker(isBook: true)],
-      scaffoldBackgroundColor: MarioColors.surfaceBook,
-      canvasColor: MarioColors.surfaceBook,
-      dividerColor: MarioColors.borderBook,
+      colorScheme: scheme,
+      extensions: [MarioThemeMarker(mode: mode)],
+      scaffoldBackgroundColor: surface,
+      canvasColor: surface,
+      dividerColor: border,
       textTheme: textTheme,
-      iconTheme: const IconThemeData(color: MarioColors.onSurfaceBook),
+      iconTheme: IconThemeData(color: onSurface),
       appBarTheme: AppBarTheme(
-        backgroundColor: MarioColors.surfaceBook,
-        foregroundColor: MarioColors.onSurfaceBook,
+        backgroundColor: surface,
+        foregroundColor: onSurface,
         elevation: 0,
         scrolledUnderElevation: 0,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
-          color: MarioColors.onSurfaceBook,
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
+        titleTextStyle: GoogleFonts.caprasimo(color: onSurface, fontSize: 21),
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: MarioColors.primaryBook,
-          foregroundColor: MarioColors.surfaceElevatedBook,
+          backgroundColor: primary,
+          foregroundColor: onAccent,
           elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w600),
+          padding: buttonPadding,
+          shape: buttonShape,
+          textStyle: buttonLabel,
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: primary,
+          foregroundColor: onAccent,
+          padding: buttonPadding,
+          shape: buttonShape,
+          textStyle: buttonLabel,
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: onSurface,
+          padding: buttonPadding,
+          shape: buttonShape,
+          side: BorderSide(color: border),
+          textStyle: buttonLabel,
         ),
       ),
       textButtonTheme: TextButtonThemeData(
         style: TextButton.styleFrom(
-          foregroundColor: MarioColors.onSurfaceBook,
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w500),
+          foregroundColor: primary,
+          padding: const EdgeInsets.symmetric(horizontal: MarioSpace.x2),
+          shape: buttonShape,
+          textStyle: buttonLabel,
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: chrome,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: MarioColors.borderBook),
+          borderRadius: BorderRadius.circular(MarioRadius.pill),
+          borderSide: BorderSide(color: border),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.pill),
+          borderSide: BorderSide(color: border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide:
-              const BorderSide(color: MarioColors.primaryBook, width: 2),
+          borderRadius: BorderRadius.circular(MarioRadius.pill),
+          borderSide: BorderSide(color: primary, width: 1.5),
         ),
         contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        hintStyle: GoogleFonts.figtree(fontSize: 14, color: onSurfaceMuted),
+      ),
+      cardTheme: CardThemeData(
+        color: paper,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.card),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: chrome,
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.card),
+        ),
+        titleTextStyle: GoogleFonts.caprasimo(color: onSurface, fontSize: 20),
+        contentTextStyle:
+            GoogleFonts.figtree(color: onSurface, fontSize: 14, height: 1.55),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: chrome,
+        side: BorderSide(color: border),
+        labelStyle: GoogleFonts.figtree(
+            fontSize: 11, fontWeight: FontWeight.w600, color: onSurface),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.pill),
+        ),
       ),
       checkboxTheme: CheckboxThemeData(
         fillColor: WidgetStateProperty.resolveWith((s) =>
-            s.contains(WidgetState.selected)
-                ? MarioColors.primaryBook
-                : Colors.transparent),
-        checkColor:
-            WidgetStateProperty.all(MarioColors.surfaceElevatedBook),
-        side: const BorderSide(color: MarioColors.borderBook),
+            s.contains(WidgetState.selected) ? primary : Colors.transparent),
+        checkColor: WidgetStateProperty.all(onAccent),
+        side: BorderSide(color: border),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.sm * 0.75),
+        ),
       ),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: MarioColors.primaryBook,
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.selected) ? primary : border),
       ),
-      dividerTheme: const DividerThemeData(
-        color: MarioColors.borderBook,
-        thickness: 1,
-        space: 1,
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.selected) ? onAccent : paper),
+        trackColor: WidgetStateProperty.resolveWith(
+            (s) => s.contains(WidgetState.selected) ? primary : chrome),
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: primary),
+      dividerTheme: DividerThemeData(color: border, thickness: 1, space: 1),
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+          color: onSurface,
+          borderRadius: BorderRadius.circular(MarioRadius.sm),
+        ),
+        textStyle: GoogleFonts.figtree(fontSize: 12, color: surface),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: paper,
+        contentTextStyle: GoogleFonts.figtree(fontSize: 14, color: onSurface),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MarioRadius.md),
+        ),
+        behavior: SnackBarBehavior.floating,
       ),
     );
   }
 
-  static ThemeData light() {
-    final base = ThemeData.light(useMaterial3: true);
-    final textTheme = _textTheme(base.textTheme, MarioColors.onSurface);
-    return base.copyWith(
-      colorScheme: const ColorScheme.light(
-        primary: MarioColors.primary,
-        onPrimary: MarioColors.onSurface,
-        secondary: MarioColors.primaryPressed,
-        onSecondary: MarioColors.onSurface,
-        surface: MarioColors.surface,
-        onSurface: MarioColors.onSurface,
-        onSurfaceVariant: MarioColors.onSurfaceMuted,
-        surfaceContainerHighest: MarioColors.surfaceVariant,
-        surfaceContainerHigh: MarioColors.surfaceElevated,
-        outline: MarioColors.border,
-        outlineVariant: MarioColors.border,
-        error: Color(0xFFB3261E),
-        onError: Colors.white,
-      ),
-      extensions: const [MarioThemeMarker(isBook: false)],
-      scaffoldBackgroundColor: MarioColors.surface,
-      canvasColor: MarioColors.surface,
-      dividerColor: MarioColors.border,
-      textTheme: textTheme,
-      iconTheme: const IconThemeData(color: MarioColors.onSurface),
-      appBarTheme: AppBarTheme(
-        backgroundColor: MarioColors.surface,
-        foregroundColor: MarioColors.onSurface,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
-          color: MarioColors.onSurface,
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: MarioColors.primary,
-          foregroundColor: MarioColors.onSurface,
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w600),
-        ),
-      ),
-      textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: MarioColors.onSurface,
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w500),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: MarioColors.border),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: MarioColors.primary, width: 2),
-        ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      ),
-      checkboxTheme: CheckboxThemeData(
-        fillColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected)
-                ? MarioColors.primary
-                : Colors.transparent),
-        checkColor: WidgetStateProperty.all(MarioColors.onSurface),
-        side: const BorderSide(color: MarioColors.border),
-      ),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: MarioColors.primary,
-      ),
-      dividerTheme: const DividerThemeData(
-        color: MarioColors.border,
-        thickness: 1,
-        space: 1,
-      ),
-    );
-  }
-
-  static ThemeData dark() {
-    final base = ThemeData.dark(useMaterial3: true);
-    final textTheme = _textTheme(base.textTheme, MarioColors.onSurfaceDark);
-    return base.copyWith(
-      colorScheme: const ColorScheme.dark(
-        primary: MarioColors.primary,
-        onPrimary: Color(0xFF1A1A1A),
-        secondary: MarioColors.primaryPressed,
-        onSecondary: Color(0xFF1A1A1A),
-        surface: MarioColors.surfaceDark,
-        onSurface: MarioColors.onSurfaceDark,
-        onSurfaceVariant: MarioColors.onSurfaceMutedDark,
-        surfaceContainerHighest: MarioColors.surfaceVariantDark,
-        surfaceContainerHigh: MarioColors.surfaceElevatedDark,
-        outline: MarioColors.borderDark,
-        outlineVariant: MarioColors.borderDark,
-        error: Color(0xFFF2B8B5),
-        onError: Color(0xFF1A1A1A),
-      ),
-      extensions: const [MarioThemeMarker(isBook: false)],
-      scaffoldBackgroundColor: MarioColors.surfaceDark,
-      canvasColor: MarioColors.surfaceDark,
-      dividerColor: MarioColors.borderDark,
-      textTheme: textTheme,
-      iconTheme: const IconThemeData(color: MarioColors.onSurfaceDark),
-      appBarTheme: AppBarTheme(
-        backgroundColor: MarioColors.surfaceDark,
-        foregroundColor: MarioColors.onSurfaceDark,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        titleTextStyle: GoogleFonts.spaceGrotesk(
-          color: MarioColors.onSurfaceDark,
-          fontSize: 16,
-          fontWeight: FontWeight.w600,
-        ),
-      ),
-      elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: MarioColors.primary,
-          foregroundColor: const Color(0xFF1A1A1A),
-          elevation: 0,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w600),
-        ),
-      ),
-      textButtonTheme: TextButtonThemeData(
-        style: TextButton.styleFrom(
-          foregroundColor: MarioColors.onSurfaceDark,
-          textStyle: GoogleFonts.inter(fontWeight: FontWeight.w500),
-        ),
-      ),
-      inputDecorationTheme: InputDecorationTheme(
-        border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: MarioColors.borderDark),
-        ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(8),
-          borderSide: const BorderSide(color: MarioColors.primary, width: 2),
-        ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-      ),
-      checkboxTheme: CheckboxThemeData(
-        fillColor: WidgetStateProperty.resolveWith((states) =>
-            states.contains(WidgetState.selected)
-                ? MarioColors.primary
-                : Colors.transparent),
-        checkColor: WidgetStateProperty.all(const Color(0xFF1A1A1A)),
-        side: const BorderSide(color: MarioColors.borderDark),
-      ),
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: MarioColors.primary,
-      ),
-      dividerTheme: const DividerThemeData(
-        color: MarioColors.borderDark,
-        thickness: 1,
-        space: 1,
-      ),
-    );
-  }
-
+  /// Figtree for reading, Caprasimo for the display sizes.
+  ///
+  /// The ramp is the design's: 42 / 32 / 25 / 20 / 16 / 13, with the smallest
+  /// step set in caps and tracked out — it is a label, not a heading.
   static TextTheme _textTheme(TextTheme base, Color color) {
-    final body = GoogleFonts.interTextTheme(base).apply(
+    final body = GoogleFonts.figtreeTextTheme(base).apply(
       bodyColor: color,
       displayColor: color,
     );
+    TextStyle display(double size) =>
+        GoogleFonts.caprasimo(color: color, fontSize: size, height: 1.12);
+
     return body.copyWith(
-      displayLarge: GoogleFonts.spaceGrotesk(
-          color: color, fontSize: 32, fontWeight: FontWeight.w700),
-      displayMedium: GoogleFonts.spaceGrotesk(
-          color: color, fontSize: 26, fontWeight: FontWeight.w700),
-      displaySmall: GoogleFonts.spaceGrotesk(
-          color: color, fontSize: 22, fontWeight: FontWeight.w600),
-      headlineMedium: GoogleFonts.spaceGrotesk(
-          color: color, fontSize: 18, fontWeight: FontWeight.w600),
-      titleLarge: GoogleFonts.spaceGrotesk(
-          color: color, fontSize: 16, fontWeight: FontWeight.w600),
+      displayLarge: display(42),
+      displayMedium: display(32),
+      displaySmall: display(25),
+      headlineMedium: display(20),
+      headlineSmall: display(17),
+      titleLarge: display(16),
+      bodyLarge: GoogleFonts.figtree(color: color, fontSize: 16, height: 1.6),
+      bodyMedium: GoogleFonts.figtree(color: color, fontSize: 15, height: 1.55),
+      bodySmall: GoogleFonts.figtree(color: color, fontSize: 13, height: 1.5),
+      labelLarge: GoogleFonts.figtree(
+          color: color, fontSize: 14, fontWeight: FontWeight.w600),
+      labelSmall: GoogleFonts.figtree(
+        color: color,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.08 * 11,
+      ),
     );
   }
 }
 
-/// Tiny ThemeExtension that lets widgets check whether the Book palette is
-/// active without comparing colors. Useful for the rare case where Book and
-/// Light share the same `Brightness.light` but need different rendering.
+/// Carries the active [MarioThemeMode] so widgets can branch on the ground
+/// without comparing colours — Light and White are both `Brightness.light`,
+/// and Night and Black are both dark, so brightness alone cannot tell them
+/// apart. Black in particular needs to know it has no shadows to draw with.
 class MarioThemeMarker extends ThemeExtension<MarioThemeMarker> {
-  const MarioThemeMarker({required this.isBook});
-  final bool isBook;
+  const MarioThemeMarker({required this.mode});
+
+  final MarioThemeMode mode;
+
+  /// Black uses an alpha step off #000 as its elevation; a drop shadow is
+  /// invisible there, so shadow-based elevation has to be skipped.
+  bool get usesAlphaElevation => mode == MarioThemeMode.black;
 
   @override
-  MarioThemeMarker copyWith({bool? isBook}) =>
-      MarioThemeMarker(isBook: isBook ?? this.isBook);
+  MarioThemeMarker copyWith({MarioThemeMode? mode}) =>
+      MarioThemeMarker(mode: mode ?? this.mode);
 
   @override
   MarioThemeMarker lerp(ThemeExtension<MarioThemeMarker>? other, double t) =>
       other is MarioThemeMarker ? other : this;
 }
 
-/// Convenience: true when the active theme is the Book palette.
-bool isBookTheme(BuildContext context) =>
-    Theme.of(context).extension<MarioThemeMarker>()?.isBook ?? false;
+/// The active ground. Falls back to Light when no marker is installed (a bare
+/// `MaterialApp` in a widget test, say).
+MarioThemeMode marioMode(BuildContext context) =>
+    Theme.of(context).extension<MarioThemeMarker>()?.mode ??
+    MarioThemeMode.light;

@@ -7,6 +7,7 @@
 library;
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
@@ -157,6 +158,38 @@ final editorSelectionProvider = StateProvider<String?>((ref) => null);
 /// Null whenever no page is open.
 final aiEditorBridgeProvider = StateProvider<AiEditorBridge?>((ref) => null);
 
+/// How much room the floating composer needs at the foot of a panel.
+///
+/// The composer is not a docked bar — it floats over the tab's content so the
+/// answer scrolls behind it, the way a chat composer does. That only works if
+/// each panel's scroll view reserves this much at its bottom; without it the
+/// last line parks permanently underneath and cannot be scrolled clear.
+const double kComposerReserve = 76;
+
+/// Publishes the composer's MEASURED height to the tab below it.
+///
+/// [kComposerReserve] is only a first guess, and a guessed constant is exactly
+/// how a docked footer ends up painted underneath the composer: the number was
+/// close enough to look right and wrong enough to overlap. The composer now
+/// measures itself and hands the real figure down here, so a panel reserves
+/// what the composer actually occupies rather than what someone once assumed.
+class ComposerReserve extends InheritedWidget {
+  const ComposerReserve({
+    super.key,
+    required this.height,
+    required super.child,
+  });
+
+  final double height;
+
+  static double of(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<ComposerReserve>()?.height ??
+      kComposerReserve;
+
+  @override
+  bool updateShouldNotify(ComposerReserve old) => old.height != height;
+}
+
 /// Which tab of the side panel is showing.
 enum AiPanelTab { ask, quiz, writing, agent }
 
@@ -170,6 +203,7 @@ class AiPanelState {
     this.isOpen = false,
     this.tab = AiPanelTab.ask,
     this.pendingQuestion,
+    this.pendingInstruction,
   });
 
   final bool isOpen;
@@ -180,11 +214,20 @@ class AiPanelState {
   /// rebuild cannot fire the same question twice.
   final String? pendingQuestion;
 
+  /// The same idea for the Do tab: an instruction handed over by the composer
+  /// or by a preset, run once the tab picks it up. The two are separate fields
+  /// because they go to different places — a question is answered, an
+  /// instruction edits the page — and mixing them would mean the composer's
+  /// text landing in whichever tab happened to read it first.
+  final String? pendingInstruction;
+
   AiPanelState copyWith({
     bool? isOpen,
     AiPanelTab? tab,
     String? pendingQuestion,
     bool clearPendingQuestion = false,
+    String? pendingInstruction,
+    bool clearPendingInstruction = false,
   }) =>
       AiPanelState(
         isOpen: isOpen ?? this.isOpen,
@@ -192,6 +235,9 @@ class AiPanelState {
         pendingQuestion: clearPendingQuestion
             ? null
             : (pendingQuestion ?? this.pendingQuestion),
+        pendingInstruction: clearPendingInstruction
+            ? null
+            : (pendingInstruction ?? this.pendingInstruction),
       );
 }
 
@@ -226,6 +272,19 @@ class AiPanelNotifier extends Notifier<AiPanelState> {
     final q = state.pendingQuestion;
     if (q != null) state = state.copyWith(clearPendingQuestion: true);
     return q;
+  }
+
+  /// Opens the Do tab with an instruction queued to run.
+  void runInstruction(String instruction) => state = state.copyWith(
+        isOpen: true,
+        tab: AiPanelTab.agent,
+        pendingInstruction: instruction,
+      );
+
+  String? takePendingInstruction() {
+    final i = state.pendingInstruction;
+    if (i != null) state = state.copyWith(clearPendingInstruction: true);
+    return i;
   }
 }
 

@@ -17,6 +17,24 @@ import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../editor/blocks/mario_image_block.dart';
 
+/// The paper a PDF is laid out on.
+///
+/// Two entries, because two is what the exporter can honestly offer: the
+/// `pdf` package's own [PdfPageFormat] constants, which set the page box and
+/// nothing else. Everything downstream (margins, the image cap in
+/// [PdfExporter._contentWidth], MultiPage's break points) is derived from
+/// whichever is chosen, so adding a third here would need no other change.
+enum PdfPaperSize {
+  a4('A4', PdfPageFormat.a4),
+  letter('Letter', PdfPageFormat.letter);
+
+  const PdfPaperSize(this.label, this.format);
+
+  /// What the picker calls it.
+  final String label;
+  final PdfPageFormat format;
+}
+
 class PdfExporter {
   PdfExporter(this._content, this._assets);
   final PageContentRepository _content;
@@ -78,7 +96,10 @@ class PdfExporter {
     }();
   }
 
-  Future<List<int>> renderPage(NotePage page) async {
+  Future<List<int>> renderPage(
+    NotePage page, {
+    PdfPaperSize paper = PdfPaperSize.a4,
+  }) async {
     final fileId = page.driveFileId;
     if (fileId == null) {
       throw StateError('Page "${page.title}" has no Drive content');
@@ -92,11 +113,15 @@ class PdfExporter {
 
     _images.clear();
     await _preloadImages(document.root.children);
+    // Before the node walk: _nodeToWidgets caps image widths against this and
+    // runs synchronously, so it has to be right for the chosen paper first.
+    _contentWidth = _usableWidth(paper.format);
 
     final pdf = pw.Document(theme: await _theme());
     pdf.addPage(
       pw.MultiPage(
-        margin: const pw.EdgeInsets.all(48),
+        pageFormat: paper.format,
+        margin: _margin,
         build: (ctx) => [
           pw.Header(
             level: 0,
@@ -116,10 +141,19 @@ class PdfExporter {
     return pdf.save();
   }
 
-  /// Usable width inside the page margins (`EdgeInsets.all(48)`). The default
-  /// MultiPage format is A4 (595.28pt wide); 48pt margins leave ~499pt. Kept a
-  /// touch under that so images never quite touch the edge.
-  static const double _contentWidth = 495;
+  static const pw.EdgeInsets _margin = pw.EdgeInsets.all(48);
+
+  /// Usable width inside the page margins, for the paper being rendered — A4
+  /// is 595.28pt wide and Letter 612pt, so a cap fixed at one of them either
+  /// wastes an inch of Letter or overruns A4. Kept a touch under the true
+  /// figure so images never quite touch the text edge.
+  static double _usableWidth(PdfPageFormat format) =>
+      format.width - _margin.horizontal - 4;
+
+  /// The cap [_nodeToWidgets] measures images against. Set by [renderPage]
+  /// from its `paper` argument before the walk begins; the initial value is
+  /// A4's so the field is never read unset.
+  double _contentWidth = _usableWidth(PdfPageFormat.a4);
 
   /// Walks every node (including children and table cells) collecting `image`
   /// URLs, then loads each one concurrently into [_images]. Failures are left
@@ -505,7 +539,11 @@ class PdfExporter {
     );
   }
 
-  Future<void> exportPageToFile(BuildContext context, NotePage page) async {
+  Future<void> exportPageToFile(
+    BuildContext context,
+    NotePage page, {
+    PdfPaperSize paper = PdfPaperSize.a4,
+  }) async {
     if (kIsWeb) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('PDF export from web is not yet supported'),
@@ -513,7 +551,7 @@ class PdfExporter {
       return;
     }
     try {
-      final bytes = await renderPage(page);
+      final bytes = await renderPage(page, paper: paper);
       final path = await FilePicker.platform.saveFile(
         dialogTitle: 'Export to PDF',
         fileName: '${_safe(page.title)}.pdf',

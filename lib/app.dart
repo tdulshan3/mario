@@ -29,21 +29,28 @@ class MarioApp extends ConsumerWidget {
     final ThemeMode flutterMode;
     switch (themeMode) {
       case MarioThemeMode.system:
+        // System pairs the two defaults: cream by day, the mark's navy by
+        // night. Black is deliberately not the system dark — it is a choice,
+        // not a fallback.
         lightTheme = MarioTheme.light();
-        darkTheme = MarioTheme.dark();
+        darkTheme = MarioTheme.night();
         flutterMode = ThemeMode.system;
       case MarioThemeMode.light:
         lightTheme = MarioTheme.light();
         darkTheme = MarioTheme.light();
         flutterMode = ThemeMode.light;
-      case MarioThemeMode.dark:
-        lightTheme = MarioTheme.dark();
-        darkTheme = MarioTheme.dark();
-        flutterMode = ThemeMode.dark;
-      case MarioThemeMode.book:
-        lightTheme = MarioTheme.book();
-        darkTheme = MarioTheme.book();
+      case MarioThemeMode.white:
+        lightTheme = MarioTheme.white();
+        darkTheme = MarioTheme.white();
         flutterMode = ThemeMode.light;
+      case MarioThemeMode.night:
+        lightTheme = MarioTheme.night();
+        darkTheme = MarioTheme.night();
+        flutterMode = ThemeMode.dark;
+      case MarioThemeMode.black:
+        lightTheme = MarioTheme.black();
+        darkTheme = MarioTheme.black();
+        flutterMode = ThemeMode.dark;
     }
     return MaterialApp.router(
       title: 'Mario',
