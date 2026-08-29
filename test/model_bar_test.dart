@@ -14,6 +14,7 @@ import 'package:mario/features/ai/ai_progress.dart';
 import 'package:mario/features/ai/model_bar.dart';
 
 void main() {
+  _activityLineTests();
   group('the bar renders', () {
     testWidgets('shows nothing when no backend is configured', (tester) async {
       // A picker over an empty list is worse than no picker.
@@ -111,6 +112,90 @@ void main() {
       );
       final config = endpoint.toConfig('mystery', id: 'x');
       expect(config.effectiveCapabilities.contextTokens, greaterThan(0));
+    });
+  });
+}
+
+/// Saying what the model is doing, on every tab.
+///
+/// The panel shares one bar across Ask, Quiz, Writing and Do, so this line is
+/// the single place any of them reports activity. What it must never do is
+/// assert a status it does not have — an idle run has to stay silent rather
+/// than claim the model is working.
+void _activityLineTests() {
+  Future<void> pump(WidgetTester tester, AiRunState state) =>
+      tester.pumpWidget(MaterialApp(
+        home: Scaffold(body: ModelActivityLine(state: state)),
+      ));
+
+  group('the activity line', () {
+    testWidgets('says nothing at all when the run is idle', (tester) async {
+      await pump(tester, const AiRunState());
+      expect(find.byType(Text), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('names the running step in the present tense', (tester) async {
+      await pump(
+        tester,
+        const AiRunState(
+          status: AiRunStatus.running,
+          steps: [
+            AiStep(kind: AiStepKind.thinking, state: AiStepState.done),
+            AiStep(kind: AiStepKind.searchingWeb, state: AiStepState.active),
+            AiStep(kind: AiStepKind.answering),
+          ],
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+          find.textContaining(AiStepKind.searchingWeb.label), findsOneWidget);
+      // Not the step that already finished, nor the one still pending.
+      expect(find.textContaining(AiStepKind.answering.label), findsNothing);
+    });
+
+    testWidgets('carries the step detail when it has one', (tester) async {
+      await pump(
+        tester,
+        const AiRunState(
+          status: AiRunStatus.running,
+          steps: [
+            AiStep(
+              kind: AiStepKind.readingSection,
+              state: AiStepState.active,
+              detail: 'page 3 of 12',
+            ),
+          ],
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.textContaining('page 3 of 12'), findsOneWidget);
+    });
+
+    testWidgets('running between steps still reads as working', (tester) async {
+      // No step is active yet. Going blank here looks like nothing is
+      // happening, which is the one thing this line exists to prevent.
+      await pump(
+        tester,
+        const AiRunState(
+          status: AiRunStatus.running,
+          steps: [AiStep(kind: AiStepKind.thinking)],
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(find.textContaining('Working'), findsOneWidget);
+    });
+
+    testWidgets('a failure says so, in the error colour', (tester) async {
+      await pump(
+        tester,
+        const AiRunState(
+          status: AiRunStatus.failed,
+          error: 'The backend refused the request',
+        ),
+      );
+      expect(find.textContaining('The backend refused the request'),
+          findsOneWidget);
     });
   });
 }

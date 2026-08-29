@@ -21,6 +21,7 @@ import '../../core/services/ai/llm_provider_config.dart';
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/llm_types.dart';
 import '../../ui/colors.dart';
+import '../../ui/widgets/mario_loader.dart';
 import 'ai_progress.dart';
 import 'ai_state.dart';
 
@@ -59,41 +60,144 @@ class ModelBar extends ConsumerWidget {
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: scheme.outlineVariant)),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: _ModelPicker(
-              configs: configs,
-              active: active,
-              onPick: (config) async {
-                await backends.setActive(config.id);
-                ref.invalidate(aiConfigsProvider);
-              },
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _ModelPicker(
+                  configs: configs,
+                  active: active,
+                  onPick: (config) async {
+                    await backends.setActive(config.id);
+                    ref.invalidate(aiConfigsProvider);
+                  },
+                ),
+              ),
+              _EffortChip(
+                effort: active.effort,
+                onPick: (effort) async {
+                  await backends.setEffort(active.id, effort);
+                  ref.invalidate(aiConfigsProvider);
+                },
+              ),
+              const SizedBox(width: 6),
+              if (run == null)
+                _ContextChip(
+                    contextTokens: active.effectiveCapabilities.contextTokens)
+              else
+                ValueListenableBuilder<AiRunState>(
+                  valueListenable: run!,
+                  builder: (context, state, _) => _ContextChip(
+                    contextTokens: state.contextTokens ??
+                        active.effectiveCapabilities.contextTokens,
+                    used: state.promptTokens,
+                  ),
+                ),
+            ],
           ),
-          _EffortChip(
-            effort: active.effort,
-            onPick: (effort) async {
-              await backends.setEffort(active.id, effort);
-              ref.invalidate(aiConfigsProvider);
-            },
-          ),
-          const SizedBox(width: 6),
-          if (run == null)
-            _ContextChip(
-                contextTokens: active.effectiveCapabilities.contextTokens)
-          else
+          // What the model is doing right now. This bar already renders above
+          // every tab, so putting the activity here gives Ask, Quiz, Writing
+          // and Do the same readout for free rather than four of them.
+          if (run != null)
             ValueListenableBuilder<AiRunState>(
               valueListenable: run!,
-              builder: (context, state, _) => _ContextChip(
-                contextTokens: state.contextTokens ??
-                    active.effectiveCapabilities.contextTokens,
-                used: state.promptTokens,
-              ),
+              builder: (context, state, _) => ModelActivityLine(state: state),
             ),
         ],
       ),
     );
+  }
+}
+
+/// The live "what is it doing" line: the step that is running, whatever that
+/// step chose to say about itself, and how long it has been at it.
+///
+/// Reads the run's own step list rather than inventing a vocabulary — the
+/// steps already carry present-tense labels, and a detail like "page 3 of 12"
+/// or the search query. Nothing is shown when no step is active, so an idle
+/// panel stays quiet instead of asserting a status it does not have.
+class ModelActivityLine extends StatelessWidget {
+  const ModelActivityLine({super.key, required this.state});
+
+  final AiRunState state;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    if (state.status == AiRunStatus.failed) {
+      return _line(
+        context,
+        icon: Icon(Icons.error_outline, size: 13, color: scheme.error),
+        text: state.error ?? 'Failed',
+        colour: scheme.error,
+      );
+    }
+    if (state.status != AiRunStatus.running) return const SizedBox.shrink();
+
+    AiStep? active;
+    for (final s in state.steps) {
+      if (s.state == AiStepState.active) {
+        active = s;
+        break;
+      }
+    }
+    // Running, but between steps — say so rather than going blank and looking
+    // like nothing is happening.
+    final label = active?.kind.label ?? 'Working';
+    final detail = active?.detail;
+
+    return _line(
+      context,
+      icon: const MarioLoader(size: 13),
+      text: detail == null || detail.isEmpty ? label : '$label · $detail',
+      colour: scheme.onSurfaceVariant,
+      trailing: active?.elapsed,
+    );
+  }
+
+  Widget _line(
+    BuildContext context, {
+    required Widget icon,
+    required String text,
+    required Color colour,
+    Duration? trailing,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          SizedBox(width: 16, height: 16, child: Center(child: icon)),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              text,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(fontSize: 11, color: colour),
+            ),
+          ),
+          if (trailing != null) ...[
+            const SizedBox(width: 6),
+            Text(
+              _elapsedLabel(trailing),
+              style: GoogleFonts.inter(
+                  fontSize: 11, color: Theme.of(context).colorScheme.outline),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  static String _elapsedLabel(Duration d) {
+    if (d.inMilliseconds < 1000) return '${d.inMilliseconds}ms';
+    if (d.inSeconds < 60) {
+      return '${(d.inMilliseconds / 1000).toStringAsFixed(1)}s';
+    }
+    return '${d.inMinutes}m ${d.inSeconds % 60}s';
   }
 }
 
