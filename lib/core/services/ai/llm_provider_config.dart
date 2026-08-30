@@ -37,7 +37,12 @@ enum LlmProviderKind {
 
   /// Claude via `/v1/messages`.
   anthropic,
+
+  /// Google's Gemini API through its official OpenAI-compatible endpoint.
+  gemini,
 }
+
+const kDefaultGeminiModel = 'gemini-2.5-flash';
 
 extension LlmProviderKindLabel on LlmProviderKind {
   String get label => switch (this) {
@@ -45,6 +50,7 @@ extension LlmProviderKindLabel on LlmProviderKind {
         LlmProviderKind.ollama => 'Ollama',
         LlmProviderKind.openAi => 'OpenAI',
         LlmProviderKind.anthropic => 'Claude (Anthropic)',
+        LlmProviderKind.gemini => 'Gemini (Google)',
       };
 
   /// What to prefill the base-URL field with when this kind is picked.
@@ -53,10 +59,14 @@ extension LlmProviderKindLabel on LlmProviderKind {
         LlmProviderKind.ollama => 'http://localhost:11434/v1',
         LlmProviderKind.openAi => 'https://api.openai.com/v1',
         LlmProviderKind.anthropic => 'https://api.anthropic.com/v1',
+        LlmProviderKind.gemini =>
+          'https://generativelanguage.googleapis.com/v1beta/openai',
       };
 
   bool get requiresApiKey =>
-      this == LlmProviderKind.openAi || this == LlmProviderKind.anthropic;
+      this == LlmProviderKind.openAi ||
+      this == LlmProviderKind.anthropic ||
+      this == LlmProviderKind.gemini;
 
   /// The optimistic starting point for a kind. Endpoints that turn out to be
   /// less capable get narrowed by probing and by 400s — see
@@ -76,6 +86,13 @@ extension LlmProviderKindLabel on LlmProviderKind {
             tools: true,
             vision: true,
             contextTokens: 200000,
+          ),
+        LlmProviderKind.gemini => const LlmCapabilities(
+            jsonMode: true,
+            tools: true,
+            embeddings: true,
+            vision: true,
+            contextTokens: 1048576,
           ),
         // Ollama serves plenty of text-only models, so vision is off until the
         // user turns it on for a model they know can see. Sending an image to
@@ -217,6 +234,9 @@ class LlmProviderConfig {
 
   /// Builds the live provider for this config.
   LlmProvider build({required String? apiKey}) {
+    final requestModel = kind == LlmProviderKind.gemini
+        ? model.replaceFirst(RegExp(r'^models/'), '')
+        : model;
     switch (kind) {
       case LlmProviderKind.anthropic:
         return AnthropicProvider(
@@ -227,19 +247,23 @@ class LlmProviderConfig {
           baseUrl: baseUrl.isEmpty ? 'https://api.anthropic.com/v1' : baseUrl,
         );
       case LlmProviderKind.openAi:
+      case LlmProviderKind.gemini:
       case LlmProviderKind.ollama:
       case LlmProviderKind.openAiCompatible:
         return OpenAiCompatibleProvider(
           id: id,
           displayName: label,
           baseUrl: baseUrl,
-          model: model,
+          model: requestModel.isEmpty && kind == LlmProviderKind.gemini
+              ? kDefaultGeminiModel
+              : requestModel,
           apiKey: apiKey,
           embeddingModel: embeddingModel,
           capabilities: effectiveCapabilities,
           // api.openai.com 400s on unrecognised body fields; local servers
           // ignore what they do not know.
-          sendThinkingControls: kind != LlmProviderKind.openAi,
+          sendThinkingControls:
+              kind != LlmProviderKind.openAi && kind != LlmProviderKind.gemini,
         );
     }
   }

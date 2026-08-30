@@ -62,6 +62,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
   final String model;
   final String? apiKey;
   final String? embeddingModel;
+
   /// How long to wait for the first byte of a reply.
   final Duration timeout;
 
@@ -165,6 +166,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
     while (s.endsWith('/')) {
       s = s.substring(0, s.length - 1);
     }
+    // Google's official compatibility root is versioned before `/openai`,
+    // rather than ending in `/v1`. Appending another `/v1` breaks every
+    // Gemini request.
+    if (RegExp(r'/v\d+(?:[a-z]+)?/openai$').hasMatch(s)) return s;
     if (!s.endsWith('/v1') && !RegExp(r'/v\d+$').hasMatch(s)) {
       s = '$s/v1';
     }
@@ -683,7 +688,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     return LlmException(
       switch (status) {
         401 || 403 => 'Authentication failed — check the API key.',
-        404 => 'Endpoint not found at $baseUrl. Check the base URL.',
+        404 => detail ?? 'Endpoint not found at $baseUrl. Check the base URL.',
         429 => 'Rate limited by the server.',
         >= 500 => 'Server error ($status) — the model may have crashed or run '
             'out of memory.',

@@ -57,7 +57,8 @@ class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
               padding: const EdgeInsets.only(bottom: 10),
               child: Text(
                 'Mario can use a local model through Ollama, any '
-                'OpenAI-compatible server on your network, OpenAI, or Claude. '
+                'OpenAI-compatible server on your network, OpenAI, Claude, '
+                'or Gemini. '
                 'Add as many as you like and switch between them.',
                 style: GoogleFonts.inter(
                   fontSize: 12,
@@ -177,7 +178,8 @@ class _BackendTile extends StatelessWidget {
                       fontSize: 11, color: scheme.onSurfaceVariant),
                 ),
                 if (config.kind != LlmProviderKind.anthropic &&
-                    config.kind != LlmProviderKind.openAi)
+                    config.kind != LlmProviderKind.openAi &&
+                    config.kind != LlmProviderKind.gemini)
                   Text(
                     config.baseUrl,
                     style: GoogleFonts.inter(
@@ -262,6 +264,9 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
       if (kind == LlmProviderKind.anthropic && _model.text.trim().isEmpty) {
         _model.text = kDefaultAnthropicModel;
       }
+      if (kind == LlmProviderKind.gemini && _model.text.trim().isEmpty) {
+        _model.text = kDefaultGeminiModel;
+      }
       _probe = null;
       _models = const [];
     });
@@ -285,6 +290,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
 
   String _defaultLabel() => switch (_kind) {
         LlmProviderKind.anthropic => 'Claude',
+        LlmProviderKind.gemini => 'Gemini',
         LlmProviderKind.openAi => 'OpenAI',
         LlmProviderKind.ollama => 'Ollama',
         LlmProviderKind.openAiCompatible =>
@@ -311,11 +317,16 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
     setState(() {
       _testing = false;
       _probe = result;
-      _models = result.models;
+      _models = _kind == LlmProviderKind.gemini
+          ? [
+              for (final model in result.models)
+                model.replaceFirst(RegExp(r'^models/'), ''),
+            ]
+          : result.models;
       // Offer the first model when the endpoint advertises some and the user
       // has not typed one — the common case for a fresh Ollama install.
-      if (_model.text.trim().isEmpty && result.models.isNotEmpty) {
-        _model.text = result.models.first;
+      if (_model.text.trim().isEmpty && _models.isNotEmpty) {
+        _model.text = _models.first;
       }
     });
   }
@@ -340,8 +351,9 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final needsUrl =
-        _kind != LlmProviderKind.openAi && _kind != LlmProviderKind.anthropic;
+    final needsUrl = _kind != LlmProviderKind.openAi &&
+        _kind != LlmProviderKind.anthropic &&
+        _kind != LlmProviderKind.gemini;
 
     return AlertDialog(
       title: Text(widget.existing == null ? 'Add a model' : 'Edit model',
@@ -383,6 +395,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
                   labelText: 'Model',
                   hintText: switch (_kind) {
                     LlmProviderKind.anthropic => kDefaultAnthropicModel,
+                    LlmProviderKind.gemini => kDefaultGeminiModel,
                     LlmProviderKind.ollama => 'qwen3:4b',
                     _ => 'model name',
                   },

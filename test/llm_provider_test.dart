@@ -43,7 +43,8 @@ void main() {
         n('http://192.168.1.50:8080/v1/chat/completions'),
         'http://192.168.1.50:8080/v1',
       );
-      expect(n('https://api.openai.com/v1/models'), 'https://api.openai.com/v1');
+      expect(
+          n('https://api.openai.com/v1/models'), 'https://api.openai.com/v1');
     });
 
     test('preserves https', () {
@@ -52,6 +53,13 @@ void main() {
 
     test('accepts a non-v1 API version rather than appending /v1 to it', () {
       expect(n('http://host:8000/v2'), 'http://host:8000/v2');
+    });
+
+    test('preserves the official Gemini OpenAI-compatible root', () {
+      expect(
+        n('https://generativelanguage.googleapis.com/v1beta/openai/'),
+        'https://generativelanguage.googleapis.com/v1beta/openai',
+      );
     });
 
     test('leaves an empty string empty, so a blank field is not a bad URL', () {
@@ -70,14 +78,17 @@ void main() {
     });
 
     test('the hosted APIs are assumed to support strict schemas', () {
-      expect(LlmProviderKind.openAi.assumedCapabilities.strictJsonSchema, isTrue);
       expect(
-          LlmProviderKind.anthropic.assumedCapabilities.strictJsonSchema, isTrue);
+          LlmProviderKind.openAi.assumedCapabilities.strictJsonSchema, isTrue);
+      expect(LlmProviderKind.anthropic.assumedCapabilities.strictJsonSchema,
+          isTrue);
+      expect(LlmProviderKind.gemini.assumedCapabilities.tools, isTrue);
     });
 
     test('only the hosted APIs require a key', () {
       expect(LlmProviderKind.openAi.requiresApiKey, isTrue);
       expect(LlmProviderKind.anthropic.requiresApiKey, isTrue);
+      expect(LlmProviderKind.gemini.requiresApiKey, isTrue);
       expect(LlmProviderKind.ollama.requiresApiKey, isFalse);
       expect(LlmProviderKind.openAiCompatible.requiresApiKey, isFalse);
     });
@@ -125,6 +136,34 @@ void main() {
 
     test('builds the right provider class for its kind', () {
       expect(config.build(apiKey: null), isA<OpenAiCompatibleProvider>());
+    });
+
+    test('Gemini uses its default model and compatible transport', () {
+      const gemini = LlmProviderConfig(
+        id: 'gemini',
+        label: 'Gemini',
+        kind: LlmProviderKind.gemini,
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: '',
+      );
+      final provider = gemini.build(apiKey: 'key');
+      expect(provider, isA<OpenAiCompatibleProvider>());
+      expect((provider as OpenAiCompatibleProvider).model, kDefaultGeminiModel);
+    });
+
+    test('Gemini strips the resource prefix returned by model discovery', () {
+      const gemini = LlmProviderConfig(
+        id: 'gemini',
+        label: 'Gemini',
+        kind: LlmProviderKind.gemini,
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: 'models/gemini-2.5-flash',
+      );
+      final provider = gemini.build(apiKey: 'key');
+      expect(
+        (provider as OpenAiCompatibleProvider).model,
+        'gemini-2.5-flash',
+      );
     });
 
     test('an unknown kind in stored JSON falls back rather than throwing', () {
