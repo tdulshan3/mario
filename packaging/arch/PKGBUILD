@@ -1,6 +1,6 @@
 # Maintainer: Thushara Dulshan <135942637+tdulshan3@users.noreply.github.com>
 pkgname=mario
-pkgver=1.1.7
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="Mario — a Flutter desktop notes app with rich text, math, drawing, and Drive sync"
 arch=('x86_64')

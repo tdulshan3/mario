@@ -9,6 +9,20 @@ native Linux desktop app and in the browser.
 
 ---
 
+## Screenshots
+
+|  |  |
+|---|---|
+| ![Home](docs/screenshots/01-home.png) <br> **Home** — where you land, with your notebooks | ![Editor](docs/screenshots/02-editor.png) <br> **Editor** — the page, its breadcrumb and save state |
+| ![AI panel](docs/screenshots/03-ai-panel.png) <br> **AI panel** — Ask, Quiz, Writing and Do, with the model and what it is doing | ![Settings](docs/screenshots/04-settings.png) <br> **Settings** — one pane at a time, not one long scroll |
+
+![Black theme](docs/screenshots/05-black-theme.png)
+
+*The same layout on the Black ground. All four themes share one layout and one type
+system — only the ground changes.*
+
+---
+
 ## Features
 
 ### Rich block editor
@@ -26,7 +40,8 @@ custom blocks:
 - **Table** and **Audio** blocks.
 
 ### Capture & organize
-- **Notebooks → sections → pages** navigation tree with a sidebar rail.
+- **Notebooks → sections → pages** in a single sidebar — the notebook picker,
+  its sections and their pages in one column rather than a rail beside a tree.
 - **Voice dictation** — speech-to-text (`speech_to_text`) plus audio recording and
   playback (`record`, `just_audio`).
 - **OCR** — extract text from images.
@@ -53,6 +68,14 @@ nothing is sent anywhere, until you set a backend up.
   opinion, not a grade.
 - **Writing check** — on-demand spelling and grammar suggestions, accepted or
   ignored one at a time, each its own undo step.
+- **Do** — act on the page: pull out the to-dos, turn a bullet list into a table,
+  translate it, or tighten the writing. Each action is planned, then applied to
+  the page as a single undoable step.
+
+The panel keeps all four — Ask, Quiz, Writing and Do — behind one composer, and
+says what the model is doing while it works: the running step in its own words
+("searching the web", "reading page 3 of 12"), and how long it has been at it.
+An idle panel stays quiet rather than claiming a status it does not have.
 
 Summaries, answers, quizzes and marks are saved to the same private Google Drive
 folder as your notes, so they follow you between machines and work offline. A
@@ -75,7 +98,9 @@ about a long section fast.
 ### Desktop experience
 - Native window management and a system tray (`window_manager`, `tray_manager`).
 - Embedded HTML preview via Chromium/CEF (`webview_cef`).
-- Light, dark, book and system theme modes.
+- **Four themes** — Light (cream), White (for bright rooms and printing),
+  Calm night (the mark's navy) and Black (pure `#000`, for OLED) — plus a
+  system mode that pairs Light by day with Calm night after dark.
 
 ---
 
