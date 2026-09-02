@@ -12,12 +12,26 @@ class Selection {
   final String? sectionId;
   final String? pageId;
 
-  const Selection({this.notebookId, this.sectionId, this.pageId});
+  /// Whether the shell is on the recents home rather than in a notebook.
+  ///
+  /// Its own flag, not `pageId == null`. The design gives home a different
+  /// *layout* — full width, no sidebar — and "a notebook is open but no page
+  /// is" is a real third state that still needs the sidebar to pick one from.
+  /// Starts true: the app opens on recents.
+  final bool home;
+
+  const Selection({
+    this.notebookId,
+    this.sectionId,
+    this.pageId,
+    this.home = true,
+  });
 
   Selection copyWith({
     String? notebookId,
     String? sectionId,
     String? pageId,
+    bool? home,
     bool clearSection = false,
     bool clearPage = false,
   }) =>
@@ -25,6 +39,7 @@ class Selection {
         notebookId: notebookId ?? this.notebookId,
         sectionId: clearSection ? null : (sectionId ?? this.sectionId),
         pageId: clearPage ? null : (pageId ?? this.pageId),
+        home: home ?? this.home,
       );
 }
 
@@ -32,10 +47,11 @@ class SelectionNotifier extends Notifier<Selection> {
   @override
   Selection build() => const Selection();
 
-  void selectNotebook(String id) => state = Selection(notebookId: id);
+  void selectNotebook(String id) =>
+      state = Selection(notebookId: id, home: false);
 
   void selectSection(String id) =>
-      state = state.copyWith(sectionId: id, clearPage: true);
+      state = state.copyWith(sectionId: id, home: false, clearPage: true);
 
   /// Selecting a page also aligns its owning section (and notebook) so the
   /// editor — which looks the page up within `sectionId`'s page stream — can
@@ -48,11 +64,20 @@ class SelectionNotifier extends Notifier<Selection> {
         pageId: id,
         sectionId: sectionId,
         notebookId: notebookId,
+        home: false,
       );
+
+  /// Back to the recents home. The notebook and section stay selected, so the
+  /// strip can return to exactly where it was.
+  void goHome() => state = state.copyWith(home: true);
 
   void clearForDeletedNotebook(String id) {
     if (state.notebookId == id) state = const Selection();
   }
+
+  /// The page that was open is gone; fall back to home rather than to an
+  /// empty editor.
+  void closePage() => state = state.copyWith(clearPage: true, home: true);
 
   void clearForDeletedSection(String id) {
     if (state.sectionId == id) {

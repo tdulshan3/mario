@@ -24,6 +24,7 @@ import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'grammar_check.dart';
+import 'ai_markdown.dart';
 
 class WritingPanel extends ConsumerStatefulWidget {
   const WritingPanel({super.key});
@@ -221,7 +222,11 @@ class _SuggestionCard extends StatelessWidget {
             _Diff(before: suggestion.before, after: suggestion.after),
             if (suggestion.reason.isNotEmpty) ...[
               const SizedBox(height: 6),
-              Text(suggestion.reason,
+              // The proofreader writes this line, in Markdown like everything
+              // else it writes. The diff above stays raw on purpose — that is
+              // the literal page text, and styling it would misrepresent what
+              // is about to be written.
+              AiInlineMarkdown(suggestion.reason,
                   style: GoogleFonts.inter(
                       fontSize: 11,
                       height: 1.35,

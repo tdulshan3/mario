@@ -17,6 +17,7 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/material.dart';
 
 import '../editor/blocks/_safe_transaction.dart';
+import 'ai_markdown_blocks.dart';
 
 /// Builds the menu items, given a way to reach the panel.
 ///
@@ -109,7 +110,7 @@ Future<String> _removeSlashCommand(
 
 /// Inserts [markdown] into the document after the current block.
 ///
-/// Goes through [safeApply] and through `markdownToDocument` rather than
+/// Goes through [safeApply] and through [marioMarkdownToNodes] rather than
 /// building nodes by hand: the answer may contain headings, lists and code
 /// fences, and hand-rolling that conversion is how you end up with a paragraph
 /// containing literal asterisks.
@@ -123,13 +124,10 @@ Future<bool> insertMarkdownIntoDocument(
 ) async {
   if (editorState.isDisposed) return false;
 
-  final parsed = afe.markdownToDocument(markdown);
-  // copyWith detaches each node from the parsed document's root. Inserting a
-  // node that still has a parent leaves it in two trees at once, and its
-  // `path` then resolves against the wrong one.
-  final nodes = [
-    for (final n in parsed.root.children) n.copyWith(),
-  ];
+  // Through the app's own parser set, which adds the fenced-code block
+  // AppFlowy's decoder has no parser for — without it, every ``` fence in a
+  // model's answer was dropped on the way into the page.
+  final nodes = marioMarkdownToNodes(markdown);
   if (nodes.isEmpty) return false;
 
   // Anchor at the caret when there is one; otherwise append to the end, which
@@ -142,4 +140,31 @@ Future<bool> insertMarkdownIntoDocument(
   return safeApply(editorState, (tx) {
     tx.insertNodes(path, nodes);
   });
+}
+
+/// Replaces the highlighted passage with [markdown].
+///
+/// The design's "Replace selection" — the sibling of [insertMarkdownIntoDocument],
+/// for when the answer is meant to stand in for what you highlighted rather
+/// than follow it.
+///
+/// Delete first, then insert: AppFlowy's own `deleteSelection` collapses the
+/// range and leaves the caret where it was, which is exactly the anchor the
+/// insert then wants. Doing it the other way round would put the answer above
+/// the text it replaces and then delete around it.
+///
+/// Returns false when there is nothing highlighted, or when the editor went
+/// away mid-flight.
+Future<bool> replaceSelectionWithMarkdown(
+  afe.EditorState editorState,
+  String markdown,
+) async {
+  if (editorState.isDisposed) return false;
+  final selection = editorState.selection;
+  if (selection == null || selection.isCollapsed) return false;
+
+  final deleted = await editorState.deleteSelection(selection);
+  if (!deleted || editorState.isDisposed) return false;
+
+  return insertMarkdownIntoDocument(editorState, markdown);
 }

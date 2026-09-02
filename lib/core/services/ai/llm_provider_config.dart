@@ -103,14 +103,14 @@ extension LlmProviderKindLabel on LlmProviderKind {
             jsonMode: true,
             tools: true,
             embeddings: true,
-            contextTokens: 8192,
+            contextTokens: kLocalContextTokens,
           ),
         // The unknown case. Assume only what every server in the family
         // genuinely does, and let a successful strict call promote it later —
         // guessing high here means a 400 on the user's very first quiz.
         LlmProviderKind.openAiCompatible => const LlmCapabilities(
             jsonMode: true,
-            contextTokens: 8192,
+            contextTokens: kLocalContextTokens,
           ),
       };
 }

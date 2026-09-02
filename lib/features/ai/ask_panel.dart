@@ -449,13 +449,16 @@ class _ReasoningDisclosure extends StatelessWidget {
               GoogleFonts.inter(fontSize: 11, color: scheme.onSurfaceVariant),
         ),
         children: [
-          SelectableText(
-            text.trim(),
-            style: GoogleFonts.inter(
-              fontSize: 11,
-              height: 1.4,
+          // Rendered, not raw. A model reasons in the same Markdown it answers
+          // in — headings, bullets, fenced snippets — and showing that as
+          // plain text is how the reasoning box ended up full of visible `**`
+          // and `#`, which is exactly the punctuation the reader has to look
+          // past to follow the argument.
+          DefaultTextStyle.merge(
+            style: TextStyle(
               color: scheme.onSurfaceVariant.withValues(alpha: 0.85),
             ),
+            child: AiMarkdown(text.trim(), fontSize: 11),
           ),
         ],
       ),

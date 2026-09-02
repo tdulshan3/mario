@@ -33,6 +33,7 @@ import 'ai_tasks.dart';
 import 'note_context.dart';
 import 'quiz_style.dart';
 import '../../ui/widgets/mario_loader.dart';
+import 'ai_markdown.dart';
 
 class QuizPanel extends ConsumerStatefulWidget {
   const QuizPanel({super.key});
@@ -121,6 +122,11 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
         scopeLabel: scopeLabel,
         mcqCount: current.mcqCount,
         essayCount: current.essayCount,
+        // Both were being left at their defaults, so the difficulty picker
+        // set a value nothing read: every quiz was generated as "easy", and
+        // hard mode's look-up never ran.
+        difficulty: current.difficulty,
+        useWeb: current.useWeb,
       );
       session.startGenerating(run);
 
@@ -329,6 +335,34 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
               detail: d.blurb,
               selected: session.difficulty == d,
               onTap: () => notifier.setDifficulty(d),
+            ),
+          ),
+        const SizedBox(height: 16),
+        Text('Look things up?',
+            style: GoogleFonts.spaceGrotesk(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface)),
+        const SizedBox(height: 8),
+        // Its own choice, not a consequence of the difficulty. Hard mode
+        // searching and easy mode not was the only combination available, so
+        // "easy questions on the current syllabus" and "hard questions
+        // strictly from my notes" could neither be asked for.
+        for (final option in const [
+          (null, 'Follow the difficulty', null),
+          (true, 'Always', 'Searches even for easy questions.'),
+          (false, 'Never', 'Questions come only from the notes.'),
+        ])
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: _ScopeOption(
+              label: option.$2,
+              detail: option.$3 ??
+                  (session.difficulty.usesWeb
+                      ? '${session.difficulty.label} looks things up.'
+                      : '${session.difficulty.label} does not.'),
+              selected: session.useWeb == option.$1,
+              onTap: () => notifier.setWeb(option.$1),
             ),
           ),
         const SizedBox(height: 10),
@@ -652,7 +686,9 @@ class _QuestionCard extends StatelessWidget {
                       color: scheme.onSurfaceVariant)),
               const SizedBox(width: 6),
               Expanded(
-                child: Text(
+                // The model writes these, and it writes Markdown — "What does
+                // `foo()` return?" was arriving with the backticks showing.
+                child: AiInlineMarkdown(
                   item.question,
                   style: GoogleFonts.inter(
                       fontSize: 13, height: 1.4, color: scheme.onSurface),
@@ -686,7 +722,7 @@ class _QuestionCard extends StatelessWidget {
                       ),
                       const SizedBox(width: 8),
                       Expanded(
-                        child: Text(
+                        child: AiInlineMarkdown(
                           item.options[i],
                           style: GoogleFonts.inter(
                               fontSize: 12.5,
@@ -791,7 +827,7 @@ class _ResultCard extends StatelessWidget {
             _EssayReview(answer: answer),
           if (g != null && g.feedback.isNotEmpty) ...[
             const SizedBox(height: 8),
-            Text(g.feedback,
+            AiInlineMarkdown(g.feedback,
                 style: GoogleFonts.inter(
                     fontSize: 12, height: 1.4, color: scheme.onSurfaceVariant)),
           ],

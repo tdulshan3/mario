@@ -1,16 +1,16 @@
 /// NavTree — the app's single sidebar.
 ///
-/// One column now carries everything the shell used to split across a 60px
-/// notebook rail and a separate tree: the notebook picker, the primary
-/// "New page" action, the sections with their pages nested under them, and the
-/// footer. The rail's entire action set (switch, create, rename, recolor,
-/// delete) moved into the picker at the top, so nothing was lost when the rail
-/// went away.
+/// The Simple remodel empties it back out again. Notebooks live on the
+/// `NotebookTabBar` strip now, so the picker card, the switcher panel and the
+/// "New page" pill are all gone from here; what is left is a filter field, a
+/// create menu, and one flat tree of sections with their pages nested under
+/// them. Nothing was dropped — the notebook actions moved to the strip, and
+/// creating a section moved into the `+` beside the filter.
 ///
-/// Chrome here is glass, as everywhere else in the design: the sidebar veils
-/// the ground at 0.62, and the picker and its switcher are glass cards on top
-/// of it. Colour comes from the scheme, never from a literal, so all four
-/// grounds (light, white, night, black) read correctly.
+/// Chrome here is flat: the sidebar is a solid `--side` panel with a hairline
+/// down its right edge. The selected page is marked by a 2px accent bar on its
+/// leading edge and by the accent's deep text tone — no fill, no border, no
+/// radius. Colour comes from the tokens, so all four grounds read correctly.
 library;
 
 import 'package:flutter/material.dart';
@@ -26,23 +26,14 @@ import '../../ui/colors.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
-import '../auth/auth_notifier.dart';
 import '../export/markdown_exporter.dart';
 import '../export/pdf_exporter.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
 import 'shell_state.dart';
 
-/// The selected page's fill. Coral at a light tint on the light grounds; a
-/// lifted, much weaker coral on the dark ones, where a 62% tint would glare.
-Color _selectedFill(BuildContext context) => marioMode(context).isDark
-    ? MarioColors.accent400.withValues(alpha: 0.20)
-    : MarioColors.accent300.withValues(alpha: 0.62);
-
 class NavTree extends ConsumerStatefulWidget {
-  const NavTree({super.key, this.onCollapse});
-
-  final VoidCallback? onCollapse;
+  const NavTree({super.key});
 
   @override
   ConsumerState<NavTree> createState() => _NavTreeState();
@@ -54,13 +45,25 @@ class _NavTreeState extends ConsumerState<NavTree> {
   final Set<String> _collapsedSections = {};
 
   /// Whether the notebook picker is showing its switcher list.
-  bool _switcherOpen = false;
 
-  /// Closing can be asked for after an await (creating a notebook opens a
-  /// dialog first), by which point the sidebar may already be gone.
-  void _closeSwitcher() {
-    if (!mounted) return;
-    setState(() => _switcherOpen = false);
+  /// What the tree is filtered by. Empty means "show everything".
+  final TextEditingController _filter = TextEditingController();
+  String _filterText = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _filter.addListener(() {
+      final next = _filter.text.trim().toLowerCase();
+      if (next == _filterText) return;
+      setState(() => _filterText = next);
+    });
+  }
+
+  @override
+  void dispose() {
+    _filter.dispose();
+    super.dispose();
   }
 
   void _toggleSection(String id) {
@@ -75,15 +78,13 @@ class _NavTreeState extends ConsumerState<NavTree> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final selection = ref.watch(selectionProvider);
     final notebooks =
         ref.watch(notebooksStreamProvider).valueOrNull ?? const <Notebook>[];
     final notebook =
         notebooks.where((n) => n.id == selection.notebookId).firstOrNull;
 
-    return MarioGlass(
-      opacity: 0.62,
+    return MarioSurface(
       child: Container(
         decoration: BoxDecoration(
           border: Border(right: BorderSide(color: marioDivider(context))),
@@ -91,73 +92,32 @@ class _NavTreeState extends ConsumerState<NavTree> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // ── Notebook picker ─────────────────────────────────────────
+            // ── Filter, and the create action ───────────────────────────
             Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+              padding: const EdgeInsets.fromLTRB(8, 10, 8, 6),
               child: Row(
                 children: [
-                  Expanded(
-                    child: _NotebookPickerCard(
-                      notebook: notebook,
-                      open: _switcherOpen,
-                      onToggle: () =>
-                          setState(() => _switcherOpen = !_switcherOpen),
-                    ),
+                  Expanded(child: _TreeFilterField(controller: _filter)),
+                  const SizedBox(width: 4),
+                  _SidebarAddButton(
+                    notebookId: notebook?.id,
+                    sectionId: selection.sectionId,
                   ),
-                  if (widget.onCollapse != null) ...[
-                    const SizedBox(width: 4),
-                    IconButton(
-                      tooltip: 'Collapse sidebar',
-                      onPressed: widget.onCollapse,
-                      icon: const Icon(Icons.chevron_left, size: 18),
-                      padding: EdgeInsets.zero,
-                      constraints:
-                          const BoxConstraints(minWidth: 30, minHeight: 30),
-                      color: scheme.onSurfaceVariant,
-                    ),
-                  ],
                 ],
               ),
             ),
-            if (_switcherOpen)
-              _NotebookSwitcher(
-                notebooks: notebooks,
-                selectedId: selection.notebookId,
-                onClose: _closeSwitcher,
-              ),
-
-            // ── Primary action ──────────────────────────────────────────
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-              child: _NewPageButton(
-                notebookId: notebook?.id,
-                sectionId: selection.sectionId,
-              ),
-            ),
-
-            // ── Sections ────────────────────────────────────────────────
-            if (notebook != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(14, 18, 12, 8),
-                child: Row(
-                  children: [
-                    const MarioKicker('Sections'),
-                    const Spacer(),
-                    _AddSectionChip(notebookId: notebook.id),
-                  ],
-                ),
-              ),
             Expanded(
               child: notebook == null
                   ? _EmptyHint(
                       text: notebooks.isEmpty
-                          ? 'No notebooks yet.\nUse the picker above to create your first one.'
-                          : 'Pick a notebook from the picker above to see its sections.',
+                          ? 'No notebooks yet.\nUse + on the notebook strip to create your first one.'
+                          : 'Pick a notebook from the strip above to see its sections.',
                     )
                   : _SectionList(
                       notebookId: notebook.id,
                       collapsedSections: _collapsedSections,
                       onToggleSection: _toggleSection,
+                      filter: _filterText,
                     ),
             ),
           ],
@@ -167,403 +127,110 @@ class _NavTreeState extends ConsumerState<NavTree> {
   }
 }
 
-// ── Notebook picker ────────────────────────────────────────────────────────
+// ── Header controls ───────────────────────────────────────────────────────
 
-/// The glass card at the top of the sidebar: the notebook's colour, its name in
-/// the display face, and the chevron that opens the switcher below it.
-class _NotebookPickerCard extends StatelessWidget {
-  const _NotebookPickerCard({
-    required this.notebook,
-    required this.open,
-    required this.onToggle,
-  });
+/// The tree filter — "Search page or heading…" on the artboard.
+///
+/// A real filter, not a jump-to-search: it narrows the tree in place, so the
+/// structure around a hit stays visible. The command palette (Ctrl+Shift+F)
+/// is still the thing for searching across notebooks.
+class _TreeFilterField extends StatelessWidget {
+  const _TreeFilterField({required this.controller});
 
-  final Notebook? notebook;
-  final bool open;
-  final VoidCallback onToggle;
+  final TextEditingController controller;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final name = notebook?.name ?? 'No notebook';
-    final dot = notebook?.color ?? scheme.onSurfaceVariant;
-    final radius = BorderRadius.circular(MarioRadius.md);
-
+    final t = marioTokens(context);
     return Container(
+      height: 30,
+      padding: const EdgeInsets.symmetric(horizontal: 9),
       decoration: BoxDecoration(
-        borderRadius: radius,
-        boxShadow: marioShadow(context, level: 0),
+        color: t.paper,
+        borderRadius: BorderRadius.circular(MarioRadius.sm),
+        border: Border.all(color: t.line),
       ),
-      child: MarioGlass(
-        opacity: 0.62,
-        borderRadius: radius,
-        border: Border.all(color: marioDivider(context)),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: onToggle,
-            borderRadius: radius,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-              child: Row(
-                children: [
-                  Container(
-                    width: 13,
-                    height: 13,
-                    decoration: BoxDecoration(
-                      color: dot,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Tooltip(
-                      message: name,
-                      waitDuration: const Duration(milliseconds: 500),
-                      child: Text(
-                        name,
-                        overflow: TextOverflow.ellipsis,
-                        style: text.headlineSmall?.copyWith(fontSize: 17),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  Icon(
-                    open ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
-                    size: 18,
-                    color: scheme.onSurfaceVariant,
-                  ),
-                ],
+      child: Row(
+        children: [
+          Icon(Icons.search, size: 16, color: t.mut),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: controller,
+              cursorColor: t.ink,
+              cursorWidth: 1,
+              style: TextStyle(fontSize: 12.5, height: 1.2, color: t.ink),
+              decoration: InputDecoration(
+                isDense: true,
+                filled: false,
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                hintText: 'Search page or heading…',
+                hintStyle: TextStyle(fontSize: 12.5, height: 1.2, color: t.mut),
               ),
             ),
           ),
-        ),
-      ),
-    );
-  }
-}
-
-enum _NotebookAction { rename, delete }
-
-/// The switcher the picker opens: every notebook, its colour and selected
-/// state, each row carrying the rail's old rename / recolor / delete menu, and
-/// the "New notebook" action underneath.
-class _NotebookSwitcher extends ConsumerWidget {
-  const _NotebookSwitcher({
-    required this.notebooks,
-    required this.selectedId,
-    required this.onClose,
-  });
-
-  final List<Notebook> notebooks;
-  final String? selectedId;
-  final VoidCallback onClose;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final radius = BorderRadius.circular(MarioRadius.md);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Container(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          boxShadow: marioShadow(context, level: 1),
-        ),
-        child: MarioGlass(
-          opacity: 0.62,
-          borderRadius: radius,
-          border: Border.all(color: marioDivider(context)),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              if (notebooks.isNotEmpty)
-                ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 240),
-                  child: ListView(
-                    shrinkWrap: true,
-                    padding: const EdgeInsets.symmetric(vertical: 6),
-                    children: [
-                      for (final nb in notebooks)
-                        _NotebookRow(
-                          notebook: nb,
-                          selected: nb.id == selectedId,
-                          onTap: () {
-                            ref
-                                .read(selectionProvider.notifier)
-                                .selectNotebook(nb.id);
-                            onClose();
-                          },
-                          onMenu: (a) => _handleAction(context, ref, nb, a),
-                        ),
-                    ],
-                  ),
-                ),
-              Container(height: 1, color: marioDivider(context)),
-              _SwitcherAction(
-                icon: Icons.add,
-                label: 'New notebook',
-                onTap: () => _create(context, ref),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// Carried over verbatim from NotebookRail.
-  Future<void> _create(BuildContext context, WidgetRef ref) async {
-    final user = ref.read(authStateProvider).valueOrNull;
-    if (user == null) return;
-    final result = await showNotebookDialog(
-      context,
-      title: 'New notebook',
-      submitLabel: 'Create',
-    );
-    if (result == null) return;
-    final now = DateTime.now();
-    final nb = Notebook(
-      id: '',
-      name: result.name,
-      ownerId: user.uid,
-      colorIndex: result.colorIndex,
-      createdAt: now,
-      updatedAt: now,
-    );
-    final id = await ref.read(syncServiceProvider).createNotebook(nb);
-    ref.read(selectionProvider.notifier).selectNotebook(id);
-    onClose();
-  }
-
-  /// Carried over verbatim from NotebookRail.
-  Future<void> _handleAction(
-    BuildContext context,
-    WidgetRef ref,
-    Notebook nb,
-    _NotebookAction action,
-  ) async {
-    switch (action) {
-      case _NotebookAction.rename:
-        final result = await showNotebookDialog(
-          context,
-          initialName: nb.name,
-          initialColorIndex: nb.colorIndex,
-          title: 'Edit notebook',
-          submitLabel: 'Save',
-        );
-        if (result == null) return;
-        await ref.read(syncServiceProvider).updateNotebook(
-              nb.copyWith(
-                name: result.name,
-                colorIndex: result.colorIndex,
-                updatedAt: DateTime.now(),
-              ),
-            );
-      case _NotebookAction.delete:
-        final ok = await showConfirmDialog(
-          context,
-          title: 'Delete "${nb.name}"?',
-          message:
-              'All sections and pages inside this notebook will be permanently deleted.',
-        );
-        if (!ok) return;
-        await ref.read(syncServiceProvider).deleteNotebook(nb.id);
-        ref.read(selectionProvider.notifier).clearForDeletedNotebook(nb.id);
-    }
-  }
-}
-
-class _NotebookRow extends StatelessWidget {
-  const _NotebookRow({
-    required this.notebook,
-    required this.selected,
-    required this.onTap,
-    required this.onMenu,
-  });
-
-  final Notebook notebook;
-  final bool selected;
-  final VoidCallback onTap;
-  final ValueChanged<_NotebookAction> onMenu;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final radius = BorderRadius.circular(MarioRadius.md);
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-      child: Material(
-        color: selected ? _selectedFill(context) : Colors.transparent,
-        borderRadius: radius,
-        child: InkWell(
-          onTap: onTap,
-          onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
-          borderRadius: radius,
-          child: SizedBox(
-            height: 36,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Row(
-                children: [
-                  Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      color: notebook.color,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      notebook.name,
-                      overflow: TextOverflow.ellipsis,
-                      style: text.bodyMedium?.copyWith(
-                        fontSize: 14,
-                        height: 1.2,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w500,
-                      ),
-                    ),
-                  ),
-                  if (selected)
-                    Padding(
-                      padding: const EdgeInsets.only(left: 4),
-                      child:
-                          Icon(Icons.check, size: 15, color: scheme.onSurface),
-                    ),
-                  _MenuButton<_NotebookAction>(
-                    onSelected: onMenu,
-                    items: const [
-                      ('Rename / recolor', _NotebookAction.rename),
-                      ('Delete', _NotebookAction.delete),
-                    ],
-                  ),
-                ],
-              ),
+          if (controller.text.isNotEmpty)
+            GestureDetector(
+              onTap: controller.clear,
+              behavior: HitTestBehavior.opaque,
+              child: Icon(Icons.close, size: 14, color: t.mut),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _showMenu(BuildContext context, Offset position) async {
-    final result = await showMenu<_NotebookAction>(
-      context: context,
-      position: RelativeRect.fromLTRB(
-        position.dx,
-        position.dy,
-        position.dx,
-        position.dy,
-      ),
-      items: const [
-        PopupMenuItem(
-            value: _NotebookAction.rename, child: Text('Rename / recolor')),
-        PopupMenuItem(value: _NotebookAction.delete, child: Text('Delete')),
-      ],
-    );
-    if (result != null) onMenu(result);
-  }
-}
-
-class _SwitcherAction extends StatelessWidget {
-  const _SwitcherAction({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: SizedBox(
-          height: 40,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Icon(icon, size: 16, color: scheme.primary),
-                const SizedBox(width: 10),
-                Text(
-                  label,
-                  style: text.bodyMedium?.copyWith(
-                    fontSize: 14,
-                    height: 1.2,
-                    fontWeight: FontWeight.w600,
-                    color: scheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+        ],
       ),
     );
   }
 }
 
-// ── Primary action ─────────────────────────────────────────────────────────
-
-/// The coral "New page" pill. Disabled until a section is open, because a page
-/// has to be created into one.
-class _NewPageButton extends ConsumerWidget {
-  const _NewPageButton({required this.notebookId, required this.sectionId});
+/// The `+` beside the filter.
+///
+/// The artboard draws one glyph, so this is one control — but the sidebar
+/// creates two kinds of thing, and the old "New page" pill and "Add" section
+/// chip both lived here. Both survive, as a two-item menu behind the glyph.
+class _SidebarAddButton extends ConsumerWidget {
+  const _SidebarAddButton({required this.notebookId, required this.sectionId});
 
   final String? notebookId;
   final String? sectionId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final enabled = notebookId != null && sectionId != null;
-    final radius = BorderRadius.circular(MarioRadius.pill);
-
-    return Tooltip(
-      message: enabled
-          ? 'Add a page to the open section'
-          : 'Pick a notebook and section first',
-      waitDuration: const Duration(milliseconds: 500),
-      child: Opacity(
-        opacity: enabled ? 1 : 0.45,
-        child: Material(
-          color: scheme.primary,
-          borderRadius: radius,
-          child: InkWell(
-            onTap: enabled ? () => _createPage(context, ref) : null,
-            borderRadius: radius,
-            child: SizedBox(
-              height: 42,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.add, size: 17, color: scheme.onPrimary),
-                  const SizedBox(width: 8),
-                  Text(
-                    'New page',
-                    style: text.titleLarge?.copyWith(
-                      fontSize: 15,
-                      color: scheme.onPrimary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
+    final t = marioTokens(context);
+    final hasNotebook = notebookId != null;
+    return PopupMenuButton<_AddAction>(
+      tooltip: 'New…',
+      position: PopupMenuPosition.under,
+      enabled: hasNotebook,
+      color: t.paper,
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(MarioRadius.md),
+        side: BorderSide(color: t.line),
+      ),
+      itemBuilder: (_) => [
+        PopupMenuItem(
+          value: _AddAction.page,
+          enabled: sectionId != null,
+          child: const Text('New page'),
+        ),
+        const PopupMenuItem(
+          value: _AddAction.section,
+          child: Text('New section'),
+        ),
+      ],
+      onSelected: (a) => switch (a) {
+        _AddAction.page => _createPage(context, ref),
+        _AddAction.section => _createSection(context, ref),
+      },
+      child: SizedBox(
+        width: 26,
+        height: 26,
+        child: Icon(
+          Icons.add,
+          size: 17,
+          color: hasNotebook ? t.sec : t.mut.withValues(alpha: 0.5),
         ),
       ),
     );
@@ -597,54 +264,10 @@ class _NewPageButton extends ConsumerWidget {
     final id = await ref.read(syncServiceProvider).createPage(page);
     ref.read(selectionProvider.notifier).selectPage(id);
   }
-}
-
-/// The "Add" chip beside the Sections kicker — the old footer's section action.
-class _AddSectionChip extends ConsumerWidget {
-  const _AddSectionChip({required this.notebookId});
-
-  final String notebookId;
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final radius = BorderRadius.circular(MarioRadius.pill);
-
-    return Tooltip(
-      message: 'New section',
-      waitDuration: const Duration(milliseconds: 500),
-      child: Material(
-        color: scheme.primary.withValues(alpha: 0.12),
-        borderRadius: radius,
-        child: InkWell(
-          onTap: () => _createSection(context, ref),
-          borderRadius: radius,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.create_new_folder_outlined,
-                    size: 13, color: scheme.primary),
-                const SizedBox(width: 5),
-                Text(
-                  'Add',
-                  style: text.labelSmall?.copyWith(
-                    fontSize: 11,
-                    letterSpacing: 0.2,
-                    color: scheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
 
   Future<void> _createSection(BuildContext context, WidgetRef ref) async {
+    final nid = notebookId;
+    if (nid == null) return;
     final result = await showNotebookDialog(
       context,
       title: 'New section',
@@ -652,11 +275,11 @@ class _AddSectionChip extends ConsumerWidget {
     );
     if (result == null) return;
     final sections =
-        ref.read(sectionsStreamProvider(notebookId)).valueOrNull ?? const [];
+        ref.read(sectionsStreamProvider(nid)).valueOrNull ?? const [];
     final id = await ref.read(syncServiceProvider).createSection(
           Section(
             id: '',
-            notebookId: notebookId,
+            notebookId: nid,
             name: result.name,
             colorIndex: result.colorIndex,
             order: sections.length,
@@ -665,6 +288,8 @@ class _AddSectionChip extends ConsumerWidget {
     ref.read(selectionProvider.notifier).selectSection(id);
   }
 }
+
+enum _AddAction { page, section }
 
 // ── Sections and pages ─────────────────────────────────────────────────────
 
@@ -696,10 +321,14 @@ class _SectionList extends ConsumerStatefulWidget {
     required this.notebookId,
     required this.collapsedSections,
     required this.onToggleSection,
+    required this.filter,
   });
   final String notebookId;
   final Set<String> collapsedSections;
   final ValueChanged<String> onToggleSection;
+
+  /// Lower-cased, already trimmed. Empty means "show everything".
+  final String filter;
 
   @override
   ConsumerState<_SectionList> createState() => _SectionListState();
@@ -739,14 +368,18 @@ class _SectionListState extends ConsumerState<_SectionList> {
           );
         }
         return ListView.builder(
-          padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+          padding: const EdgeInsets.fromLTRB(0, 4, 0, 12),
           itemCount: sections.length,
           itemBuilder: (context, i) {
             final s = sections[i];
-            final expanded = !widget.collapsedSections.contains(s.id);
+            // A filtered tree is always open: collapsing a group would hide
+            // the very rows the filter just found.
+            final expanded = widget.filter.isNotEmpty ||
+                !widget.collapsedSections.contains(s.id);
             return _SectionGroup(
               section: s,
               expanded: expanded,
+              filter: widget.filter,
               onToggle: () => widget.onToggleSection(s.id),
               onMenu: (a) => _handleSectionAction(context, s, a),
             );
@@ -798,12 +431,14 @@ class _SectionGroup extends ConsumerStatefulWidget {
   const _SectionGroup({
     required this.section,
     required this.expanded,
+    required this.filter,
     required this.onToggle,
     required this.onMenu,
   });
 
   final Section section;
   final bool expanded;
+  final String filter;
   final VoidCallback onToggle;
   final ValueChanged<_SectionAction> onMenu;
 
@@ -816,117 +451,102 @@ class _SectionGroupState extends ConsumerState<_SectionGroup> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
+    final t = marioTokens(context);
     final section = widget.section;
-    final selection = ref.watch(selectionProvider);
-    final isActiveSection = section.id == selection.sectionId;
-    final color = MarioColors.labelPalette[section.colorIndex.clamp(0, 5)];
-    final radius = BorderRadius.circular(MarioRadius.md);
+    final pages = ref
+            .watch(pagesStreamProvider(
+                (notebookId: section.notebookId, sectionId: section.id)))
+            .valueOrNull ??
+        const <NotePage>[];
 
-    // The badge shows the section's real page count, straight off the same
-    // stream the nested list renders. While the stream is still loading there
-    // is no number to show, so the badge simply does not render.
-    final pageCount = ref
-        .watch(pagesStreamProvider(
-            (notebookId: section.notebookId, sectionId: section.id)))
-        .valueOrNull
-        ?.length;
+    // While a filter is running, a group that matches nothing gets out of the
+    // way entirely — leaving an empty header behind would make the filter
+    // look broken.
+    final f = widget.filter;
+    if (f.isNotEmpty &&
+        !section.name.toLowerCase().contains(f) &&
+        !pages.any((p) => p.title.toLowerCase().contains(f))) {
+      return const SizedBox.shrink();
+    }
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 4),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          MouseRegion(
-            onEnter: (_) => setState(() => _hovered = true),
-            onExit: (_) => setState(() => _hovered = false),
-            child: Material(
-              color: Colors.transparent,
-              borderRadius: radius,
-              child: InkWell(
-                onTap: () {
-                  ref
-                      .read(selectionProvider.notifier)
-                      .selectSection(section.id);
-                  if (!widget.expanded) widget.onToggle();
-                },
-                onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
-                borderRadius: radius,
-                child: SizedBox(
-                  height: 34,
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
-                    child: Row(
-                      children: [
-                        InkWell(
-                          onTap: widget.onToggle,
-                          borderRadius: BorderRadius.circular(MarioRadius.sm),
-                          child: Padding(
-                            padding: const EdgeInsets.all(2),
-                            child: AnimatedRotation(
-                              duration: const Duration(milliseconds: 150),
-                              turns: widget.expanded ? 0.0 : -0.25,
-                              child: Icon(
-                                Icons.expand_more,
-                                size: 15,
-                                color: scheme.onSurfaceVariant,
-                              ),
-                            ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              onTap: () {
+                ref.read(selectionProvider.notifier).selectSection(section.id);
+                if (!widget.expanded) widget.onToggle();
+              },
+              onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
+              child: SizedBox(
+                height: t.row,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      // The chevron swaps glyph rather than rotating: the
+                      // artboard draws `expand_more` open and
+                      // `chevron_right` closed, which are not the same shape
+                      // turned 90°.
+                      GestureDetector(
+                        onTap: widget.onToggle,
+                        behavior: HitTestBehavior.opaque,
+                        child: Icon(
+                          widget.expanded
+                              ? Icons.expand_more
+                              : Icons.chevron_right,
+                          size: 17,
+                          color: t.mut,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          section.name,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: t.rowFontSize,
+                            height: 1.2,
+                            fontWeight: FontWeight.w600,
+                            color: t.ink,
                           ),
                         ),
-                        const SizedBox(width: 4),
-                        MarioSectionBar(
-                          color: isActiveSection
-                              ? color
-                              : color.withValues(alpha: 0.45),
+                      ),
+                      _HoverReveal(
+                        visible: _hovered,
+                        child: _MenuButton<_SectionAction>(
+                          onSelected: widget.onMenu,
+                          items: const [
+                            ('Rename / recolor', _SectionAction.rename),
+                            ('Delete', _SectionAction.delete),
+                          ],
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            section.name,
-                            overflow: TextOverflow.ellipsis,
-                            style: text.bodyMedium?.copyWith(
-                              fontSize: 14,
-                              height: 1.2,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        // The design draws the count; rename / delete is the
-                        // app's own and rides alongside it, revealed on hover.
-                        if (pageCount != null) MarioCountBadge(pageCount),
-                        _HoverReveal(
-                          visible: _hovered,
-                          child: _MenuButton<_SectionAction>(
-                            onSelected: widget.onMenu,
-                            items: const [
-                              ('Rename / recolor', _SectionAction.rename),
-                              ('Delete', _SectionAction.delete),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
+                      ),
+                    ],
                   ),
                 ),
               ),
             ),
           ),
-          AnimatedCrossFade(
-            duration: const Duration(milliseconds: 160),
-            crossFadeState: widget.expanded
-                ? CrossFadeState.showFirst
-                : CrossFadeState.showSecond,
-            firstChild: _PageList(
-              notebookId: section.notebookId,
-              sectionId: section.id,
-            ),
-            secondChild: const SizedBox.shrink(),
+        ),
+        AnimatedCrossFade(
+          duration: const Duration(milliseconds: 160),
+          crossFadeState: widget.expanded
+              ? CrossFadeState.showFirst
+              : CrossFadeState.showSecond,
+          firstChild: _PageList(
+            notebookId: section.notebookId,
+            sectionId: section.id,
+            filter: widget.filter,
           ),
-        ],
-      ),
+          secondChild: const SizedBox.shrink(),
+        ),
+      ],
     );
   }
 
@@ -950,9 +570,14 @@ class _SectionGroupState extends ConsumerState<_SectionGroup> {
 }
 
 class _PageList extends ConsumerStatefulWidget {
-  const _PageList({required this.notebookId, required this.sectionId});
+  const _PageList({
+    required this.notebookId,
+    required this.sectionId,
+    required this.filter,
+  });
   final String notebookId;
   final String sectionId;
+  final String filter;
 
   @override
   ConsumerState<_PageList> createState() => _PageListState();
@@ -967,16 +592,11 @@ class _PageListState extends ConsumerState<_PageList> {
     final text = Theme.of(context).textTheme;
     final selection = ref.watch(selectionProvider);
 
-    // The 2px rail that runs down the group, drawn as the container's left
-    // border so it always matches the group's real height.
-    Widget rail(Widget child) => Container(
-          margin: const EdgeInsets.only(left: 17, bottom: 4),
-          padding: const EdgeInsets.only(left: 9),
-          decoration: const BoxDecoration(
-            border: Border(
-              left: BorderSide(color: MarioColors.accent300, width: 2),
-            ),
-          ),
+    // The artboard indents the children by 19px and draws no rail at all —
+    // the accent is spent on the selected row's own bar instead, and a second
+    // vertical accent line running beside it would fight with that.
+    Widget rail(Widget child) => Padding(
+          padding: const EdgeInsets.only(left: 19),
           child: child,
         );
 
@@ -993,7 +613,14 @@ class _PageListState extends ConsumerState<_PageList> {
                   text.bodySmall?.copyWith(fontSize: 12, color: scheme.error)),
         ),
       ),
-      data: (pages) {
+      data: (all) {
+        final f = widget.filter;
+        final pages = f.isEmpty
+            ? all
+            : all.where((p) => p.title.toLowerCase().contains(f)).toList();
+        // A filter that matched the section name but none of its pages says
+        // so by showing nothing, not by claiming the section is empty.
+        if (pages.isEmpty && f.isNotEmpty) return const SizedBox.shrink();
         if (pages.isEmpty) {
           return rail(
             Padding(
@@ -1094,66 +721,61 @@ class _PageTileState extends State<_PageTile> {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
+    final t = marioTokens(context);
     final selected = widget.selected;
-    final radius = BorderRadius.circular(MarioRadius.md);
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 2),
-      child: MouseRegion(
-        onEnter: (_) => setState(() => _hovered = true),
-        onExit: (_) => setState(() => _hovered = false),
-        child: Container(
-          decoration: BoxDecoration(
-            color: selected ? _selectedFill(context) : Colors.transparent,
-            borderRadius: radius,
-            border: selected ? Border.all(color: marioDivider(context)) : null,
-          ),
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: radius,
-            child: InkWell(
-              onTap: widget.onTap,
-              onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
-              borderRadius: radius,
-              child: SizedBox(
-                height: 38,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 10),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          widget.page.title.isEmpty
-                              ? 'Untitled'
-                              : widget.page.title,
-                          overflow: TextOverflow.ellipsis,
-                          style: text.bodyMedium?.copyWith(
-                            fontSize: 14,
-                            height: 1.2,
-                            fontWeight:
-                                selected ? FontWeight.w600 : FontWeight.w500,
-                          ),
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      child: MarioAccentEdge(
+        active: selected,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: widget.onTap,
+            onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
+            child: SizedBox(
+              height: t.row,
+              child: Padding(
+                // Leading 12 only. The selected row's bar is an overlay, so
+                // it does not push the label across the way a border would —
+                // selected and unselected rows stay on the same left edge.
+                padding: const EdgeInsets.only(left: 12, right: 10),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.page.title.isEmpty
+                            ? 'Untitled'
+                            : widget.page.title,
+                        overflow: TextOverflow.ellipsis,
+                        softWrap: false,
+                        style: TextStyle(
+                          fontSize: t.rowFontSize,
+                          height: 1.2,
+                          fontWeight:
+                              selected ? FontWeight.w600 : FontWeight.w400,
+                          color: selected ? t.accentText : t.sec,
                         ),
                       ),
-                      // Same trade as the section rows: quiet by default,
-                      // menu on hover, right-click anywhere on the row. Export
-                      // has no other entry point here, so it must not be
-                      // hover-only on touch.
-                      _HoverReveal(
-                        visible: _hovered,
-                        child: _MenuButton<_PageAction>(
-                          onSelected: widget.onMenu,
-                          items: const [
-                            ('Rename', _PageAction.rename),
-                            ('Export as Markdown', _PageAction.exportMd),
-                            ('Export as PDF', _PageAction.exportPdf),
-                            ('Delete', _PageAction.delete),
-                          ],
-                        ),
+                    ),
+                    // Same trade as the section rows: quiet by default, menu
+                    // on hover, right-click anywhere on the row. Export has no
+                    // other entry point here, so it must not be hover-only on
+                    // touch.
+                    _HoverReveal(
+                      visible: _hovered,
+                      child: _MenuButton<_PageAction>(
+                        onSelected: widget.onMenu,
+                        items: const [
+                          ('Rename', _PageAction.rename),
+                          ('Export as Markdown', _PageAction.exportMd),
+                          ('Export as PDF', _PageAction.exportPdf),
+                          ('Delete', _PageAction.delete),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),

@@ -39,6 +39,11 @@ class GlobalShortcuts extends ConsumerWidget {
             context.push('/settings'),
         const SingleActivator(LogicalKeyboardKey.slash, control: true): () =>
             _showHelp(context),
+        // The sidebar's own header has no collapse control — the design gives
+        // it a filter and a create button and nothing else — so this is the
+        // way in. Clicking the collapsed strip is the way back out.
+        const SingleActivator(LogicalKeyboardKey.backslash, control: true):
+            () => ref.read(sidebarCollapsedProvider.notifier).update((c) => !c),
       },
       child: Focus(autofocus: true, child: child),
     );
@@ -106,8 +111,7 @@ class GlobalShortcuts extends ConsumerWidget {
     ref.read(selectionProvider.notifier).selectPage(pageId);
   }
 
-  Future<Notebook> _createQuickNotesNotebook(
-      WidgetRef ref, String uid) async {
+  Future<Notebook> _createQuickNotesNotebook(WidgetRef ref, String uid) async {
     final now = DateTime.now();
     final id = await ref.read(syncServiceProvider).createNotebook(Notebook(
           id: '',
@@ -127,7 +131,8 @@ class GlobalShortcuts extends ConsumerWidget {
     );
   }
 
-  Future<Section> _createDefaultSection(WidgetRef ref, String notebookId) async {
+  Future<Section> _createDefaultSection(
+      WidgetRef ref, String notebookId) async {
     final id = await ref.read(syncServiceProvider).createSection(Section(
           id: '',
           notebookId: notebookId,
@@ -136,11 +141,7 @@ class GlobalShortcuts extends ConsumerWidget {
           order: 0,
         ));
     return Section(
-        id: id,
-        notebookId: notebookId,
-        name: 'Notes',
-        colorIndex: 2,
-        order: 0);
+        id: id, notebookId: notebookId, name: 'Notes', colorIndex: 2, order: 0);
   }
 
   Future<void> _newSection(BuildContext context, WidgetRef ref) async {
@@ -153,7 +154,8 @@ class GlobalShortcuts extends ConsumerWidget {
       submitLabel: 'Create',
     );
     if (result == null) return;
-    final sections = ref.read(sectionsStreamProvider(notebookId)).valueOrNull ?? [];
+    final sections =
+        ref.read(sectionsStreamProvider(notebookId)).valueOrNull ?? [];
     final id = await ref.read(syncServiceProvider).createSection(Section(
           id: '',
           notebookId: notebookId,
@@ -215,6 +217,7 @@ class GlobalShortcuts extends ConsumerWidget {
                 _ShortcutRow('Ctrl+Shift+F', 'Global search'),
                 _ShortcutRow('Ctrl+S', 'Save now'),
                 _ShortcutRow('Ctrl+,', 'Settings'),
+                _ShortcutRow('Ctrl+\\', 'Collapse / expand the sidebar'),
                 _ShortcutRow('Ctrl+/', 'Show this dialog'),
               ],
             ),

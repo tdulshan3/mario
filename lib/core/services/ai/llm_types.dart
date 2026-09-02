@@ -13,6 +13,22 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'json_coercion.dart';
 
+/// The context window assumed for a local backend when the server has not
+/// said otherwise.
+///
+/// 64k. It was 8k, which is Ollama's own conservative default and far below
+/// what the models people actually run locally will hold — a long page was
+/// being trimmed to fit a window the hardware did not have to impose.
+///
+/// A CLAIM has to be backed by a request: Ollama allocates the context named
+/// by `num_ctx` and silently truncates past it, so the OpenAI-compatible
+/// provider sends this number with every call. Without that, raising it here
+/// would only make the app overfill a window the server never widened.
+///
+/// Servers that report their own figure (see `local_model_discovery.dart`)
+/// override it, and the cloud providers state theirs outright.
+const int kLocalContextTokens = 65536;
+
 enum LlmRole { system, user, assistant, tool }
 
 /// One turn in a conversation.
@@ -272,7 +288,7 @@ class LlmCapabilities {
     this.embeddings = false,
     this.systemRole = true,
     this.vision = false,
-    this.contextTokens = 8192,
+    this.contextTokens = kLocalContextTokens,
   });
 
   final bool streaming;
@@ -336,7 +352,7 @@ class LlmCapabilities {
         embeddings: asBool(m['embeddings']),
         systemRole: asBool(m['systemRole'], fallback: true),
         vision: asBool(m['vision']),
-        contextTokens: asInt(m['contextTokens']) ?? 8192,
+        contextTokens: asInt(m['contextTokens']) ?? kLocalContextTokens,
       );
 }
 

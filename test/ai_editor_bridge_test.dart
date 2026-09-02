@@ -50,6 +50,7 @@ class _FakeEditorState extends ConsumerState<_FakeEditor> {
         readAboveCursor: () => const NoteText(title: '', blocks: []),
         readDocument: afe.Document.blank,
         insertMarkdown: (_) async => true,
+        replaceSelection: (_) async => true,
         applyGrammar: (_) async => true,
         snapshot: () =>
             const AgentSnapshot(document: {}, title: 'fake'),

@@ -41,8 +41,10 @@ final sectionReaderProvider = Provider<SectionReader>((ref) => SectionReader(
       ref.watch(aiArtifactStoreProvider),
     ));
 
-final agentTaskProvider =
-    Provider<AgentTask>((ref) => AgentTask(ref.watch(llmServiceProvider)));
+final agentTaskProvider = Provider<AgentTask>((ref) => AgentTask(
+      ref.watch(llmServiceProvider),
+      ref.watch(webSearchProvider),
+    ));
 
 /// Reads the pictures in a note — bytes for a vision model, OCR text for
 /// everything else.
@@ -99,6 +101,7 @@ class AiEditorBridge {
     required this.readAboveCursor,
     required this.readDocument,
     required this.insertMarkdown,
+    required this.replaceSelection,
     required this.applyGrammar,
     required this.snapshot,
     required this.restore,
@@ -126,6 +129,10 @@ class AiEditorBridge {
   /// Inserts Markdown after the current block. Returns false when the editor
   /// went away mid-flight.
   final Future<bool> Function(String markdown) insertMarkdown;
+
+  /// Swaps the highlighted passage for Markdown. False when nothing is
+  /// highlighted, or the editor went away mid-flight.
+  final Future<bool> Function(String markdown) replaceSelection;
 
   /// Applies one proofreading fix. False when the text it targets has since
   /// changed — a stale suggestion, not an error.
@@ -157,6 +164,71 @@ final editorSelectionProvider = StateProvider<String?>((ref) => null);
 
 /// Null whenever no page is open.
 final aiEditorBridgeProvider = StateProvider<AiEditorBridge?>((ref) => null);
+
+/// Whether the on-page ask composer is showing, and what to seed it with.
+///
+/// It used to sit at the foot of every page permanently, which put a control
+/// under every document whether or not anyone was asking anything. It is
+/// summoned instead: `/ask` opens it at the end of the page, carrying whatever
+/// was typed after the command.
+class InlineAskPrompt {
+  const InlineAskPrompt({
+    this.open = false,
+    this.seed = '',
+    this.anchor,
+    this.above,
+  });
+
+  final bool open;
+
+  /// Where the caret was when it opened, in the editor canvas's own
+  /// coordinates. Null falls back to the foot of the canvas.
+  ///
+  /// Captured once rather than followed: the composer takes focus off the
+  /// page the moment it appears, so there is no live caret to track — and a
+  /// box that wandered while you typed into it would be worse than one that
+  /// stays where you summoned it.
+  final Offset? anchor;
+
+  /// The page ABOVE the caret, captured at the same moment.
+  ///
+  /// Asking at a point in a page means asking about what leads up to it —
+  /// the same thing `/summary` means by "the notes above". It has to be taken
+  /// on open, because by submit time the caret is in the composer and the
+  /// editor no longer knows where it was.
+  final NoteText? above;
+
+  /// The question `/ask what is a monad` typed after the command. Consumed
+  /// once — the composer submits it and clears it, so a later rebuild does
+  /// not ask again.
+  final String seed;
+}
+
+class InlineAskNotifier extends Notifier<InlineAskPrompt> {
+  @override
+  InlineAskPrompt build() => const InlineAskPrompt();
+
+  void openWith(String seed, {Offset? anchor, NoteText? above}) =>
+      state = InlineAskPrompt(
+        open: true,
+        seed: seed,
+        anchor: anchor,
+        above: above,
+      );
+
+  /// Clears the seed but leaves the composer open — called the moment the
+  /// question has been handed over.
+  void seedTaken() => state = InlineAskPrompt(
+        open: state.open,
+        anchor: state.anchor,
+        above: state.above,
+      );
+
+  void close() => state = const InlineAskPrompt();
+}
+
+final inlineAskProvider =
+    NotifierProvider<InlineAskNotifier, InlineAskPrompt>(InlineAskNotifier.new);
 
 /// How much room the floating composer needs at the foot of a panel.
 ///

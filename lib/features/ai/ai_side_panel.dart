@@ -252,13 +252,7 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return MarioGlass(
-      // No blur. The header sits on the flat opaque Material this file wraps
-      // the panel in, so the filter produces byte-identical output — and it
-      // re-runs on every streamed token, because it is inside the subtree that
-      // rebuilds per token.
-      blur: 0,
-      opacity: 0.72,
+    return MarioSurface(
       padding: const EdgeInsets.fromLTRB(
           MarioSpace.x2, MarioSpace.x2, MarioSpace.x1, MarioSpace.x2),
       child: Row(
@@ -460,7 +454,11 @@ class _ComposerState extends ConsumerState<_Composer> {
     // bails out when there is no editor bridge. Better to say so in the hint
     // than to offer a send button that quietly does nothing.
     final hasPage = ref.watch(aiEditorBridgeProvider.select((b) => b != null));
-    final useWeb = ref.watch(askSessionProvider.select((s) => s.useWeb));
+    // Each tab keeps its own preference: "web on" for a question you are
+    // asking is not the same decision as "web on" for an edit to your page.
+    final useWeb = _isAgent
+        ? ref.watch(agentSessionProvider.select((s) => s.useWeb))
+        : ref.watch(askSessionProvider.select((s) => s.useWeb));
     // A run in flight owns the page; a second instruction queued on top of it
     // would leave two sets of edits and one snapshot to undo them with.
     final agentBusy = _isAgent &&
@@ -470,14 +468,9 @@ class _ComposerState extends ConsumerState<_Composer> {
 
     return Padding(
       padding: const EdgeInsets.all(MarioSpace.x2),
-      child: MarioGlass(
-        // No blur. This one floats directly over the streaming answer, which
-        // is the worst place in the app for a backdrop filter: it re-runs on
-        // every token *and* on every scroll frame, and because its backdrop
-        // changes constantly it can never be raster-cached. The veil stays, so
-        // the composer still reads as glass.
-        blur: 0,
-        borderRadius: BorderRadius.circular(MarioRadius.pill),
+      child: MarioSurface(
+        color: scheme.surfaceContainerHigh,
+        borderRadius: BorderRadius.circular(MarioRadius.md),
         border: Border.all(color: marioDivider(context)),
         padding: const EdgeInsets.fromLTRB(MarioSpace.x3, 4, 4, 4),
         child: LayoutBuilder(
@@ -508,7 +501,7 @@ class _ComposerState extends ConsumerState<_Composer> {
                     besideTheField -
                     _WebChip.widthFor(context, useWeb, showLabel: true) >=
                 MediaQuery.textScalerOf(context).scale(_kMinField);
-            final showLabel = !_isAgent && roomForLabel();
+            final showLabel = roomForLabel();
             return Row(
               children: [
                 // Not scheme.primary: gold on the cream and white grounds
@@ -526,16 +519,22 @@ class _ComposerState extends ConsumerState<_Composer> {
                 // primary and so is the web chip's fill when web search is on,
                 // and two gold shapes any closer than this read as one.
                 const SizedBox(width: MarioSpace.x3),
-                // Web search and "summarise above the cursor" are things you do
-                // to a question. On Do the text is an edit to the page, so the
-                // row is just the box and the send button.
+                // Web search is on BOTH tabs. It used to be Ask-only, on the
+                // reasoning that Do writes an edit rather than asks a
+                // question — but "add a section on the current rules" is an
+                // edit that cannot be written from a page which says nothing
+                // about them, and the agent had no way to find out.
+                _WebChip(
+                  value: useWeb,
+                  showLabel: showLabel,
+                  onTap: _isAgent
+                      ? ref.read(agentSessionProvider.notifier).cycleWeb
+                      : ref.read(askSessionProvider.notifier).cycleWeb,
+                ),
+                const SizedBox(width: MarioSpace.x2),
+                // "Summarise above the cursor" stays Ask-only: it is a
+                // question about the page, not an edit to it.
                 if (!_isAgent) ...[
-                  _WebChip(
-                    value: useWeb,
-                    showLabel: showLabel,
-                    onTap: ref.read(askSessionProvider.notifier).cycleWeb,
-                  ),
-                  const SizedBox(width: MarioSpace.x2),
                   _RoundChip(
                     icon: Icons.format_quote,
                     tooltip: hasPage

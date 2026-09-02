@@ -1,10 +1,10 @@
-/// The four grounds of the redesign hold their spec.
+/// The four grounds of the Simple remodel hold their spec.
 ///
-/// These are the values the design names explicitly — the cream, the mark's
-/// navy, pure black — so a drift here is a drift away from the design, not a
-/// matter of taste. The Light/White and Night/Black pairs also share a
-/// Brightness, which is exactly why the mode marker has to exist: brightness
-/// alone cannot tell either pair apart.
+/// These are the values the design names explicitly — the near-white page,
+/// the mark's navy, pure black — so a drift here is a drift away from the
+/// design, not a matter of taste. The Light/White and Night/Black pairs also
+/// share a Brightness, which is exactly why the mode marker has to exist:
+/// brightness alone cannot tell either pair apart.
 library;
 
 import 'package:flutter/material.dart';
@@ -20,14 +20,17 @@ void main() {
     final night = MarioTheme.night();
     final black = MarioTheme.black();
 
-    // The grounds the design names by hex.
-    expect(light.colorScheme.surface, const Color(0xFFFFF8E8), reason: 'cream');
+    // The grounds the design names by hex. The cream is gone: the remodel
+    // puts the app on a near-white page, and White is what is left when even
+    // that trace of warmth drops out.
+    expect(light.colorScheme.surface, const Color(0xFFFAF9F7),
+        reason: 'the near-white ground');
     expect(night.colorScheme.surface, const Color(0xFF17233D),
         reason: "the mark's navy");
     expect(black.colorScheme.surface, const Color(0xFF000000),
         reason: 'pure black, for OLED');
     expect(white.colorScheme.surface, isNot(light.colorScheme.surface),
-        reason: 'White exists precisely because the cream drops out');
+        reason: 'White exists precisely because the warmth drops out');
 
     expect(light.brightness, Brightness.light);
     expect(white.brightness, Brightness.light);
@@ -35,11 +38,27 @@ void main() {
     expect(black.brightness, Brightness.dark);
   });
 
-  testWidgets('gold holds on every ground; only the blue lifts',
+  testWidgets('the page lifts off the chrome on every ground', (tester) async {
+    // side < bg < paper, in every theme. The writing surface is always the
+    // brightest step — including on navy and black, where the order is kept
+    // rather than inverted so the eye lands in the same place.
+    for (final t in [
+      MarioTheme.light(),
+      MarioTheme.white(),
+      MarioTheme.night(),
+      MarioTheme.black(),
+    ]) {
+      final tok = t.extension<MarioTokens>()!;
+      expect(tok.side, isNot(tok.bg));
+      expect(tok.paper, isNot(tok.bg));
+    }
+  });
+
+  testWidgets('gold holds on every ground; the dark accents lift',
       (tester) async {
-    // Gold reads on cream, on navy and on black alike, so the primary does not
-    // shift. The blue second accent does: at full strength it sits too close
-    // to the navy ground to separate from it.
+    // Gold reads on the near-white page, on navy and on black alike, so the
+    // primary does not shift. Blue and slate do: at full strength they sit
+    // too close to the navy ground to separate from it.
     for (final t in [
       MarioTheme.light(),
       MarioTheme.white(),
@@ -48,9 +67,24 @@ void main() {
     ]) {
       expect(t.colorScheme.primary, MarioColors.gold);
     }
-    expect(MarioTheme.light().colorScheme.secondary, MarioColors.blue);
-    expect(MarioTheme.night().colorScheme.secondary, MarioColors.secondaryDark);
-    expect(MarioColors.secondaryDark, isNot(MarioColors.blue));
+
+    expect(MarioAccent.gold.baseOn(dark: true), MarioAccent.gold.base);
+    expect(MarioAccent.coral.baseOn(dark: true), MarioAccent.coral.base);
+    expect(MarioAccent.blue.baseOn(dark: true), MarioAccent.blue.lifted);
+    expect(MarioAccent.slate.baseOn(dark: true), MarioAccent.slate.lifted);
+  });
+
+  testWidgets('accent TEXT never uses the chrome tone on a light ground',
+      (tester) async {
+    // Gold on white is about 1.6:1. Every accent therefore ships a deep step
+    // for text, and it must not be the base tone.
+    for (final a in MarioAccent.values) {
+      expect(a.textOn(dark: false), a.text);
+      expect(a.textOn(dark: false), isNot(a.base),
+          reason: '${a.name}: the base tone is chrome-contrast only');
+      expect(a.textOn(dark: true), a.lifted);
+    }
+    expect(MarioTheme.light().colorScheme.secondary, MarioAccent.gold.text);
   });
 
   testWidgets('each theme carries its own mode marker', (tester) async {
@@ -62,6 +96,7 @@ void main() {
     };
     for (final e in modes.entries) {
       expect(e.value.extension<MarioThemeMarker>()?.mode, e.key);
+      expect(e.value.extension<MarioTokens>()?.mode, e.key);
     }
   });
 
@@ -102,30 +137,87 @@ void main() {
     expect(seen, MarioThemeMode.light);
   });
 
-  testWidgets('text keeps the display/body split across every ground',
+  testWidgets('marioTokens falls back to Light with no extension installed',
       (tester) async {
+    late MarioTokens seen;
+    await tester.pumpWidget(MaterialApp(
+      home: Builder(builder: (c) {
+        seen = marioTokens(c);
+        return const SizedBox();
+      }),
+    ));
+    expect(seen.bg, MarioColors.bg);
+    expect(seen.accent, MarioAccent.gold);
+    expect(seen.density, MarioDensity.balanced);
+  });
+
+  testWidgets('headings are the body face, not a display face', (tester) async {
     for (final t in [
       MarioTheme.light(),
       MarioTheme.white(),
       MarioTheme.night(),
       MarioTheme.black(),
     ]) {
-      // The design's ramp: 42 / 32 / 25 for the display sizes.
-      expect(t.textTheme.displayLarge?.fontSize, 42);
-      expect(t.textTheme.displayMedium?.fontSize, 32);
-      expect(t.textTheme.displaySmall?.fontSize, 25);
-      // Body copy is 15/1.55, not Material's 14.
-      expect(t.textTheme.bodyMedium?.fontSize, 15);
-      // Ink matches the ground's on-colour.
-      expect(t.textTheme.bodyMedium?.color, t.colorScheme.onSurface);
+      final tok = t.extension<MarioTokens>()!;
+
+      // The remodel's ramp: 31 / 24 / 20, all set at w600 with a touch of
+      // negative tracking rather than in a display face.
+      expect(t.textTheme.displayLarge?.fontSize, 31);
+      expect(t.textTheme.displayMedium?.fontSize, 24);
+      expect(t.textTheme.displaySmall?.fontSize, 20);
+      for (final s in [
+        t.textTheme.displayLarge,
+        t.textTheme.displayMedium,
+        t.textTheme.displaySmall,
+      ]) {
+        expect(s?.fontWeight, FontWeight.w600);
+        expect(s?.letterSpacing, lessThan(0));
+      }
+
+      // Page copy is 15/1.62 and AI copy 14.5, both in the body ink — a step
+      // off the full ink the headings use.
+      expect(t.textTheme.bodyLarge?.fontSize, 15);
+      expect(t.textTheme.bodyMedium?.fontSize, 14.5);
+      expect(t.textTheme.bodyLarge?.color, tok.body);
+      expect(t.textTheme.displayLarge?.color, tok.ink);
     }
   });
 
-  testWidgets('small controls are pills', (tester) async {
+  testWidgets('the pills are gone', (tester) async {
+    // The remodel takes the pill radius out of every small control; 999
+    // survives only for the two genuinely circular things (the avatar chip
+    // and the toggle), which do not go through the button themes.
     final t = MarioTheme.light();
     final shape = t.filledButtonTheme.style?.shape?.resolve({})
         as RoundedRectangleBorder?;
-    expect(shape?.borderRadius, BorderRadius.circular(MarioRadius.pill));
+    expect(shape?.borderRadius, BorderRadius.circular(MarioRadius.sm));
+    expect(MarioRadius.sm, 6.0);
+    expect(MarioRadius.lg, 10.0);
+    expect(MarioRadius.card, MarioRadius.lg,
+        reason: 'the old 32.2 card radius belonged to the round-card system');
     expect(MarioRadius.pill, 999.0);
+  });
+
+  testWidgets('density drives the row metrics', (tester) async {
+    for (final d in MarioDensity.values) {
+      final tok = MarioTheme.light(density: d).extension<MarioTokens>()!;
+      expect(tok.row, d.row);
+      expect(tok.rowFontSize, d.fontSize);
+    }
+    expect(MarioDensity.compact.row, 28);
+    expect(MarioDensity.balanced.row, 32);
+    expect(MarioDensity.roomy.row, 36);
+  });
+
+  testWidgets('the chosen accent reaches the theme', (tester) async {
+    for (final a in MarioAccent.values) {
+      final light = MarioTheme.light(accent: a);
+      expect(light.colorScheme.primary, a.base);
+      expect(light.colorScheme.secondary, a.text);
+
+      final night = MarioTheme.night(accent: a);
+      expect(night.colorScheme.primary, a.baseOn(dark: true));
+      expect(night.colorScheme.secondary, a.lifted);
+    }
   });
 }

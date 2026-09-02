@@ -793,18 +793,24 @@ extension QuizTasks on AiTasks {
     int mcqCount = defaultMcqCount,
     int essayCount = defaultEssayCount,
     QuizDifficulty difficulty = QuizDifficulty.easy,
+    bool? useWeb,
   }) {
+    // Null follows the difficulty; true and false override it. "Easy
+    // questions, but about the current syllabus" and "hard questions, strictly
+    // from my notes" are both real asks, and the difficulty alone could
+    // express neither.
+    final searches = useWeb ?? difficulty.usesWeb;
     final run = AiRun([
       AiStepKind.readingNote,
-      // Hard mode looks the subject up first, so the step is in the plan from
-      // the start rather than appearing mid-run.
-      if (difficulty.usesWeb) AiStepKind.searchingWeb,
+      // The look-up happens first, so the step is in the plan from the start
+      // rather than appearing mid-run.
+      if (searches) AiStepKind.searchingWeb,
       AiStepKind.thinking,
       AiStepKind.checking,
       AiStepKind.answering,
     ]);
     unawaited(_runGenerateQuiz(
-        run, note, scopeLabel, mcqCount, essayCount, difficulty));
+        run, note, scopeLabel, mcqCount, essayCount, difficulty, searches));
     return run;
   }
 
@@ -815,6 +821,7 @@ extension QuizTasks on AiTasks {
     int mcqCount,
     int essayCount,
     QuizDifficulty difficulty,
+    bool searchesWeb,
   ) async {
     try {
       final provider = await llm.requireProvider();
@@ -838,7 +845,7 @@ extension QuizTasks on AiTasks {
       // extra context identical across rounds, which is also what lets a
       // prefix-caching server reuse it.
       var webContext = '';
-      if (difficulty.usesWeb) {
+      if (searchesWeb) {
         final headings = [
           for (final b in note.blocks)
             if (b.isHeading) b.text

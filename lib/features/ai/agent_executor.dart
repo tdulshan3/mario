@@ -20,6 +20,7 @@ import '../editor/blocks/code_block.dart';
 import '../editor/blocks/math_block.dart';
 import '../editor/blocks/spreadsheet_block.dart';
 import 'agent_actions.dart';
+import 'ai_markdown_blocks.dart';
 
 /// The document as it was before a run, so it can be put back exactly.
 class AgentSnapshot {
@@ -35,10 +36,46 @@ class AgentExecutor {
 
   final afe.EditorState editorState;
 
-  AgentSnapshot snapshot(String title) => AgentSnapshot(
-        document: editorState.document.toJson(),
-        title: title,
-      );
+  /// The top-level block order as the run began.
+  ///
+  /// A rewrite deletes several blocks and then inserts their replacements, so
+  /// by the time a gap has to be resolved its neighbours may be gone too. The
+  /// original order is the only thing that still says where each block SAT;
+  /// the live tree no longer does.
+  List<String> _orderAtRunStart = const [];
+
+  /// Where a deleted block used to sit, as the id of the block before it in
+  /// [_orderAtRunStart] (null when it was the first).
+  ///
+  /// A rewrite is often "delete the old, insert the new in its place", and the
+  /// insert names the deleted block in `afterBlockId` — which by then resolves
+  /// to nothing, so the replacement landed at the END of the page. That is the
+  /// "it stacked underneath instead of replacing" behaviour.
+  ///
+  /// Ids rather than paths: paths shift under every edit that follows.
+  final Map<String, String?> _deletedAfter = {};
+
+  /// What has since been inserted into a deleted block's gap.
+  ///
+  /// Without this a whole-page rewrite came out REVERSED: every replacement
+  /// chained back to a deleted first block and so landed at the top, each one
+  /// pushing the last one down. Once a gap has been filled, the block that
+  /// filled it is where the next one belongs.
+  final Map<String, String> _replacedBy = {};
+
+  /// Called once per run, before any action — so it doubles as the point to
+  /// forget the previous run's bookkeeping.
+  AgentSnapshot snapshot(String title) {
+    _orderAtRunStart = [
+      for (final n in editorState.document.root.children) n.id,
+    ];
+    _deletedAfter.clear();
+    _replacedBy.clear();
+    return AgentSnapshot(
+      document: editorState.document.toJson(),
+      title: title,
+    );
+  }
 
   /// Restores a snapshot, discarding everything the run did.
   ///
@@ -90,12 +127,62 @@ class AgentExecutor {
   }
 
   Future<bool> _insert(List<afe.Node> nodes, String? afterBlockId) async {
-    final anchor = afterBlockId == null
-        ? null
-        : _findById(editorState.document.root, afterBlockId);
-    final path =
-        anchor?.path.next ?? [editorState.document.root.children.length];
-    return safeApply(editorState, (tx) => tx.insertNodes(path, nodes));
+    final path = _insertionPath(afterBlockId);
+    final ok =
+        await safeApply(editorState, (tx) => tx.insertNodes(path, nodes));
+
+    // A gap that has now been filled: anything anchored to a LATER deleted
+    // block belongs after this, not back at the original gap.
+    //
+    // The id is read back out of the DOCUMENT, not taken from `nodes`.
+    // `insertNodes` deep-copies by default and `copyWith` mints a fresh id, so
+    // the node that actually landed is not the one handed in — recording the
+    // id of the outgoing copy left every lookup failing, and a whole-page
+    // rewrite came out reversed.
+    if (ok && afterBlockId != null && _deletedAfter.containsKey(afterBlockId)) {
+      final children = editorState.document.root.children;
+      final last = path.last + nodes.length - 1;
+      if (last >= 0 && last < children.length) {
+        _replacedBy[afterBlockId] = children[last].id;
+      }
+    }
+    return ok;
+  }
+
+  /// Where an insert anchored to [afterBlockId] should go.
+  ///
+  /// Falls back to the end of the page only when there is genuinely nowhere
+  /// else — an anchor that has been DELETED this run resolves to the gap it
+  /// left, so "delete the old paragraph, insert the rewritten one after it"
+  /// puts the new text where the old text was.
+  List<int> _insertionPath(String? afterBlockId, [Set<String>? seen]) {
+    final end = [editorState.document.root.children.length];
+    if (afterBlockId == null) return end;
+
+    // Chains run strictly backwards through the run-start order, so they
+    // terminate — but a malformed plan must not be able to spin here.
+    final visited = seen ?? <String>{};
+    if (!visited.add(afterBlockId)) return end;
+
+    // Filled gaps first: the replacement stands in for the block that was
+    // there, so later blocks queue up after it.
+    final filler = _replacedBy[afterBlockId];
+    if (filler != null) {
+      final node = _findById(editorState.document.root, filler);
+      if (node != null) return node.path.next;
+    }
+
+    final anchor = _findById(editorState.document.root, afterBlockId);
+    if (anchor != null) return anchor.path.next;
+
+    if (_deletedAfter.containsKey(afterBlockId)) {
+      final before = _deletedAfter[afterBlockId];
+      // It was the first block, so its gap is the top of the page.
+      if (before == null) return [0];
+      return _insertionPath(before, visited);
+    }
+
+    return end;
   }
 
   Future<bool> _replaceBlock(AgentAction action) async {
@@ -107,18 +194,31 @@ class AgentExecutor {
       // rather than failing, which is what "rewrite this" means for a block
       // whose content is not a delta.
       return safeApply(editorState, (tx) {
-        tx.insertNode(node.path.next, _paragraph(action.text));
+        tx.insertNode(
+          node.path.next,
+          afe.paragraphNode(delta: marioInlineDelta(action.text)),
+        );
         tx.deleteNode(node);
       });
     }
+    // Styled, for the same reason the insert path is: "rewrite this line as
+    // **X**" otherwise leaves the asterisks in the page.
+    //
+    // The whole delta is swapped rather than going through `replaceText`,
+    // which applies ONE set of attributes across the span it writes and so
+    // cannot express a line that is partly bold. Replacing the delta is also a
+    // single operation, which keeps the action a single undo step.
     return safeApply(editorState, (tx) {
-      tx.replaceText(node, 0, delta.length, action.text);
+      tx.updateNode(node, {
+        afe.blockComponentDelta: marioInlineDelta(action.text).toJson(),
+      });
     });
   }
 
   Future<bool> _deleteBlock(AgentAction action) async {
     final node = _findById(editorState.document.root, action.blockId!);
     if (node == null) return false;
+    _rememberGap(action.blockId!, node);
     // Never leave the document empty; see restore().
     if (editorState.document.root.children.length <= 1) {
       return safeApply(editorState, (tx) {
@@ -127,6 +227,29 @@ class AgentExecutor {
       });
     }
     return safeApply(editorState, (tx) => tx.deleteNode(node));
+  }
+
+  /// Notes which block a deleted one sat after, so an insert aimed at it can
+  /// still find the gap. Top-level blocks only: [_insertionPath] resolves
+  /// against the root's children.
+  ///
+  /// Read from the RUN-START order, not from the live tree. By the time the
+  /// third block of a rewrite is deleted its neighbours are already gone, and
+  /// the live tree would report "nothing before me" for all of them — which is
+  /// how every replacement ended up at the top of the page.
+  void _rememberGap(String id, afe.Node node) {
+    final original = _orderAtRunStart.indexOf(id);
+    if (original >= 0) {
+      _deletedAfter[id] = original == 0 ? null : _orderAtRunStart[original - 1];
+      return;
+    }
+
+    // Created during this run, so the run-start order knows nothing about it;
+    // its surviving neighbour is the best answer available.
+    final siblings = editorState.document.root.children;
+    final index = siblings.indexOf(node);
+    if (index < 0) return;
+    _deletedAfter[id] = index == 0 ? null : siblings[index - 1].id;
   }
 
   /// Moves an existing block to just after another — how the agent puts a
@@ -158,32 +281,43 @@ class AgentExecutor {
   }
 
   /// Builds the nodes one action inserts.
+  ///
+  /// Text-bearing nodes take a STYLED delta. Models write markdown even when
+  /// the plan already says "this is a heading" — a paragraph action whose text
+  /// is "the **key** point" was landing in the page with the asterisks
+  /// visible, because the delta was a single unstyled insert of the literal
+  /// string. [marioInlineDelta] pulls the styling out and leaves the block
+  /// structure alone, which is what these actions have already decided.
+  ///
+  /// Code, formulas and spreadsheet cells are exempt: their content is
+  /// literal, and "styling" a snippet would eat the very characters that make
+  /// it a snippet.
   List<afe.Node> _nodesFor(AgentAction a) {
     switch (a.kind) {
       case AgentActionKind.paragraph:
-        return [_paragraph(a.text)];
+        return [afe.paragraphNode(delta: marioInlineDelta(a.text))];
       case AgentActionKind.heading:
         return [
-          afe.headingNode(level: a.level, delta: afe.Delta()..insert(a.text)),
+          afe.headingNode(level: a.level, delta: marioInlineDelta(a.text)),
         ];
       case AgentActionKind.quote:
-        return [afe.quoteNode(delta: afe.Delta()..insert(a.text))];
+        return [afe.quoteNode(delta: marioInlineDelta(a.text))];
       case AgentActionKind.divider:
         return [afe.dividerNode()];
       case AgentActionKind.bullets:
         return [
           for (final i in a.items)
-            afe.bulletedListNode(delta: afe.Delta()..insert(i)),
+            afe.bulletedListNode(delta: marioInlineDelta(i)),
         ];
       case AgentActionKind.numbered:
         return [
           for (final i in a.items)
-            afe.numberedListNode(delta: afe.Delta()..insert(i)),
+            afe.numberedListNode(delta: marioInlineDelta(i)),
         ];
       case AgentActionKind.todo:
         return [
           for (final i in a.items)
-            afe.todoListNode(checked: false, delta: afe.Delta()..insert(i)),
+            afe.todoListNode(checked: false, delta: marioInlineDelta(i)),
         ];
       case AgentActionKind.code:
         return [codeBlockNode(code: a.text, language: a.language)];

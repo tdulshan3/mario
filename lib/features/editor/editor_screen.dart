@@ -20,7 +20,7 @@ import '../../core/models/note_page.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
-import '../../ui/organic.dart';
+import '../../ui/theme.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
 import '../drawing/stroke.dart';
@@ -29,12 +29,14 @@ import '../ai/agent_executor.dart';
 import '../ai/ai_slash_commands.dart';
 import '../ai/grammar_check.dart';
 import '../ai/ai_state.dart';
+import '../ai/inline_ask.dart';
 import '../ai/ask_panel.dart';
 import '../ai/note_context.dart';
 import '../export/export_dialog.dart';
 import '../export/markdown_exporter.dart';
 import '../export/pdf_exporter.dart';
 import '../math/math_shortcut.dart';
+import '../settings/settings_state.dart';
 import '../shell/shell_state.dart' as shell;
 import '../voice/voice_dictation.dart';
 import 'blocks/audio_block.dart';
@@ -106,6 +108,17 @@ class _UnavailableContent extends StatelessWidget {
 
 enum SaveStatus { idle, dirty, saving, saved, error }
 
+/// The editor's horizontal inset.
+///
+/// Applied inside [afe.EditorStyle] rather than as a `Padding` around the
+/// editor — `getNodeInOffset` resolves a tap to the NEAREST node, so margin
+/// inside the editor still places the caret on the adjacent line, whereas
+/// wrapping the editor shrinks its gesture box and those taps hit dead space.
+///
+/// Named here because the page heading has to match it to share the body's
+/// left edge, and the column has to be this much wider than the text measure.
+const double kEditorInset = 52;
+
 /// Key under which the verbatim paste-HTML source is stashed in the page's
 /// Drive payload, so the preview-pane override survives page navigation.
 const String _rawHtmlOverrideKey = 'rawHtmlOverride';
@@ -128,6 +141,19 @@ class _Editor extends ConsumerStatefulWidget {
 
 class _EditorState extends ConsumerState<_Editor> {
   late afe.EditorState _editorState;
+
+  /// The canvas Stack, so a global caret rect can be brought into its space.
+  final GlobalKey _canvasKey = GlobalKey();
+
+  /// ONE executor for the life of this editor, not one per action.
+  ///
+  /// It remembers where a run's deleted blocks sat, so a rewrite that deletes
+  /// the old text and inserts the new can put the replacement in the gap
+  /// rather than at the end of the page. A fresh executor per action forgot
+  /// that immediately, and every replacement landed at the bottom.
+  ///
+  /// Lazy, because [_editorState] is not built until initState.
+  late final AgentExecutor _agent = AgentExecutor(_editorState);
   late StreamSubscription _txSub;
   Timer? _saveTimer;
   SaveStatus _status = SaveStatus.idle;
@@ -136,6 +162,21 @@ class _EditorState extends ConsumerState<_Editor> {
 
   // Zoom — toolbar buttons, Ctrl+0 reset, Ctrl+wheel.
   double _zoom = 1.0;
+
+  /// The TEXT measure, from the Page width setting — the design's `--pw`.
+  double get _pageWidth =>
+      ref.watch(settingsProvider).valueOrNull?.canvasWidth.pageWidth ??
+      CanvasWidth.medium.pageWidth;
+
+  /// The column the document is laid out in.
+  ///
+  /// Wider than the text measure by the editor's own inset on each side.
+  /// That inset lives inside `EditorStyle` rather than in a `Padding` around
+  /// the editor (see [kEditorInset]), so it eats into the column: a 720px
+  /// column would set 616px of text. Both the heading and the document go
+  /// through this, which is what puts them on one left edge — they were
+  /// 52px apart before, because the heading carried no inset.
+  double get _columnWidth => _pageWidth + kEditorInset * 2;
   static const _zoomMin = 0.5;
   static const _zoomMax = 3.0;
   static const _zoomStep = 0.1;
@@ -545,11 +586,13 @@ class _EditorState extends ConsumerState<_Editor> {
       readDocument: () => _editorState.document,
       insertMarkdown: (markdown) =>
           insertMarkdownIntoDocument(_editorState, markdown),
+      replaceSelection: (markdown) =>
+          replaceSelectionWithMarkdown(_editorState, markdown),
       applyGrammar: (suggestion) =>
           applyGrammarSuggestion(_editorState, suggestion),
-      snapshot: () => AgentExecutor(_editorState).snapshot(widget.page.title),
+      snapshot: () => _agent.snapshot(widget.page.title),
       restore: (snapshot) async {
-        final ok = await AgentExecutor(_editorState).restore(snapshot);
+        final ok = await _agent.restore(snapshot);
         // The title lives on the index entry, not in the document, so it has
         // to be put back separately.
         if (ok && snapshot.title != widget.page.title) {
@@ -557,7 +600,7 @@ class _EditorState extends ConsumerState<_Editor> {
         }
         return ok;
       },
-      applyAgentAction: (action) => AgentExecutor(_editorState).apply(action),
+      applyAgentAction: (action) => _agent.apply(action),
       renamePage: _renamePage,
     );
   }
@@ -651,13 +694,40 @@ class _EditorState extends ConsumerState<_Editor> {
     return full.above(List<int>.from(selection.start.path));
   }
 
-  void _onAskCommand(String question) {
-    final panel = ref.read(aiPanelProvider.notifier);
-    if (question.isEmpty) {
-      panel.open(tab: AiPanelTab.ask);
-    } else {
-      panel.askQuestion(question);
-    }
+  /// `/ask` opens the composer ON THE PAGE, not the side panel.
+  ///
+  /// That is the whole reason the composer is summoned rather than permanent:
+  /// asking is something you do at a moment, in a place, so the control
+  /// appears where the caret already is. `/ask what is a monad` carries the
+  /// question straight through and runs it.
+  ///
+  /// Both the WHERE and the WHAT are taken now, while the caret still exists.
+  /// The composer takes focus the instant it appears, and the editor then has
+  /// no selection to read — so a submit that asked "what is above the cursor?"
+  /// at send time would find no cursor and fall back to the whole page.
+  ///
+  /// The side panel is still the home of Write, Quiz and Do, and of the
+  /// question history — the top bar's Ask button opens it.
+  void _onAskCommand(String question) =>
+      ref.read(inlineAskProvider.notifier).openWith(
+            question,
+            anchor: _caretInCanvas(),
+            above: _readTextAboveCursor(),
+          );
+
+  /// The caret, in the canvas Stack's coordinates.
+  ///
+  /// `selectionRects` reports in global space; `globalToLocal` walks back down
+  /// through the zoom transform and the scroll view, so the result is where
+  /// the caret actually sits on screen whatever the zoom.
+  Offset? _caretInCanvas() {
+    final rects = _editorState.selectionRects();
+    if (rects.isEmpty) return null;
+    final box = _canvasKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return null;
+    // The BOTTOM of the caret: the composer hangs below the line it was
+    // summoned from, rather than covering it.
+    return box.globalToLocal(rects.first.bottomLeft);
   }
 
   void _onSummaryCommand() =>
@@ -700,7 +770,16 @@ class _EditorState extends ConsumerState<_Editor> {
     // Ground behind the paper. The header above it and the composer below it
     // sit on the same `surface`, so the three read as one page with the paper
     // floating on top rather than as three stacked bands.
+    // One continuous writing surface. The remodel drops the floating-card
+    // metaphor: there is no ground showing around the page any more, so the
+    // pane and the paper are the same colour and the "card" is only a width
+    // constraint on the column of text.
+    // The ground the writing column sits ON. The artboard makes the whole
+    // pane paper, which reads as one continuous sheet — and on a wide display
+    // that leaves nothing to tell you where the page you are writing on
+    // begins. The column keeps `paper`; the pane around it is the ground.
     final canvasBg = scheme.surface;
+
     // Paper is the design's writing surface — surfaceContainerHigh on all
     // four grounds.
     final paper = scheme.surfaceContainerHigh;
@@ -718,7 +797,8 @@ class _EditorState extends ConsumerState<_Editor> {
             // so margin inside the editor still places the caret on the
             // adjacent line. Wrapping the editor instead shrinks its
             // gesture box and those taps hit dead space.
-            padding: const EdgeInsets.symmetric(horizontal: 52, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+                horizontal: kEditorInset, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.2),
@@ -734,7 +814,8 @@ class _EditorState extends ConsumerState<_Editor> {
             // so margin inside the editor still places the caret on the
             // adjacent line. Wrapping the editor instead shrinks its
             // gesture box and those taps hit dead space.
-            padding: const EdgeInsets.symmetric(horizontal: 52, vertical: 8),
+            padding: const EdgeInsets.symmetric(
+                horizontal: kEditorInset, vertical: 8),
             textStyleConfiguration: afe.TextStyleConfiguration(
               text: GoogleFonts.inter(
                   fontSize: 14, color: MarioColors.onSurface, height: 1.2),
@@ -821,6 +902,31 @@ class _EditorState extends ConsumerState<_Editor> {
             onZoomReset: _zoomReset,
             drawMode: _drawMode,
             onToggleDraw: _toggleDraw,
+            trailing: ValueListenableBuilder<int>(
+              valueListenable: _assetSweeper.pendingCount,
+              builder: (context, pendingImages, _) => _PageActions(
+                dictate: IconButtonTheme(
+                  data: IconButtonThemeData(
+                    style: IconButton.styleFrom(
+                      padding: const EdgeInsets.all(5),
+                      minimumSize: const Size(28, 28),
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      foregroundColor: scheme.onSurfaceVariant,
+                    ),
+                  ),
+                  child: VoiceDictationButton(editorState: _editorState),
+                ),
+                status: _status,
+                lastSavedAt: _lastSavedAt,
+                pendingImages: pendingImages,
+                drawMode: _drawMode,
+                previewMode: _previewMode,
+                onExport: _export,
+                onToggleDraw: _toggleDraw,
+                onTogglePreview: _togglePreview,
+                onSaveNow: _saveNow,
+              ),
+            ),
           ),
           if (_drawMode)
             DrawingToolbar(
@@ -833,32 +939,6 @@ class _EditorState extends ConsumerState<_Editor> {
               onSave: _toggleDraw,
               collapsed: false,
             ),
-          ValueListenableBuilder<int>(
-            valueListenable: _assetSweeper.pendingCount,
-            builder: (context, pendingImages, _) => _PageHeader(
-              dictate: IconButtonTheme(
-                data: IconButtonThemeData(
-                  style: IconButton.styleFrom(
-                    padding: const EdgeInsets.all(5),
-                    minimumSize: const Size(28, 28),
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                    foregroundColor: scheme.onSurfaceVariant,
-                  ),
-                ),
-                child: VoiceDictationButton(editorState: _editorState),
-              ),
-              page: widget.page,
-              status: _status,
-              lastSavedAt: _lastSavedAt,
-              pendingImages: pendingImages,
-              drawMode: _drawMode,
-              previewMode: _previewMode,
-              onExport: _export,
-              onToggleDraw: _toggleDraw,
-              onTogglePreview: _togglePreview,
-              onSaveNow: _saveNow,
-            ),
-          ),
           Expanded(
             child: _previewMode
                 ? _HtmlPreviewPane(
@@ -884,13 +964,25 @@ class _EditorState extends ConsumerState<_Editor> {
                           : null,
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          const cardWidth = 780.0;
+                          final cardWidth = _columnWidth;
                           final scaledWidth = cardWidth * _zoom;
                           final viewportW = constraints.maxWidth;
                           final viewportH = constraints.maxHeight;
                           final outerWidth =
-                              math.max(scaledWidth + 32, viewportW);
-                          final cardHeight = viewportH - 16;
+                              math.max<double>(scaledWidth, viewportW);
+
+                          // The editor's LOGICAL height, chosen so that the
+                          // scale transform lands it exactly on the viewport.
+                          //
+                          // Handing it the viewport height directly is what
+                          // made the bottom of a zoomed page unreachable: at
+                          // 1.2x, a viewport-tall editor renders 1.2 viewports
+                          // tall, so its own scroll view thought it had
+                          // already shown everything while the last fifth of
+                          // it hung below the clip. Dividing gives the editor
+                          // a shorter box whose scrollable content still
+                          // covers the whole document.
+                          final cardHeight = viewportH / _zoom;
                           // Outer scroll only does work when the scaled card overflows
                           // horizontally. Otherwise it'd intercept stray dx deltas
                           // from trackpads and block AppFlowy's vertical scroll.
@@ -911,93 +1003,153 @@ class _EditorState extends ConsumerState<_Editor> {
                                 child: SizedBox(
                                   width: outerWidth,
                                   height: viewportH,
-                                  child: Center(
-                                    child: Padding(
-                                      padding: const EdgeInsets.symmetric(
-                                          vertical: 8),
-                                      // Outer SizedBox is the *post-scale* width so
-                                      // the parent's hit-test region covers the whole
-                                      // visually-zoomed card. OverflowBox then hands
-                                      // the unscaled child its natural cardWidth
-                                      // constraints inside that wider region.
-                                      child: SizedBox(
-                                        width: scaledWidth,
-                                        height: cardHeight,
-                                        child: OverflowBox(
-                                          minWidth: 0,
-                                          maxWidth: cardWidth,
-                                          minHeight: 0,
-                                          maxHeight: cardHeight,
+                                  // TOP-aligned, not centred. The box here is
+                                  // the editor at its UNSCALED height, and the
+                                  // transform below grows it from its own top
+                                  // edge — so centring it first pushed the
+                                  // bottom of a zoomed page clean out of the
+                                  // viewport, and the last stretch of a long
+                                  // document could not be scrolled to at any
+                                  // zoom but 100%. Horizontal centring is
+                                  // still wanted, hence topCenter rather than
+                                  // topLeft.
+                                  child: Align(
+                                    alignment: Alignment.topCenter,
+                                    // Outer SizedBox is the *post-scale* width
+                                    // so the parent's hit-test region covers
+                                    // the whole visually-zoomed card.
+                                    // OverflowBox then hands the unscaled
+                                    // child its natural cardWidth constraints
+                                    // inside that wider region.
+                                    child: SizedBox(
+                                      // BOTH dimensions post-scale. A
+                                      // RenderBox only hit-tests inside its
+                                      // own size, and Transform paints outside
+                                      // it — so with the pre-scale height here
+                                      // the bottom of a zoomed page was
+                                      // visible but dead to the pointer: you
+                                      // could read it and not click into it.
+                                      // The width was already correct; the
+                                      // height had been missed.
+                                      width: scaledWidth,
+                                      height: cardHeight * _zoom,
+                                      child: OverflowBox(
+                                        minWidth: 0,
+                                        maxWidth: cardWidth,
+                                        minHeight: 0,
+                                        maxHeight: cardHeight,
+                                        alignment: Alignment.topCenter,
+                                        child: Transform.scale(
+                                          scale: _zoom,
                                           alignment: Alignment.topCenter,
-                                          child: Transform.scale(
-                                            scale: _zoom,
-                                            alignment: Alignment.topCenter,
-                                            child: SizedBox(
-                                              width: cardWidth,
-                                              height: cardHeight,
-                                              child: Stack(
-                                                children: [
-                                                  // The paper. Soft-cornered, lifted
-                                                  // off the ground by the system's
-                                                  // own shadow (which is nothing at
-                                                  // all on the black ground).
-                                                  Positioned.fill(
-                                                    child: DecoratedBox(
-                                                      decoration: BoxDecoration(
-                                                        color: paper,
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(
-                                                                    MarioRadius
-                                                                        .lg),
-                                                        boxShadow: marioShadow(
-                                                            context,
-                                                            level: 1),
+                                          child: SizedBox(
+                                            width: cardWidth,
+                                            height: cardHeight,
+                                            child: Stack(
+                                              key: _canvasKey,
+                                              children: [
+                                                // The paper. Soft-cornered, lifted
+                                                // off the ground by the system's
+                                                // own shadow (which is nothing at
+                                                // all on the black ground).
+                                                Positioned.fill(
+                                                  child: DecoratedBox(
+                                                    decoration: BoxDecoration(
+                                                      color: paper,
+                                                      // Hairline sides, so
+                                                      // the column reads as
+                                                      // a page on a ground
+                                                      // rather than as an
+                                                      // area of the pane.
+                                                      // On Light the two
+                                                      // tones are half a
+                                                      // step apart and the
+                                                      // edge is what
+                                                      // actually carries it.
+                                                      border: Border(
+                                                        left: BorderSide(
+                                                            color: scheme
+                                                                .outlineVariant),
+                                                        right: BorderSide(
+                                                            color: scheme
+                                                                .outlineVariant),
                                                       ),
-                                                      child: Material(
-                                                        type: MaterialType
-                                                            .transparency,
-                                                        borderRadius:
-                                                            BorderRadius
-                                                                .circular(
-                                                                    MarioRadius
-                                                                        .lg),
-                                                        clipBehavior:
-                                                            Clip.antiAlias,
-                                                        child:
-                                                            afe.AppFlowyEditor(
-                                                          editorState:
-                                                              _editorState,
-                                                          editorStyle: style,
-                                                          blockComponentBuilders:
-                                                              blockBuilders,
-                                                          characterShortcutEvents:
-                                                              shortcutEvents,
-                                                          commandShortcutEvents:
-                                                              commandShortcuts,
-                                                          autoFocus: true,
-                                                          header:
-                                                              const SizedBox(
-                                                                  height: 16),
-                                                          footer:
-                                                              const SizedBox(
-                                                                  height: 24),
+                                                    ),
+                                                    child: Material(
+                                                      type: MaterialType
+                                                          .transparency,
+                                                      child: afe.AppFlowyEditor(
+                                                        editorState:
+                                                            _editorState,
+                                                        editorStyle: style,
+                                                        blockComponentBuilders:
+                                                            blockBuilders,
+                                                        characterShortcutEvents:
+                                                            shortcutEvents,
+                                                        commandShortcutEvents:
+                                                            commandShortcuts,
+                                                        autoFocus: true,
+                                                        // The page's own
+                                                        // heading, INSIDE
+                                                        // the document.
+                                                        // As a band above
+                                                        // the canvas it
+                                                        // neither scrolled
+                                                        // nor scaled with
+                                                        // the page, so at
+                                                        // any zoom but 100%
+                                                        // its column was a
+                                                        // different width
+                                                        // from the one
+                                                        // below it and the
+                                                        // two edges stepped
+                                                        // apart. The
+                                                        // artboard has it
+                                                        // in the content
+                                                        // anyway.
+                                                        header: _PageHeader(
+                                                          page: widget.page,
+                                                        ),
+                                                        // Breathing room
+                                                        // under the last
+                                                        // block. The ask
+                                                        // composer used to
+                                                        // live here, which
+                                                        // pinned it to the
+                                                        // foot of the page
+                                                        // however far that
+                                                        // was from what you
+                                                        // were writing.
+                                                        footer: const SizedBox(
+                                                          height: 40,
                                                         ),
                                                       ),
                                                     ),
                                                   ),
-                                                  // Drawing surface on top — strokes
-                                                  // always visible; pointer capture
-                                                  // only when draw mode is on.
-                                                  Positioned.fill(
-                                                    child: CanvasDrawingLayer(
-                                                      controller:
-                                                          _drawingController,
-                                                      active: _drawMode,
-                                                    ),
+                                                ),
+                                                // Drawing surface on top — strokes
+                                                // always visible; pointer capture
+                                                // only when draw mode is on.
+                                                Positioned.fill(
+                                                  child: CanvasDrawingLayer(
+                                                    controller:
+                                                        _drawingController,
+                                                    active: _drawMode,
                                                   ),
-                                                ],
-                                              ),
+                                                ),
+                                                // The ask composer, at the
+                                                // caret. In the Stack rather
+                                                // than in the document, so it
+                                                // can sit where the cursor is
+                                                // instead of at the foot of
+                                                // the page. Renders nothing
+                                                // until `/ask` opens it.
+                                                const Positioned.fill(
+                                                  child: InlineAsk(
+                                                    inset: kEditorInset,
+                                                  ),
+                                                ),
+                                              ],
                                             ),
                                           ),
                                         ),
@@ -1288,14 +1440,88 @@ String? _nonEmpty(String? value) {
   return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
 }
 
-/// The design's page header (artboard 2a) — breadcrumb, title, save state and
-/// the page-level actions.
+/// The page's own heading — breadcrumb over title, in the document.
 ///
-/// It sits above the paper rather than on it, so it stays put while the page
-/// scrolls and does not scale with the canvas zoom.
+/// The remodel moves this ONTO the writing surface and strips it back to two
+/// lines. It used to be a band above the paper carrying breadcrumb tags, a
+/// save dot, a 30px title and a row of four pill buttons; the artboard puts a
+/// 12px section name over a 31px title and nothing else. The actions it used
+/// to hold now sit at the right end of the format row — see [_PageActions].
+///
+/// It mounts in the editor's `header` slot, so it scrolls and scales with the
+/// page. AppFlowy pads every BLOCK by `editorStyle.padding` and hands the
+/// header through unpadded, exactly as it does the footer — hence the inset
+/// here, which is what puts the title on the body's left edge.
 class _PageHeader extends ConsumerWidget {
-  const _PageHeader({
-    required this.page,
+  const _PageHeader({required this.page});
+
+  final NotePage page;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final t = marioTokens(context);
+    final textTheme = Theme.of(context).textTheme;
+
+    // Breadcrumb names come from the live index. A name that hasn't arrived
+    // yet — or a section that has gone away — drops the line instead of
+    // printing a stand-in.
+    String? crumb;
+    if (page.notebookId.isNotEmpty && page.sectionId.isNotEmpty) {
+      final sections =
+          ref.watch(shell.sectionsStreamProvider(page.notebookId)).valueOrNull;
+      for (final s in sections ?? const []) {
+        if (s.id == page.sectionId) crumb = _nonEmpty(s.name);
+      }
+    }
+    if (crumb == null && page.notebookId.isNotEmpty) {
+      final notebooks = ref.watch(shell.notebooksStreamProvider).valueOrNull;
+      for (final n in notebooks ?? const []) {
+        if (n.id == page.notebookId) crumb = _nonEmpty(n.name);
+      }
+    }
+
+    final title = _nonEmpty(page.title);
+
+    // The header is the top of the writing column, not a band across the pane
+    // — so it paints the ground either side of itself and carries the same
+    // paper, width and hairline edges the canvas below it does. Without that
+    // the page began as a full-width white stripe and then narrowed.
+    return Padding(
+      // 40 above the breadcrumb and 26 below the title, as the artboard sets
+      // them. The 26 was the SizedBox this replaced.
+      padding: const EdgeInsets.fromLTRB(kEditorInset, 40, kEditorInset, 26),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (crumb != null) ...[
+            Text(
+              crumb,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(fontSize: 12, height: 1.2, color: t.mut),
+            ),
+            const SizedBox(height: 10),
+          ],
+          if (title != null)
+            Text(
+              title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.displayLarge,
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The page-level actions, at the right end of the format row.
+///
+/// The artboard draws "Saved", a share glyph and an overflow glyph there.
+/// Dictate and Draw ride alongside them: they are page-level too, they were
+/// in the header this replaces, and neither has another entry point.
+class _PageActions extends StatelessWidget {
+  const _PageActions({
     required this.status,
     required this.lastSavedAt,
     required this.pendingImages,
@@ -1308,14 +1534,12 @@ class _PageHeader extends ConsumerWidget {
     required this.dictate,
   });
 
-  final NotePage page;
   final SaveStatus status;
   final DateTime? lastSavedAt;
 
   /// Images in this page that haven't reached Drive yet. The save line is
-  /// otherwise about the page JSON only, and "All changes saved" while a
-  /// picture is still local-only would promise something the other devices
-  /// won't see.
+  /// otherwise about the page JSON only, and "Saved" while a picture is still
+  /// local-only would promise something the other devices won't see.
   final int pendingImages;
 
   final bool drawMode;
@@ -1325,250 +1549,120 @@ class _PageHeader extends ConsumerWidget {
   final VoidCallback onTogglePreview;
   final VoidCallback onSaveNow;
 
-  /// The app's single dictation control.
-  ///
-  /// The updated design moves the ask composer out of the editor and into the
-  /// right panel, and the composer was where this chip briefly lived — so it
-  /// comes back to the page's own action row rather than leaving the app with
-  /// no way to dictate at all. One instance only: two would fight over the
-  /// same VoiceService session.
+  /// The app's single dictation control. One instance only: two would fight
+  /// over the same VoiceService session.
   final Widget dictate;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final scheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-
-    // Breadcrumb names come from the live index. A name that hasn't arrived
-    // yet — or a notebook/section that has gone away — drops its tag instead
-    // of printing a stand-in.
-    String? notebookName;
-    if (page.notebookId.isNotEmpty) {
-      final notebooks = ref.watch(shell.notebooksStreamProvider).valueOrNull;
-      for (final n in notebooks ?? const []) {
-        if (n.id == page.notebookId) notebookName = _nonEmpty(n.name);
-      }
-    }
-    String? sectionName;
-    if (page.notebookId.isNotEmpty && page.sectionId.isNotEmpty) {
-      final sections =
-          ref.watch(shell.sectionsStreamProvider(page.notebookId)).valueOrNull;
-      for (final s in sections ?? const []) {
-        if (s.id == page.sectionId) sectionName = _nonEmpty(s.name);
-      }
-    }
+  Widget build(BuildContext context) {
+    final t = marioTokens(context);
 
     // The real save state, not a promise. `idle` means nothing has been typed
     // since the page was loaded from Drive, so there is genuinely nothing
-    // outstanding either way — the two readings differ only in whether this
-    // session has written anything.
+    // outstanding either way.
     var saveLabel = switch (status) {
-      SaveStatus.idle =>
-        lastSavedAt == null ? 'No unsaved changes' : 'All changes saved',
-      SaveStatus.dirty => 'Unsaved changes',
+      SaveStatus.idle => lastSavedAt == null ? 'No changes' : 'Saved',
+      SaveStatus.dirty => 'Unsaved',
       SaveStatus.saving => 'Saving…',
-      SaveStatus.saved => 'All changes saved',
+      SaveStatus.saved => 'Saved',
       SaveStatus.error => 'Save failed',
     };
     if (pendingImages > 0 && status != SaveStatus.error) {
       saveLabel = '$saveLabel · $pendingImages '
           'image${pendingImages == 1 ? '' : 's'} not synced';
     }
-    final dotColour =
-        status == SaveStatus.error ? scheme.error : MarioColors.accent2500;
 
-    final title = _nonEmpty(page.title);
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(44, 16, 44, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Crumbs and save state share one line. Both are small muted
-          // metadata about the same page, and giving the save state a row of
-          // its own cost ~25px of chrome above every page for one short
-          // sentence. Wrap, not Row: on a narrow window the trailing items
-          // drop to a second line instead of overflowing.
-          Padding(
-            padding: const EdgeInsets.only(bottom: MarioSpace.x2),
-            child: Wrap(
-              crossAxisAlignment: WrapCrossAlignment.center,
-              runSpacing: MarioSpace.x1,
-              children: [
-                if (notebookName != null)
-                  MarioTag(notebookName, tone: MarioTagTone.accent2),
-                if (notebookName != null && sectionName != null)
-                  Padding(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: MarioSpace.x1),
-                    child: Icon(Icons.chevron_right,
-                        size: 14, color: scheme.onSurfaceVariant),
-                  ),
-                if (sectionName != null) MarioTag(sectionName),
-                if (notebookName != null || sectionName != null)
-                  const SizedBox(width: MarioSpace.x3),
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                          color: dotColour, shape: BoxShape.circle),
-                    ),
-                    const SizedBox(width: MarioSpace.x1),
-                    Text(
-                      saveLabel,
-                      style: textTheme.bodySmall?.copyWith(
-                        fontSize: 12.5,
-                        color: status == SaveStatus.error
-                            ? scheme.error
-                            : scheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: pendingImages > 0
+              ? '$pendingImages image(s) still uploading'
+              : saveLabel,
+          child: Text(
+            saveLabel,
+            style: TextStyle(
+              fontSize: 12,
+              height: 1.2,
+              color: status == SaveStatus.error
+                  ? Theme.of(context).colorScheme.error
+                  : t.mut,
             ),
           ),
-          Row(
-            children: [
-              Expanded(
-                child: title == null
-                    ? const SizedBox.shrink()
-                    : Text(
-                        title,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: textTheme.displayMedium
-                            ?.copyWith(fontSize: 30, height: 1.1),
-                      ),
-              ),
-              const SizedBox(width: MarioSpace.x4),
-              _HeaderPill(
-                icon: Icons.ios_share,
-                label: 'Export',
-                tooltip: 'Export this page',
-                onTap: onExport,
-              ),
-              const SizedBox(width: MarioSpace.x2),
-              dictate,
-              const SizedBox(width: MarioSpace.x2),
-              _HeaderPill(
-                icon: Icons.draw_outlined,
-                label: 'Draw',
-                active: drawMode,
-                onTap: onToggleDraw,
-                tooltip: drawMode ? 'Exit drawing mode' : 'Draw on this page',
-              ),
-              const SizedBox(width: MarioSpace.x2),
-              PopupMenuButton<_PageMenuAction>(
-                tooltip: 'More',
-                position: PopupMenuPosition.under,
-                onSelected: (action) => switch (action) {
-                  _PageMenuAction.preview => onTogglePreview(),
-                  _PageMenuAction.saveNow => onSaveNow(),
-                },
-                itemBuilder: (_) => [
-                  PopupMenuItem(
-                    value: _PageMenuAction.preview,
-                    child: Text(previewMode
-                        ? 'Hide HTML preview'
-                        : 'Show HTML preview'),
-                  ),
-                  const PopupMenuItem(
-                    value: _PageMenuAction.saveNow,
-                    child: Text('Save now  (Ctrl+S)'),
-                  ),
-                ],
-                child: const _HeaderRoundButton(icon: Icons.more_horiz),
-              ),
-            ],
+        ),
+        const SizedBox(width: 10),
+        _PageActionIcon(
+          icon: Icons.ios_share,
+          tooltip: 'Export this page',
+          onTap: onExport,
+        ),
+        dictate,
+        _PageActionIcon(
+          icon: Icons.draw_outlined,
+          tooltip: drawMode ? 'Exit drawing mode' : 'Draw on this page',
+          active: drawMode,
+          onTap: onToggleDraw,
+        ),
+        PopupMenuButton<_PageMenuAction>(
+          tooltip: 'More',
+          position: PopupMenuPosition.under,
+          onSelected: (action) => switch (action) {
+            _PageMenuAction.preview => onTogglePreview(),
+            _PageMenuAction.saveNow => onSaveNow(),
+          },
+          itemBuilder: (_) => [
+            PopupMenuItem(
+              value: _PageMenuAction.preview,
+              child:
+                  Text(previewMode ? 'Hide HTML preview' : 'Show HTML preview'),
+            ),
+            const PopupMenuItem(
+              value: _PageMenuAction.saveNow,
+              child: Text('Save now  (Ctrl+S)'),
+            ),
+          ],
+          child: SizedBox(
+            width: 28,
+            height: 28,
+            child: Icon(Icons.more_horiz, size: 18, color: t.sec),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }
 
-/// A secondary pill button in the page header — 38 tall, 15px icon.
-///
-/// [onTap] is optional so the same shape can be the child of a
-/// [PopupMenuButton], which supplies the tap itself.
-class _HeaderPill extends StatelessWidget {
-  const _HeaderPill({
+/// One 18px glyph in the page-action row.
+class _PageActionIcon extends StatelessWidget {
+  const _PageActionIcon({
     required this.icon,
-    required this.label,
-    this.onTap,
+    required this.tooltip,
+    required this.onTap,
     this.active = false,
-    this.tooltip,
   });
 
   final IconData icon;
-  final String label;
-  final VoidCallback? onTap;
+  final String tooltip;
+  final VoidCallback onTap;
   final bool active;
-  final String? tooltip;
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final foreground = active ? scheme.primary : scheme.onSurface;
-    final pill = Material(
-      color: active
-          ? scheme.primary.withValues(alpha: 0.14)
-          : scheme.surfaceContainerHighest,
-      shape: RoundedRectangleBorder(
-        side: BorderSide(color: active ? scheme.primary : scheme.outline),
-        borderRadius: BorderRadius.circular(MarioRadius.pill),
-      ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
+    final t = marioTokens(context);
+    return Tooltip(
+      message: tooltip,
+      child: GestureDetector(
         onTap: onTap,
-        child: Container(
-          height: 38,
-          padding: const EdgeInsets.symmetric(horizontal: MarioSpace.x4),
-          alignment: Alignment.center,
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(icon, size: 15, color: foreground),
-              const SizedBox(width: MarioSpace.x2),
-              Text(
-                label,
-                style: Theme.of(context)
-                    .textTheme
-                    .labelLarge
-                    ?.copyWith(fontSize: 13.5, color: foreground),
-              ),
-            ],
+        behavior: HitTestBehavior.opaque,
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: Icon(
+            icon,
+            size: 18,
+            color: active ? t.accentText : t.sec,
           ),
         ),
-      ),
-    );
-    return tooltip == null ? pill : Tooltip(message: tooltip!, child: pill);
-  }
-}
-
-/// The round 38px header button — the overflow control. The tap comes from
-/// the [PopupMenuButton] this is the child of, so it carries no callback of
-/// its own.
-class _HeaderRoundButton extends StatelessWidget {
-  const _HeaderRoundButton({required this.icon});
-
-  final IconData icon;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Material(
-      color: scheme.surfaceContainerHighest,
-      shape: CircleBorder(side: BorderSide(color: scheme.outline)),
-      clipBehavior: Clip.antiAlias,
-      child: SizedBox(
-        width: 38,
-        height: 38,
-        child: Icon(icon, size: 18, color: scheme.onSurface),
       ),
     );
   }

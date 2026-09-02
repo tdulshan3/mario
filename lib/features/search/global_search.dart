@@ -49,8 +49,8 @@ void showGlobalSearch(BuildContext context) {
   showDialog(
     context: context,
     barrierColor: black
-        ? Colors.black.withValues(alpha: 0.66)
-        : MarioColors.navy.withValues(alpha: 0.42),
+        ? Colors.black.withValues(alpha: 0.52)
+        : MarioColors.navy.withValues(alpha: 0.16),
     builder: (_) => const _GlobalSearchDialog(),
   );
 }
@@ -186,125 +186,131 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final t = marioTokens(context);
     final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
     final hits = _search();
 
     return Align(
-      alignment: const Alignment(0, -0.72),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 680, maxHeight: 560),
-        child: MarioGlass(
-          borderRadius: BorderRadius.circular(32),
-          // A heavier blur buys transparency: once what is behind is smeared
-          // to a wash, the veil no longer has to be near-opaque to keep text
-          // legible over it. 0.86 was safe and looked like a solid panel.
-          blur: 64,
-          // Stated outright rather than left to the chrome default: this
-          // surface has to carry text over whatever page is behind it, and
-          // the dark grounds' ~6% chrome veil would leave it unreadable.
-          tint: scheme.surfaceContainerHigh,
-          strength: 0.68,
-          child: Material(
-            color: Colors.transparent,
-            borderRadius: BorderRadius.circular(32),
-            clipBehavior: Clip.antiAlias,
-            child: Focus(
-              onKeyEvent: _onKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  // ── query row ──────────────────────────────────────────────
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(22, 20, 22, 20),
-                    decoration: BoxDecoration(
-                      border: Border(
-                          bottom: BorderSide(color: marioDivider(context))),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.search, size: 20, color: scheme.primary),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: TextField(
-                            autofocus: true,
-                            focusNode: _focus,
-                            style: text.bodyLarge?.copyWith(fontSize: 18),
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              filled: false,
-                              border: InputBorder.none,
-                              enabledBorder: InputBorder.none,
-                              focusedBorder: InputBorder.none,
-                              contentPadding: EdgeInsets.zero,
-                              hintText: 'Search pages',
-                            ),
-                            onChanged: (v) => setState(() {
-                              _query = v.trim();
-                              _cursor = 0;
-                            }),
-                            onSubmitted: (_) => _activate(),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        const MarioKeyHint('esc'),
-                      ],
-                    ),
-                  ),
-                  Flexible(
-                    child: _query.isEmpty
-                        ? const _Hint('Type to search your pages by title.')
-                        : (hits.isEmpty && !_canCreate)
-                            ? const _Hint('No matches.')
-                            : ListView(
-                                shrinkWrap: true,
-                                padding:
-                                    const EdgeInsets.fromLTRB(12, 14, 12, 16),
-                                children: [
-                                  if (hits.isNotEmpty) ...[
-                                    const _GroupLabel('Pages'),
-                                    for (var i = 0; i < hits.length; i++)
-                                      _HitRow(
-                                        hit: hits[i],
-                                        selected: i == _cursor,
-                                        onTap: () => _open(hits[i]),
-                                      ),
-                                  ],
-                                  if (_canCreate) ...[
-                                    const _GroupLabel('Actions'),
-                                    _ActionRow(
-                                      icon: Icons.note_add_outlined,
-                                      label: 'New page called “$_query”',
-                                      selected: _cursor == hits.length,
-                                      onTap: _create,
-                                    ),
-                                  ],
-                                ],
+      alignment: Alignment.topCenter,
+      child: Padding(
+        padding: const EdgeInsets.only(top: 96),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 620, maxHeight: 560),
+          child: MarioSurface(
+            borderRadius: BorderRadius.circular(MarioRadius.lg),
+            // The palette is an opaque panel now, not a veil. It floats over a
+            // scrim rather than over the page, so nothing has to stay legible
+            // *through* it and no blur is needed to buy that legibility back.
+            color: scheme.surfaceContainerHigh,
+            border: Border.all(color: marioDivider(context)),
+            shadow: marioShadow(context, level: 2),
+            child: Material(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(MarioRadius.lg),
+              clipBehavior: Clip.antiAlias,
+              child: Focus(
+                onKeyEvent: _onKey,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // ── query row ──────────────────────────────────────────────
+                    Container(
+                      height: 52,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        border: Border(bottom: BorderSide(color: t.line)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.search, size: 19, color: t.mut),
+                          const SizedBox(width: 11),
+                          Expanded(
+                            child: TextField(
+                              autofocus: true,
+                              focusNode: _focus,
+                              cursorColor: t.ink,
+                              cursorWidth: 1,
+                              style: TextStyle(
+                                  fontSize: 15, height: 1.2, color: t.ink),
+                              decoration: InputDecoration(
+                                isDense: true,
+                                filled: false,
+                                border: InputBorder.none,
+                                enabledBorder: InputBorder.none,
+                                focusedBorder: InputBorder.none,
+                                contentPadding: EdgeInsets.zero,
+                                hintText: 'Search pages',
+                                hintStyle: TextStyle(
+                                    fontSize: 15, height: 1.2, color: t.mut),
                               ),
-                  ),
-                  // ── footer ─────────────────────────────────────────────────
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 22, vertical: 12),
-                    decoration: BoxDecoration(
-                      border:
-                          Border(top: BorderSide(color: marioDivider(context))),
+                              onChanged: (v) => setState(() {
+                                _query = v.trim();
+                                _cursor = 0;
+                              }),
+                              onSubmitted: (_) => _activate(),
+                            ),
+                          ),
+                          const SizedBox(width: 11),
+                          const MarioKeyHint('esc'),
+                        ],
+                      ),
                     ),
-                    child: Row(
-                      children: [
-                        _FootHint('↑↓ move'),
-                        const SizedBox(width: 18),
-                        _FootHint('↵ open'),
-                        const SizedBox(width: 18),
-                        _FootHint('esc close'),
-                        const Spacer(),
-                        // Titles only, until the FTS5 content index exists.
-                        _FootHint('Searches titles'),
-                      ],
+                    Flexible(
+                      child: _query.isEmpty
+                          ? const _Hint('Type to search your pages by title.')
+                          : (hits.isEmpty && !_canCreate)
+                              ? const _Hint('No matches.')
+                              : ListView(
+                                  shrinkWrap: true,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  children: [
+                                    if (hits.isNotEmpty) ...[
+                                      const _GroupLabel('Pages'),
+                                      for (var i = 0; i < hits.length; i++)
+                                        _HitRow(
+                                          hit: hits[i],
+                                          selected: i == _cursor,
+                                          onTap: () => _open(hits[i]),
+                                        ),
+                                    ],
+                                    if (_canCreate) ...[
+                                      const _GroupLabel('Actions'),
+                                      _ActionRow(
+                                        icon: Icons.note_add_outlined,
+                                        label: 'New page called “$_query”',
+                                        selected: _cursor == hits.length,
+                                        onTap: _create,
+                                      ),
+                                    ],
+                                  ],
+                                ),
                     ),
-                  ),
-                ],
+                    // ── footer ─────────────────────────────────────────────────
+                    Container(
+                      height: 34,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      decoration: BoxDecoration(
+                        border: Border(top: BorderSide(color: t.line)),
+                      ),
+                      child: Row(
+                        children: [
+                          // The artboard's three hints, in its order. `esc`
+                          // is not among them because the query row already
+                          // carries it, on the right of the field.
+                          _FootHint('↑↓ move'),
+                          const SizedBox(width: 16),
+                          _FootHint('⏎ open'),
+                          const SizedBox(width: 16),
+                          // No split view behind this one yet — ⇧⏎ opens the
+                          // hit normally. It names something the app owes.
+                          _FootHint('⇧⏎ open in split'),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -320,7 +326,7 @@ class _GroupLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
         child: MarioKicker(label),
       );
 }
@@ -338,61 +344,58 @@ class _HitRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final text = Theme.of(context).textTheme;
-    final dark = marioMode(context).isDark;
-    final fill = dark
-        ? MarioColors.accent400.withValues(alpha: 0.20)
-        : MarioColors.accent200;
-    final ink = selected
-        ? (dark ? MarioColors.accent100 : MarioColors.accent900)
-        : scheme.onSurface;
-    final sub = selected
-        ? (dark ? MarioColors.accent200 : MarioColors.accent800)
-        : scheme.onSurfaceVariant;
+    final t = marioTokens(context);
 
-    return Material(
-      color: selected ? fill : Colors.transparent,
-      borderRadius: BorderRadius.circular(MarioRadius.md),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(MarioRadius.md),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            children: [
-              Icon(Icons.description_outlined, size: 17, color: sub),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      hit.page.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: text.bodyLarge?.copyWith(
-                        fontSize: 15,
-                        height: 1.3,
-                        fontWeight:
-                            selected ? FontWeight.w700 : FontWeight.w600,
-                        color: ink,
-                      ),
+    return MarioAccentEdge(
+      active: selected,
+      child: Material(
+        color: selected ? t.fill : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 46,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Icon(Icons.description_outlined, size: 17, color: t.sec),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          hit.page.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13.5,
+                            height: 1.3,
+                            fontWeight: FontWeight.w600,
+                            color: t.ink,
+                          ),
+                        ),
+                        Text(
+                          hit.sectionName == null
+                              ? hit.notebookName
+                              : '${hit.notebookName} › ${hit.sectionName}',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                              fontSize: 12, height: 1.3, color: t.mut),
+                        ),
+                      ],
                     ),
-                    Text(
-                      '${hit.notebookName} › ${hit.sectionName ?? ''}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 12, height: 1.3, color: sub),
-                    ),
-                  ],
-                ),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    hit.notebookName,
+                    style: TextStyle(fontSize: 11.5, height: 1.2, color: t.mut),
+                  ),
+                ],
               ),
-              if (selected)
-                Text('↵',
-                    style: TextStyle(
-                        fontSize: 11, fontWeight: FontWeight.w600, color: sub)),
-            ],
+            ),
           ),
         ),
       ),
@@ -415,40 +418,34 @@ class _ActionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = marioMode(context).isDark;
-    final fill = dark
-        ? MarioColors.accent400.withValues(alpha: 0.20)
-        : MarioColors.accent200;
+    final t = marioTokens(context);
 
-    return Material(
-      color: selected ? fill : Colors.transparent,
-      borderRadius: BorderRadius.circular(MarioRadius.md),
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(MarioRadius.md),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            children: [
-              Icon(icon,
-                  size: 17,
-                  color: dark ? MarioColors.accent300 : MarioColors.accent600),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Text(
-                  label,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 15,
-                    height: 1.3,
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onSurface,
+    return MarioAccentEdge(
+      active: selected,
+      child: Material(
+        color: selected ? t.fill : Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          child: SizedBox(
+            height: 38,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  Icon(icon, size: 17, color: t.sec),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(fontSize: 13.5, height: 1.2, color: t.ink),
+                    ),
                   ),
-                ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -464,8 +461,9 @@ class _FootHint extends StatelessWidget {
   Widget build(BuildContext context) => Text(
         text,
         style: TextStyle(
-          fontSize: 12,
-          color: Theme.of(context).colorScheme.onSurfaceVariant,
+          fontSize: 11.5,
+          height: 1.2,
+          color: marioTokens(context).mut,
         ),
       );
 }
@@ -482,8 +480,9 @@ class _Hint extends StatelessWidget {
             text,
             textAlign: TextAlign.center,
             style: TextStyle(
-              fontSize: 12,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              fontSize: 12.5,
+              height: 1.3,
+              color: marioTokens(context).mut,
             ),
           ),
         ),

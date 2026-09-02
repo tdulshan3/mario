@@ -168,6 +168,7 @@ class QuizSession {
     this.mcqCount = QuizTasks.defaultMcqCount,
     this.essayCount = QuizTasks.defaultEssayCount,
     this.difficulty = QuizDifficulty.easy,
+    this.useWeb,
     this.run,
     this.items = const [],
     this.title = 'Quiz',
@@ -183,6 +184,18 @@ class QuizSession {
 
   final QuizPhase phase;
   final QuizScope scope;
+
+  /// Tri-state web preference. Null follows the difficulty — hard looks
+  /// things up, easy does not — while true and false override it either way.
+  ///
+  /// The difficulty alone was too coarse: "easy questions, but about the
+  /// current syllabus" and "hard questions, strictly from my notes" were both
+  /// unreachable.
+  final bool? useWeb;
+
+  /// Whether this run should consult the web.
+  bool get searchesWeb => useWeb ?? difficulty.usesWeb;
+
   final int mcqCount;
   final int essayCount;
 
@@ -227,6 +240,8 @@ class QuizSession {
     int? mcqCount,
     int? essayCount,
     QuizDifficulty? difficulty,
+    bool? useWeb,
+    bool clearUseWeb = false,
     AiRun? run,
     bool clearRun = false,
     List<QuizItem>? items,
@@ -249,6 +264,7 @@ class QuizSession {
         mcqCount: mcqCount ?? this.mcqCount,
         essayCount: essayCount ?? this.essayCount,
         difficulty: difficulty ?? this.difficulty,
+        useWeb: clearUseWeb ? null : (useWeb ?? this.useWeb),
         run: clearRun ? null : (run ?? this.run),
         items: items ?? this.items,
         title: title ?? this.title,
@@ -272,6 +288,12 @@ class QuizSessionNotifier extends Notifier<QuizSession> {
   void setMcqCount(int n) => state = state.copyWith(mcqCount: n);
   void setEssayCount(int n) => state = state.copyWith(essayCount: n);
   void setDifficulty(QuizDifficulty d) => state = state.copyWith(difficulty: d);
+
+  /// Sets the preference outright. The quiz setup shows the three states as a
+  /// radio group, so it picks rather than cycles.
+  void setWeb(bool? value) => state = value == null
+      ? state.copyWith(clearUseWeb: true)
+      : state.copyWith(useWeb: value);
 
   void startGenerating(AiRun run) {
     state.run?.dispose();
@@ -466,6 +488,7 @@ class AgentSession {
     this.run,
     this.draft = '',
     this.instruction = '',
+    this.useWeb,
     this.snapshot,
     this.undone = false,
     this.isUndoing = false,
@@ -474,6 +497,14 @@ class AgentSession {
   final AiRun? run;
   final String draft;
   final String instruction;
+
+  /// Tri-state web preference, as on Ask: true forces a look-up before
+  /// planning, false forbids one, null decides from the instruction.
+  ///
+  /// "Add a section on current EU AI rules" cannot be written from the page —
+  /// there is nothing on the page about them. Editing an existing page and
+  /// needing outside facts are not exclusive.
+  final bool? useWeb;
 
   /// The page as it was before the run touched it. Held for exactly as long as
   /// the result is on screen — it is what makes "Undo all" one press rather
@@ -489,6 +520,8 @@ class AgentSession {
     bool clearRun = false,
     String? draft,
     String? instruction,
+    bool? useWeb,
+    bool clearUseWeb = false,
     AgentSnapshot? snapshot,
     bool clearSnapshot = false,
     bool? undone,
@@ -498,6 +531,7 @@ class AgentSession {
         run: clearRun ? null : (run ?? this.run),
         draft: draft ?? this.draft,
         instruction: instruction ?? this.instruction,
+        useWeb: clearUseWeb ? null : (useWeb ?? this.useWeb),
         snapshot: clearSnapshot ? null : (snapshot ?? this.snapshot),
         undone: undone ?? this.undone,
         isUndoing: isUndoing ?? this.isUndoing,
@@ -510,12 +544,27 @@ class AgentSessionNotifier extends Notifier<AgentSession> {
 
   void setDraft(String draft) => state = state.copyWith(draft: draft);
 
+  /// auto → on → off → auto, the same cycle the Ask tab's chip runs.
+  void cycleWeb() {
+    final next = switch (state.useWeb) {
+      null => true,
+      true => false,
+      false => null,
+    };
+    state = next == null
+        ? state.copyWith(clearUseWeb: true)
+        : state.copyWith(useWeb: next);
+  }
+
   void start(AiRun run, {required String instruction}) {
     state.run?.dispose();
     state = AgentSession(
       run: run,
       draft: state.draft,
       instruction: instruction,
+      // Survives the run, so the chip does not snap back to auto the moment
+      // the plan starts.
+      useWeb: state.useWeb,
     );
   }
 

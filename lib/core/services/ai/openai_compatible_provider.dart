@@ -222,6 +222,16 @@ class OpenAiCompatibleProvider implements LlmProvider {
       // never say how much of the context window a request actually used.
       if (stream) 'stream_options': {'include_usage': true},
       if (req.stopSequences.isNotEmpty) 'stop': req.stopSequences,
+      // Ask the server for the window we are budgeting against.
+      //
+      // Ollama allocates exactly `num_ctx` and silently truncates whatever
+      // does not fit — its own default is far smaller than the models people
+      // run. Claiming a big context app-side without this would just mean
+      // sending a long page into a short window and never being told.
+      //
+      // Same bet as `stream_options` above: llama-server, vLLM and the rest
+      // ignore what they do not know.
+      'options': {'num_ctx': _capabilities.contextTokens},
     };
 
     final fmt = req.jsonFormat;

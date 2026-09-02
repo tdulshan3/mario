@@ -11,12 +11,14 @@
 /// tappable links, since a cited source is only a citation if you can follow it.
 library;
 
+import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../ui/colors.dart';
+import 'ai_markdown_blocks.dart';
 
 /// A model answer, rendered.
 ///
@@ -288,3 +290,96 @@ int _fenceRun(String trimmedLine) {
 /// every citation in the settled half and render them as literal brackets.
 bool _hasTrailingLinkDefinitions(String tail) =>
     RegExp(r'^\[[^\]]+\]:', multiLine: true).hasMatch(tail);
+
+/// One line of a model's prose, styled but not laid out.
+///
+/// [AiMarkdown] renders BLOCKS — it is a Column of paragraphs, lists and
+/// headings, with the vertical rhythm that implies. That is right for an
+/// answer and wrong for the places a model writes a single line into a row
+/// that already has a shape: a quiz question beside its number, an option
+/// beside its radio button, a line of marking feedback, a proofreader's
+/// reason. Those were showing their Markdown raw — "What does `foo()`
+/// return?" arriving with the backticks visible — but dropping a block
+/// renderer into them would break the row.
+///
+/// So this renders inline emphasis ONLY, as spans, in whatever text style the
+/// call site already had.
+///
+/// Links are styled but not tappable. Making them tappable means a
+/// [TapGestureRecognizer] per span and a StatefulWidget to dispose them, and
+/// none of these sites is somewhere a model cites a source — that is the
+/// answer, which goes through [AiMarkdown] and does follow its links.
+class AiInlineMarkdown extends StatelessWidget {
+  const AiInlineMarkdown(this.data, {super.key, this.style});
+
+  final String data;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final base = style ?? DefaultTextStyle.of(context).style;
+    final ops = marioInlineDelta(data).toList();
+
+    // Nothing to style — skip the span machinery entirely. This is the common
+    // case, since most lines carry no markdown at all.
+    //
+    // The text has to match as well as the attributes being absent: a line of
+    // escapes (`\_not italic\_`) parses to one unstyled run whose text is
+    // NOT the input, and handing back the raw string there would put the
+    // backslashes on screen.
+    //
+    // Note `Delta.length` is the character count, not the operation count —
+    // which is why this counts the operations itself.
+    if (ops.length == 1 &&
+        ops.first.attributes == null &&
+        ops.first is afe.TextInsert &&
+        (ops.first as afe.TextInsert).text == data) {
+      return Text(data, style: base);
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final op in ops)
+            if (op is afe.TextInsert)
+              TextSpan(
+                text: op.text,
+                style: _styleFor(op.attributes, base, Theme.of(context)),
+              ),
+        ],
+      ),
+      style: base,
+    );
+  }
+
+  TextStyle _styleFor(
+    Map<String, dynamic>? attrs,
+    TextStyle base,
+    ThemeData theme,
+  ) {
+    if (attrs == null || attrs.isEmpty) return base;
+    var s = base;
+    if (attrs['bold'] == true) s = s.copyWith(fontWeight: FontWeight.w600);
+    if (attrs['italic'] == true) s = s.copyWith(fontStyle: FontStyle.italic);
+    if (attrs['underline'] == true) {
+      s = s.copyWith(decoration: TextDecoration.underline);
+    }
+    if (attrs['strikethrough'] == true) {
+      s = s.copyWith(decoration: TextDecoration.lineThrough);
+    }
+    if (attrs['code'] == true) {
+      s = s.copyWith(
+        fontFamily: 'monospace',
+        fontFamilyFallback: const ['ui-monospace', 'Menlo', 'Consolas'],
+        backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.07),
+      );
+    }
+    if (attrs['href'] is String) {
+      s = s.copyWith(
+        color: theme.colorScheme.secondary,
+        decoration: TextDecoration.underline,
+      );
+    }
+    return s;
+  }
+}

@@ -73,9 +73,8 @@ void showShareDialog(BuildContext context, WidgetRef ref) {
 /// notebook is guaranteed to be in the result because it came from that very
 /// stream. A one-shot future is enough: a successful invite closes the dialog,
 /// so the list never has to update underneath itself.
-final _notebookDocProvider =
-    FutureProvider.autoDispose.family<Map<String, dynamic>, String>(
-        (ref, notebookId) async {
+final _notebookDocProvider = FutureProvider.autoDispose
+    .family<Map<String, dynamic>, String>((ref, notebookId) async {
   final user = ref.watch(authStateProvider).valueOrNull;
   if (user == null) return const {};
   final docs = await GetIt.I<MarioFirestore>().fetchCollection(
@@ -222,7 +221,8 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
     if (pages == null || pages == 0) {
       return 'Everyone you add sees every page in this notebook.';
     }
-    if (pages == 1) return 'Everyone you add sees the one page in this notebook.';
+    if (pages == 1)
+      return 'Everyone you add sees the one page in this notebook.';
     return 'Everyone you add sees all $pages pages.';
   }
 
@@ -320,17 +320,12 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
             borderRadius: BorderRadius.circular(MarioRadius.card),
             boxShadow: marioShadow(context, level: 2),
           ),
-          child: MarioGlass(
+          child: MarioSurface(
             borderRadius: BorderRadius.circular(MarioRadius.card),
             border: Border.all(color: marioDivider(context)),
-            // A heavy blur buys the transparency back: once the page behind is
-            // smeared to a wash the veil no longer has to be near-opaque to
-            // carry text. Both are stated outright rather than left to the
-            // chrome defaults — this surface has to be READ through, and the
-            // dark grounds' ~6% chrome veil would leave it unreadable.
-            blur: 56,
-            tint: scheme.surfaceContainerHigh,
-            strength: 0.72,
+            // Opaque paper. The dialog floats over a scrim, so there is
+            // nothing behind it that has to stay readable through it.
+            color: scheme.surfaceContainerHigh,
             child: Material(
               color: Colors.transparent,
               borderRadius: BorderRadius.circular(MarioRadius.card),
@@ -362,8 +357,8 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
                             AsyncError() => [
                                 Text(
                                   'Could not load who has access.',
-                                  style: text.bodySmall
-                                      ?.copyWith(color: scheme.onSurfaceVariant),
+                                  style: text.bodySmall?.copyWith(
+                                      color: scheme.onSurfaceVariant),
                                 ),
                               ],
                             _ => [
@@ -437,8 +432,8 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
                 const SizedBox(height: MarioSpace.x1),
                 Text(
                   _accessLine(_pageCount()),
-                  style: text.bodySmall
-                      ?.copyWith(color: scheme.onSurfaceVariant),
+                  style:
+                      text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               ],
             ),
@@ -463,8 +458,7 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
               // Matched to the input theme's own 14px hint, so the address and
               // the placeholder it replaces are the same size.
               style: text.bodySmall?.copyWith(fontSize: 14),
-              onSubmitted:
-                  (_saving || !_canInvite) ? null : (_) => _invite(),
+              onSubmitted: (_saving || !_canInvite) ? null : (_) => _invite(),
               decoration: const InputDecoration(
                 isDense: true,
                 hintText: 'someone@example.com',
@@ -513,8 +507,8 @@ class _ShareDialogState extends ConsumerState<_ShareDialog> {
           dropdownColor: scheme.surfaceContainerHigh,
           focusColor: Colors.transparent,
           style: text.bodySmall,
-          icon: Icon(Icons.expand_more,
-              size: 18, color: scheme.onSurfaceVariant),
+          icon:
+              Icon(Icons.expand_more, size: 18, color: scheme.onSurfaceVariant),
           items: const [
             DropdownMenuItem(
                 value: CollaboratorRole.editor, child: Text('Editor')),

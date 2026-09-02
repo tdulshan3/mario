@@ -48,12 +48,22 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     // mount — the same route `/ask` takes into the Ask tab. The panel remounts
     // this tab on every hand-off, which is what makes a second instruction run
     // while the tab is already open.
-    final pending = ref.read(aiPanelProvider.notifier).takePendingInstruction();
-    if (pending != null && pending.trim().isNotEmpty) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) unawaited(_runInstruction(pending.trim()));
-      });
-    }
+    //
+    // The TAKE has to be deferred too, not just the run. `takePending…` clears
+    // the slot, so it writes to aiPanelProvider — and this tab is mounted BY
+    // `runInstruction`, which sets the instruction and switches tab in one go.
+    // Reading it straight from initState therefore modified a provider while
+    // the tree that was mounting this widget was still building, and threw.
+    // The Ask tab has always taken its pending question inside the callback;
+    // this now matches it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final pending =
+          ref.read(aiPanelProvider.notifier).takePendingInstruction();
+      if (pending != null && pending.trim().isNotEmpty) {
+        unawaited(_runInstruction(pending.trim()));
+      }
+    });
   }
 
   /// Runs one of the launcher's presets.
@@ -119,6 +129,7 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
       instruction: instruction,
       note: note,
       images: images,
+      useWeb: ref.read(agentSessionProvider).useWeb,
       onPlanned: (_) => session.snapshotTaken(bridge.snapshot()),
       applyAction: (action) => _perform(action, bridge, settings),
     );

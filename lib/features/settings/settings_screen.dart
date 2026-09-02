@@ -65,13 +65,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final settings = ref.watch(settingsProvider).valueOrNull;
 
+    final t = marioTokens(context);
+
     return Scaffold(
-      appBar: AppBar(
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back),
-          onPressed: () => context.pop(),
+      appBar: PreferredSize(
+        preferredSize: const Size.fromHeight(43),
+        child: Container(
+          height: 43,
+          decoration: BoxDecoration(
+            color: t.bg,
+            border: Border(bottom: BorderSide(color: t.line)),
+          ),
+          child: SafeArea(
+            bottom: false,
+            child: Row(
+              children: [
+                const SizedBox(width: 14),
+                GestureDetector(
+                  onTap: () => context.pop(),
+                  behavior: HitTestBehavior.opaque,
+                  child: Icon(Icons.arrow_back, size: 18, color: t.sec),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  'Settings',
+                  style: TextStyle(
+                    fontSize: 13.5,
+                    height: 1.2,
+                    fontWeight: FontWeight.w600,
+                    color: t.ink,
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
-        title: const Text('Settings'),
       ),
       body: settings == null
           ? const Center(child: MarioLoader())
@@ -97,7 +125,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                     ),
                     Expanded(
                       child: SingleChildScrollView(
-                        padding: const EdgeInsets.fromLTRB(36, 28, 36, 40),
+                        padding: const EdgeInsets.fromLTRB(48, 44, 48, 48),
                         child: _PaneBody(pane: _pane, settings: settings),
                       ),
                     ),
@@ -117,16 +145,15 @@ class _CategoryRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final t = marioTokens(context);
     return SizedBox(
-      width: 224,
-      child: MarioGlass(
-        opacity: 0.62,
-        border: Border(right: BorderSide(color: scheme.outlineVariant)),
+      width: 220,
+      child: MarioSurface(
+        border: Border(right: BorderSide(color: t.line)),
+        padding: const EdgeInsets.symmetric(vertical: 10),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            const SizedBox(height: 16),
             for (final p in _Pane.values)
               _RailRow(
                 pane: p,
@@ -135,10 +162,10 @@ class _CategoryRail extends StatelessWidget {
               ),
             const Spacer(),
             Padding(
-              padding: const EdgeInsets.fromLTRB(20, 0, 20, 18),
+              padding: const EdgeInsets.symmetric(horizontal: 18),
               child: Text(
                 'Mario $_kVersion',
-                style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),
+                style: TextStyle(fontSize: 11.5, height: 1.2, color: t.mut),
               ),
             ),
           ],
@@ -161,42 +188,45 @@ class _RailRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final dark = marioMode(context).isDark;
-    final fill = dark
-        ? MarioColors.accent400.withValues(alpha: 0.20)
-        : MarioColors.accent300.withValues(alpha: 0.62);
-    final ink = selected
-        ? (dark ? MarioColors.accent200 : MarioColors.accent800)
-        : scheme.onSurface;
+    final t = marioTokens(context);
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 1),
-      child: Material(
-        color: selected ? fill : Colors.transparent,
-        borderRadius: BorderRadius.circular(MarioRadius.md),
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(MarioRadius.md),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            child: Row(
-              children: [
-                Icon(pane.icon, size: 16, color: ink),
-                const SizedBox(width: 10),
-                Text(
-                  pane.label,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                    color: ink,
-                  ),
-                ),
-              ],
+    // The artboard sets the live row apart three ways at once — a `--fill`
+    // wash, a 2px accent bar, and w600 — and inset the row by 6px so the
+    // rounded corners read. Idle rows carry no box at all and sit at the
+    // deeper 18px indent.
+    final row = SizedBox(
+      height: t.row,
+      child: Padding(
+        padding: EdgeInsets.symmetric(horizontal: selected ? 12 : 18),
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: Text(
+            pane.label,
+            style: TextStyle(
+              fontSize: t.rowFontSize,
+              height: 1.2,
+              fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+              color: selected ? t.ink : t.sec,
             ),
           ),
         ),
       ),
+    );
+
+    return GestureDetector(
+      onTap: onTap,
+      behavior: HitTestBehavior.opaque,
+      child: selected
+          ? Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 6),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(MarioRadius.xs),
+                child: MarioAccentEdge(
+                  child: ColoredBox(color: t.fill, child: row),
+                ),
+              ),
+            )
+          : row,
     );
   }
 }
@@ -221,11 +251,12 @@ class _PaneBody extends ConsumerWidget {
         Text(
           pane.blurb,
           style: TextStyle(
-            fontSize: 14,
-            color: theme.colorScheme.onSurfaceVariant,
+            fontSize: 13.5,
+            height: 1.3,
+            color: marioTokens(context).mut,
           ),
         ),
-        const SizedBox(height: 26),
+        const SizedBox(height: 30),
         ...switch (pane) {
           _Pane.appearance => _appearance(context, notifier),
           _Pane.editor => _editor(notifier),
@@ -260,7 +291,7 @@ class _PaneBody extends ConsumerWidget {
       _Row(
         label: 'Match the system',
         description: 'Light by day, Calm night after dark.',
-        child: Switch(
+        child: MarioToggle(
           value: matchSystem,
           onChanged: (on) => notifier.change(
             // Turning it off has to land on a real ground; Light is the
@@ -275,9 +306,14 @@ class _PaneBody extends ConsumerWidget {
         label: 'Text size',
         description: 'Applies to the page, not the interface.',
         child: Row(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('A', style: TextStyle(fontSize: 12)),
-            Expanded(
+            Text('A',
+                style:
+                    TextStyle(fontSize: 11.5, color: marioTokens(context).mut)),
+            const SizedBox(width: 12),
+            SizedBox(
+              width: 200,
               child: Slider(
                 value: settings.fontScale,
                 min: 0.8,
@@ -288,7 +324,8 @@ class _PaneBody extends ConsumerWidget {
                     notifier.change((s) => s.copyWith(fontScale: v)),
               ),
             ),
-            const Text('A', style: TextStyle(fontSize: 20)),
+            const SizedBox(width: 12),
+            const Text('A', style: TextStyle(fontSize: 17)),
           ],
         ),
       ),
@@ -311,7 +348,7 @@ class _PaneBody extends ConsumerWidget {
   List<Widget> _editor(SettingsNotifier notifier) => [
         _Row(
           label: 'Auto-correct math symbols',
-          child: Switch(
+          child: MarioToggle(
             value: settings.autoCorrectMath,
             onChanged: (v) =>
                 notifier.change((s) => s.copyWith(autoCorrectMath: v)),
@@ -319,7 +356,7 @@ class _PaneBody extends ConsumerWidget {
         ),
         _Row(
           label: 'Spell check',
-          child: Switch(
+          child: MarioToggle(
             value: settings.spellCheck,
             onChanged: (v) => notifier.change((s) => s.copyWith(spellCheck: v)),
           ),
@@ -330,7 +367,7 @@ class _PaneBody extends ConsumerWidget {
         _Row(
           label: 'Hold to record',
           description: 'Off means tap to start, tap again to stop.',
-          child: Switch(
+          child: MarioToggle(
             value: settings.holdToRecord,
             onChanged: (v) =>
                 notifier.change((s) => s.copyWith(holdToRecord: v)),
@@ -362,7 +399,7 @@ class _PaneBody extends ConsumerWidget {
         _Row(
           label: 'Offline mode',
           description: 'Keep everything on this machine.',
-          child: Switch(
+          child: MarioToggle(
             value: settings.offlineMode,
             onChanged: (v) =>
                 notifier.change((s) => s.copyWith(offlineMode: v)),
@@ -396,6 +433,11 @@ class _PaneBody extends ConsumerWidget {
 }
 
 /// One setting: a label, an optional line of explanation, and its control.
+///
+/// The remodel turns these into a ruled stack — each row draws a hairline
+/// along its top edge, so a group of them reads as a table rather than as
+/// paragraphs separated by air. [MarioSettingRow] is the shared shape; this
+/// only caps the control's width, which the design system has no opinion on.
 class _Row extends StatelessWidget {
   const _Row({required this.label, this.description, required this.child});
 
@@ -405,43 +447,23 @@ class _Row extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final hasDescription = description != null && description!.isNotEmpty;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 22),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(label,
-                    style: const TextStyle(
-                        fontSize: 14, fontWeight: FontWeight.w600)),
-                if (hasDescription) ...[
-                  const SizedBox(height: 3),
-                  Text(
-                    description!,
-                    style:
-                        TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
-                  ),
-                ],
-              ],
-            ),
-          ),
-          const SizedBox(width: 20),
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 340),
-            child: child,
-          ),
-        ],
+    return MarioSettingRow(
+      label: label,
+      description: hasDescription ? description : null,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 360),
+        child: child,
       ),
     );
   }
 }
 
-/// `.seg` — the design's segmented control. One pill, hairline-divided.
+/// `.seg` — the design's segmented control.
+///
+/// A thin adapter over [MarioSegmented]: the call sites here carry an icon
+/// per option, which the remodel drops (the artboard's segments are text
+/// only), and a nullable value, which the design system now models directly.
 class _Segmented<T> extends StatelessWidget {
   const _Segmented({
     required this.value,
@@ -457,79 +479,16 @@ class _Segmented<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    // Scrolls rather than overflows, the same way the AI panel's tab row does.
-    // Four labelled options fit at the settings sheet's full width and do not
-    // in a narrow window — and an option clipped behind a striped overflow
-    // banner is one nobody can reach. The scroll view also gives the row
-    // unbounded width, so `mainAxisSize: min` keeps the pill shrink-wrapped
-    // instead of stretching, which is what the Wrap here used to be for.
+    // Scrolls rather than overflows. Four labelled options fit at the sheet's
+    // full width and do not in a narrow window — and an option clipped behind
+    // an overflow banner is one nobody can reach.
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      child: Row(
-        children: [
-          Container(
-            decoration: BoxDecoration(
-              border: Border.all(color: scheme.outline),
-              borderRadius: BorderRadius.circular(MarioRadius.pill),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                for (var i = 0; i < items.length; i++) ...[
-                  if (i > 0)
-                    Container(width: 1, height: 32, color: scheme.outline),
-                  _SegOption(
-                    label: items[i].$1,
-                    icon: items[i].$2,
-                    selected: items[i].$3 == value,
-                    onTap: () => onChanged(items[i].$3),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SegOption extends StatelessWidget {
-  const _SegOption({
-    required this.label,
-    required this.icon,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final IconData? icon;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final ink = selected ? scheme.onPrimary : scheme.onSurface;
-    return Material(
-      color: selected ? scheme.primary : Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (icon != null) ...[
-                Icon(icon, size: 14, color: ink),
-                const SizedBox(width: 6),
-              ],
-              Text(label, style: TextStyle(fontSize: 13, color: ink)),
-            ],
-          ),
-        ),
+      child: MarioSegmented<T>(
+        options: [for (final i in items) i.$3],
+        value: value,
+        onChanged: onChanged,
+        labelOf: (v) => items.firstWhere((i) => i.$3 == v).$1,
       ),
     );
   }

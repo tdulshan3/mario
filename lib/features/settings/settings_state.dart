@@ -9,6 +9,19 @@ import '../../ui/theme.dart';
 
 enum CanvasWidth { narrow, medium, full }
 
+extension CanvasWidthMetrics on CanvasWidth {
+  /// The writing column's width — the design's `--pw`, a 620…880 range with
+  /// 720 the default.
+  ///
+  /// This setting used to be inert: the editor hard-coded a 780px card, so
+  /// picking Narrow or Full changed a stored value and nothing on screen.
+  double get pageWidth => switch (this) {
+        CanvasWidth.narrow => 620,
+        CanvasWidth.medium => 720,
+        CanvasWidth.full => 880,
+      };
+}
+
 class SettingsState {
   final MarioThemeMode themeMode;
   final double fontScale;
