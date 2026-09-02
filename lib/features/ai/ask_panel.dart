@@ -26,6 +26,7 @@ import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
+import 'html_artifact.dart';
 
 /// Sentinel the `/summary` command puts in the pending-question slot, to mean
 /// "summarise the note above the cursor" rather than a literal question.
@@ -87,6 +88,7 @@ class _AskPanelState extends ConsumerState<AskPanel> {
       pageId: bridge.pageId,
       note: note,
       document: bridge.readDocument(),
+      htmlArtifact: bridge.readHtmlArtifact(),
     );
   }
 
@@ -220,6 +222,16 @@ class _AskPanelState extends ConsumerState<AskPanel> {
         error: ok ? null : 'Could not insert — the page was closed.');
   }
 
+  void _previewHtml(String html) {
+    ref.read(agentSessionProvider.notifier).previewArtifact(html);
+    ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.agent);
+  }
+
+  VoidCallback? _previewAction(String answer) {
+    final html = extractHtmlArtifact(answer);
+    return html == null ? null : () => _previewHtml(html);
+  }
+
   @override
   Widget build(BuildContext context) {
     final bridge = ref.watch(aiEditorBridgeProvider);
@@ -325,6 +337,7 @@ class _AskPanelState extends ConsumerState<AskPanel> {
                           onInsert: () => _insert(state),
                           onCopy: () => Clipboard.setData(
                               ClipboardData(text: state.answer)),
+                          onPreview: _previewAction(state.answer),
                           onHistory:
                               ref.read(askSessionProvider.notifier).clear,
                         ),
@@ -356,6 +369,7 @@ class _Actions extends StatelessWidget {
     required this.error,
     required this.onInsert,
     required this.onCopy,
+    required this.onPreview,
     required this.onHistory,
   });
 
@@ -369,6 +383,7 @@ class _Actions extends StatelessWidget {
   final String? error;
   final VoidCallback onInsert;
   final VoidCallback onCopy;
+  final VoidCallback? onPreview;
   final VoidCallback onHistory;
 
   @override
@@ -405,6 +420,16 @@ class _Actions extends StatelessWidget {
                 textStyle: GoogleFonts.inter(fontSize: 12),
               ),
             ),
+            if (onPreview != null)
+              TextButton.icon(
+                onPressed: onPreview,
+                icon: const Icon(Icons.preview_outlined, size: 15),
+                label: const Text('Preview HTML'),
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  textStyle: GoogleFonts.inter(fontSize: 12),
+                ),
+              ),
             TextButton.icon(
               onPressed: onHistory,
               icon: const Icon(Icons.history, size: 15),

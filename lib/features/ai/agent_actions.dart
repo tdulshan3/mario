@@ -41,6 +41,7 @@ enum AgentActionKind {
   math,
   table,
   spreadsheet,
+  htmlArtifact,
   renamePage,
   replaceBlock,
   deleteBlock,
@@ -62,6 +63,7 @@ const _wireNames = <String, AgentActionKind>{
   'math': AgentActionKind.math,
   'table': AgentActionKind.table,
   'spreadsheet': AgentActionKind.spreadsheet,
+  'html': AgentActionKind.htmlArtifact,
   'rename_page': AgentActionKind.renamePage,
   'replace_block': AgentActionKind.replaceBlock,
   'delete_block': AgentActionKind.deleteBlock,
@@ -113,6 +115,9 @@ const _kindAliases = <String, AgentActionKind>{
   'tasks': AgentActionKind.todo,
   'code_block': AgentActionKind.code,
   'codeblock': AgentActionKind.code,
+  'html_artifact': AgentActionKind.htmlArtifact,
+  'webpage': AgentActionKind.htmlArtifact,
+  'website': AgentActionKind.htmlArtifact,
   'math_equation': AgentActionKind.math,
   'equation': AgentActionKind.math,
   'formula': AgentActionKind.math,
@@ -188,6 +193,7 @@ class AgentAction {
         AgentActionKind.table =>
           'Added a ${rows.length}x${rows.isEmpty ? 0 : rows.first.length} table',
         AgentActionKind.spreadsheet => 'Added a spreadsheet',
+        AgentActionKind.htmlArtifact => 'Created an HTML artifact preview',
         AgentActionKind.renamePage => 'Renamed the page to "${_clip(text)}"',
         AgentActionKind.replaceBlock => 'Rewrote a block',
         AgentActionKind.deleteBlock => 'Deleted a block',
@@ -239,6 +245,7 @@ const agentPlanSchema = <String, dynamic>{
               'math',
               'table',
               'spreadsheet',
+              'html',
               'rename_page',
               'replace_block',
               'delete_block',
@@ -249,7 +256,8 @@ const agentPlanSchema = <String, dynamic>{
           'text': {
             'type': 'string',
             'description': 'Body text. For rename_page, the new title. For '
-                'replace_block, the replacement text.',
+                'replace_block, the replacement text. For html, the complete '
+                'self-contained HTML document.',
           },
           'items': {
             'type': 'array',
@@ -587,6 +595,17 @@ AgentAction? _build(
         language: language.isEmpty ? 'plaintext' : language,
         afterBlockId: afterBlockId,
       );
+
+    case AgentActionKind.htmlArtifact:
+      // An artifact is allowed to be a fragment (the preview wrapper supplies
+      // the document shell), but it must contain real markup. Plain prose in
+      // an `html` action is almost always a model choosing the wrong kind.
+      final html = text.isNotEmpty ? text : rawItems.join('\n');
+      if (html.isEmpty ||
+          !RegExp(r'<[a-z][^>]*>', caseSensitive: false).hasMatch(html)) {
+        return reject('an HTML artifact with no HTML');
+      }
+      return AgentAction(kind: kind, text: html);
 
     case AgentActionKind.math:
       if (text.isEmpty) return reject('a formula with no LaTeX');

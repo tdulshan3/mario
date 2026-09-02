@@ -66,6 +66,7 @@ void main() {
             reason: '"$verb" has to be named as a CHANGE, or the model adds');
       }
       expect(p, contains('REPLACE'));
+      expect(p, contains('html action'));
       expect(p, isNot(contains('Prefer adding to rewriting')),
           reason: 'the old wording is what caused the stacking');
     });

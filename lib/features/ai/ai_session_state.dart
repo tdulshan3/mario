@@ -15,11 +15,14 @@
 /// that cancels, so every tab keeps one visible while a run is live.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../core/services/ai/llm_types.dart';
+import 'agent_actions.dart';
 import 'agent_executor.dart';
 import 'ai_progress.dart';
 import 'ai_tasks.dart';
@@ -482,6 +485,20 @@ final writingSessionProvider =
 
 // -------------------------------------------------------------------- Agent
 
+/// A validated agent plan waiting for the user's explicit decision.
+class AgentPlanReview {
+  AgentPlanReview(this.plan);
+
+  final AgentPlan plan;
+  final Completer<bool> _decision = Completer<bool>();
+
+  Future<bool> get decision => _decision.future;
+
+  void resolve(bool approved) {
+    if (!_decision.isCompleted) _decision.complete(approved);
+  }
+}
+
 @immutable
 class AgentSession {
   const AgentSession({
@@ -490,6 +507,9 @@ class AgentSession {
     this.instruction = '',
     this.useWeb,
     this.snapshot,
+    this.review,
+    this.artifactDraft,
+    this.artifactApplied = false,
     this.undone = false,
     this.isUndoing = false,
   });
@@ -512,6 +532,14 @@ class AgentSession {
   /// how many edits a plan made.
   final AgentSnapshot? snapshot;
 
+  /// A plan that has been generated and validated but has not touched the
+  /// page. It survives tab switches, like the run that is waiting on it.
+  final AgentPlanReview? review;
+
+  /// HTML sent from Ask for a Claude-style live preview in the Do tab.
+  final String? artifactDraft;
+  final bool artifactApplied;
+
   final bool undone;
   final bool isUndoing;
 
@@ -524,6 +552,11 @@ class AgentSession {
     bool clearUseWeb = false,
     AgentSnapshot? snapshot,
     bool clearSnapshot = false,
+    AgentPlanReview? review,
+    bool clearReview = false,
+    String? artifactDraft,
+    bool clearArtifactDraft = false,
+    bool? artifactApplied,
     bool? undone,
     bool? isUndoing,
   }) =>
@@ -533,6 +566,10 @@ class AgentSession {
         instruction: instruction ?? this.instruction,
         useWeb: clearUseWeb ? null : (useWeb ?? this.useWeb),
         snapshot: clearSnapshot ? null : (snapshot ?? this.snapshot),
+        review: clearReview ? null : (review ?? this.review),
+        artifactDraft:
+            clearArtifactDraft ? null : (artifactDraft ?? this.artifactDraft),
+        artifactApplied: artifactApplied ?? this.artifactApplied,
         undone: undone ?? this.undone,
         isUndoing: isUndoing ?? this.isUndoing,
       );
@@ -557,6 +594,7 @@ class AgentSessionNotifier extends Notifier<AgentSession> {
   }
 
   void start(AiRun run, {required String instruction}) {
+    state.review?.resolve(false);
     state.run?.dispose();
     state = AgentSession(
       run: run,
@@ -568,18 +606,69 @@ class AgentSessionNotifier extends Notifier<AgentSession> {
     );
   }
 
-  /// Called between validation and the first edit — the only moment at which
-  /// the page is both still untouched and known to be about to change.
-  void snapshotTaken(AgentSnapshot snapshot) =>
-      state = state.copyWith(snapshot: snapshot);
+  /// Pauses an already-validated run until the user accepts its preview.
+  Future<bool> reviewPlan(AgentPlan plan) {
+    final review = AgentPlanReview(plan);
+    state = state.copyWith(
+      review: review,
+      clearArtifactDraft: true,
+      artifactApplied: false,
+    );
+    return review.decision;
+  }
+
+  /// Accepts the preview. The snapshot is captured at click time, immediately
+  /// before the first action rather than while the user is still reviewing.
+  void approve(AgentSnapshot snapshot) {
+    final review = state.review;
+    if (review == null) return;
+    state = state.copyWith(snapshot: snapshot, clearReview: true);
+    review.resolve(true);
+  }
+
+  void discardReview() {
+    final review = state.review;
+    if (review == null) return;
+    state = state.copyWith(clearReview: true);
+    review.resolve(false);
+  }
+
+  /// Shows HTML from a normal Ask answer in the Do tab without saving it to
+  /// the page. Applying it is a separate, explicit action.
+  void previewArtifact(String html) {
+    state.review?.resolve(false);
+    state.run?.dispose();
+    state = AgentSession(
+      draft: state.draft,
+      useWeb: state.useWeb,
+      artifactDraft: html,
+    );
+  }
+
+  void artifactApplied(AgentSnapshot snapshot) => state = state.copyWith(
+        snapshot: snapshot,
+        artifactApplied: true,
+        undone: false,
+      );
+
+  void discardArtifact() => state = state.copyWith(
+        clearArtifactDraft: true,
+        artifactApplied: false,
+        clearSnapshot: true,
+      );
 
   void undoing() => state = state.copyWith(isUndoing: true);
 
   void undone(bool ok) => state = state.copyWith(isUndoing: false, undone: ok);
 
-  void stop() => state.run?.cancel();
+  void stop() {
+    state.review?.resolve(false);
+    state.run?.cancel();
+    state = state.copyWith(clearReview: true);
+  }
 
   void clear() {
+    state.review?.resolve(false);
     state.run?.dispose();
     state = const AgentSession();
   }

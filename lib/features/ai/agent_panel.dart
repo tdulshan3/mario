@@ -1,11 +1,10 @@
-/// The Do tab — tell the model to change the page, and watch it happen.
+/// The Do tab — tell the model what to change, preview it, then apply it.
 ///
-/// This is the one place in Mario where a model writes into the user's notes
-/// without them reading the result first, so the design leans hard on three
-/// things:
+/// A validated plan pauses here before the first write. The design leans on:
 ///
-///  * **Every step is named as it happens.** "Added a 4x3 table", "Rewrote a
-///    block" — not a spinner and a finished page.
+///  * **The whole plan is previewed.** The user applies or discards it while
+///    the page is still untouched. HTML actions also get a live sandbox.
+///  * **Every applied step is named.** "Added a 4x3 table", "Rewrote a block".
 ///  * **One Undo puts everything back.** The page is snapshotted between
 ///    validation and the first edit, and Undo restores that exact state. Not
 ///    Ctrl-Z nine times, guessing how many.
@@ -25,6 +24,7 @@ import '../settings/settings_state.dart';
 import '../shell/dialogs/text_input_dialog.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
+import '../editor/html_preview.dart';
 import 'agent_actions.dart';
 import 'agent_task.dart';
 import 'ai_progress.dart';
@@ -129,8 +129,9 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
       instruction: instruction,
       note: note,
       images: images,
+      htmlArtifact: bridge.readHtmlArtifact(),
       useWeb: ref.read(agentSessionProvider).useWeb,
-      onPlanned: (_) => session.snapshotTaken(bridge.snapshot()),
+      onPlanned: session.reviewPlan,
       applyAction: (action) => _perform(action, bridge, settings),
     );
     session.start(run, instruction: instruction);
@@ -148,6 +149,8 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
         return bridge.renamePage(action.text);
       case AgentActionKind.setting:
         return _applySetting(action, settings);
+      case AgentActionKind.htmlArtifact:
+        return bridge.setHtmlArtifact(action.text);
       default:
         return bridge.applyAgentAction(action);
     }
@@ -203,6 +206,28 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     session.undone(ok);
   }
 
+  void _approvePlan() {
+    final bridge = ref.read(aiEditorBridgeProvider);
+    if (bridge == null) return;
+    ref.read(agentSessionProvider.notifier).approve(bridge.snapshot());
+  }
+
+  void _discardPlan() {
+    ref.read(agentSessionProvider.notifier).discardReview();
+  }
+
+  Future<void> _applyArtifactDraft() async {
+    final bridge = ref.read(aiEditorBridgeProvider);
+    final html = ref.read(agentSessionProvider).artifactDraft;
+    if (bridge == null || html == null) return;
+    final snapshot = bridge.snapshot();
+    final ok = await bridge.setHtmlArtifact(html);
+    if (!mounted) return;
+    if (ok) {
+      ref.read(agentSessionProvider.notifier).artifactApplied(snapshot);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final bridge = ref.watch(aiEditorBridgeProvider);
@@ -213,57 +238,249 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: run == null
-              ? ListView(
-                  padding: EdgeInsets.fromLTRB(
-                      18, 18, 18, ComposerReserve.of(context)),
-                  children: [
-                    const _Intro(),
-                    const SizedBox(height: MarioSpace.x6),
-                    _ActOnThisPage(
-                      enabled: bridge != null,
-                      onRun: _runPreset,
-                    ),
-                  ],
+          child: session.artifactDraft != null
+              ? _ArtifactDraftPreview(
+                  html: session.artifactDraft!,
+                  applied: session.artifactApplied,
+                  undone: session.undone,
+                  canApply: bridge != null,
+                  onApply: _applyArtifactDraft,
+                  onDiscard:
+                      ref.read(agentSessionProvider.notifier).discardArtifact,
+                  onUndo: _undo,
                 )
-              : ValueListenableBuilder<AiRunState>(
-                  valueListenable: run,
-                  builder: (context, state, _) => ListView(
-                    padding: EdgeInsets.fromLTRB(
-                        12, 12, 12, ComposerReserve.of(context)),
-                    children: [
-                      AiProgressView(
-                        state: state,
-                        onCancel: ref.read(agentSessionProvider.notifier).stop,
-                      ),
-                      if (state.error != null) ...[
-                        const SizedBox(height: 10),
-                        _Error(message: state.error!),
-                      ],
-                      if (state.result is AgentOutcome) ...[
-                        const SizedBox(height: 12),
-                        _Outcome(
-                          outcome: state.result as AgentOutcome,
-                          undone: session.undone,
-                          undoing: session.isUndoing,
-                          canUndo: session.snapshot != null && bridge != null,
-                          onUndo: _undo,
+              : run == null
+                  ? ListView(
+                      padding: EdgeInsets.fromLTRB(
+                          18, 18, 18, ComposerReserve.of(context)),
+                      children: [
+                        const _Intro(),
+                        const SizedBox(height: MarioSpace.x6),
+                        _ActOnThisPage(
+                          enabled: bridge != null,
+                          onRun: _runPreset,
                         ),
                       ],
-                      // The launcher rides along under the result too. The
-                      // agent session is app-level and never cleared, so the
-                      // intro above is gone for good after the first run —
-                      // without this the presets would be usable exactly once.
-                      const SizedBox(height: MarioSpace.x6),
-                      _ActOnThisPage(
-                        enabled: bridge != null && !state.isRunning,
-                        onRun: _runPreset,
+                    )
+                  : ValueListenableBuilder<AiRunState>(
+                      valueListenable: run,
+                      builder: (context, state, _) => ListView(
+                        padding: EdgeInsets.fromLTRB(
+                            12, 12, 12, ComposerReserve.of(context)),
+                        children: [
+                          AiProgressView(
+                            state: state,
+                            onCancel:
+                                ref.read(agentSessionProvider.notifier).stop,
+                          ),
+                          if (state.error != null) ...[
+                            const SizedBox(height: 10),
+                            _Error(message: state.error!),
+                          ],
+                          if (session.review != null) ...[
+                            const SizedBox(height: 12),
+                            _PlanPreview(
+                              plan: session.review!.plan,
+                              canApply: bridge != null,
+                              onApply: _approvePlan,
+                              onDiscard: _discardPlan,
+                            ),
+                          ],
+                          if (state.result is AgentOutcome) ...[
+                            const SizedBox(height: 12),
+                            _Outcome(
+                              outcome: state.result as AgentOutcome,
+                              undone: session.undone,
+                              undoing: session.isUndoing,
+                              canUndo:
+                                  session.snapshot != null && bridge != null,
+                              onUndo: _undo,
+                            ),
+                          ],
+                          // The launcher rides along under the result too. The
+                          // agent session is app-level and never cleared, so the
+                          // intro above is gone for good after the first run —
+                          // without this the presets would be usable exactly once.
+                          if (session.review == null) ...[
+                            const SizedBox(height: MarioSpace.x6),
+                            _ActOnThisPage(
+                              enabled: bridge != null && !state.isRunning,
+                              onRun: _runPreset,
+                            ),
+                          ],
+                        ],
                       ),
-                    ],
-                  ),
-                ),
+                    ),
         ),
       ],
+    );
+  }
+}
+
+class _PlanPreview extends StatelessWidget {
+  const _PlanPreview({
+    required this.plan,
+    required this.canApply,
+    required this.onApply,
+    required this.onDiscard,
+  });
+
+  final AgentPlan plan;
+  final bool canApply;
+  final VoidCallback onApply;
+  final VoidCallback onDiscard;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final html = plan.actions
+        .where((a) => a.kind == AgentActionKind.htmlArtifact)
+        .firstOrNull
+        ?.text;
+    return Container(
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: scheme.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Preview — nothing has changed yet',
+            style: GoogleFonts.spaceGrotesk(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+              color: scheme.onSurface,
+            ),
+          ),
+          const SizedBox(height: 6),
+          if (plan.summary.trim().isNotEmpty)
+            Text(
+              plan.summary,
+              style: GoogleFonts.inter(fontSize: 11.5, height: 1.4),
+            ),
+          const SizedBox(height: 8),
+          for (final action in plan.actions)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    action.isDestructive
+                        ? Icons.warning_amber_rounded
+                        : Icons.arrow_right,
+                    size: 14,
+                    color: action.isDestructive
+                        ? scheme.error
+                        : scheme.onSurfaceVariant,
+                  ),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      action.summary,
+                      style: GoogleFonts.inter(
+                        fontSize: 11,
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (html != null) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 360,
+              child: HtmlPreviewPane(
+                html: html,
+                isDark: Theme.of(context).brightness == Brightness.dark,
+                title: 'Generated artifact · sandboxed',
+                sandboxed: true,
+              ),
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: canApply ? onApply : null,
+                icon: const Icon(Icons.check, size: 16),
+                label: Text(html == null ? 'Apply changes' : 'Apply artifact'),
+              ),
+              TextButton(
+                onPressed: onDiscard,
+                child: const Text('Discard'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ArtifactDraftPreview extends StatelessWidget {
+  const _ArtifactDraftPreview({
+    required this.html,
+    required this.applied,
+    required this.undone,
+    required this.canApply,
+    required this.onApply,
+    required this.onDiscard,
+    required this.onUndo,
+  });
+
+  final String html;
+  final bool applied;
+  final bool undone;
+  final bool canApply;
+  final Future<void> Function() onApply;
+  final VoidCallback onDiscard;
+  final Future<void> Function() onUndo;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(10, 10, 10, ComposerReserve.of(context)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: HtmlPreviewPane(
+              html: html,
+              isDark: Theme.of(context).brightness == Brightness.dark,
+              title: 'AI artifact · sandboxed preview',
+              sandboxed: true,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            children: [
+              FilledButton.icon(
+                onPressed: !canApply || (applied && !undone) ? null : onApply,
+                icon: Icon(applied && !undone ? Icons.check : Icons.save,
+                    size: 16),
+                label: Text(applied && !undone ? 'Applied' : 'Apply to page'),
+              ),
+              if (applied && !undone)
+                OutlinedButton.icon(
+                  onPressed: onUndo,
+                  icon: const Icon(Icons.undo, size: 16),
+                  label: const Text('Undo'),
+                ),
+              TextButton(
+                onPressed: onDiscard,
+                child: const Text('Close preview'),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 }
@@ -407,13 +624,6 @@ const _presets = <_PagePreset>[
 ];
 
 /// The launcher: preset instructions, one tap each.
-///
-/// The note at the foot is **not** the line the design writes. The design
-/// promises "every action previews its change and asks before writing to the
-/// page", and this agent does no such thing: [AgentTask] asks for a plan,
-/// validates it, snapshots the page and then writes, with no preview and no
-/// confirmation anywhere between. What it does have is the running commentary
-/// and the one-press Undo, so that is what the line says.
 class _ActOnThisPage extends StatelessWidget {
   const _ActOnThisPage({required this.enabled, required this.onRun});
 
@@ -439,8 +649,8 @@ class _ActOnThisPage extends StatelessWidget {
           ),
         const SizedBox(height: MarioSpace.x2),
         Text(
-          'Changes are written straight to the page. Each one is named as it '
-          'happens, and Undo all puts the page back.',
+          'Mario previews every change before writing. Apply runs the reviewed '
+          'plan, and Undo all puts the page back.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 fontSize: 12,
                 height: 1.35,

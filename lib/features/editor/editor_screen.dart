@@ -5,7 +5,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
@@ -14,7 +13,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:webview_cef/webview_cef.dart';
 
 import '../../core/models/note_page.dart';
 import '../../core/services/asset_sync_service.dart';
@@ -50,6 +48,7 @@ import 'asset_sweeper.dart';
 import 'canvas_drawing_layer.dart';
 import 'canvas_toolbar.dart';
 import 'image_asset_resolver.dart';
+import 'html_preview.dart';
 import 'page_content_provider.dart';
 import 'paste_html_bridge.dart';
 import 'word_shortcuts.dart';
@@ -584,13 +583,17 @@ class _EditorState extends ConsumerState<_Editor> {
       readPage: _readPageText,
       readAboveCursor: _readTextAboveCursor,
       readDocument: () => _editorState.document,
+      readHtmlArtifact: () => rawHtmlOverride.value,
       insertMarkdown: (markdown) =>
           insertMarkdownIntoDocument(_editorState, markdown),
       replaceSelection: (markdown) =>
           replaceSelectionWithMarkdown(_editorState, markdown),
       applyGrammar: (suggestion) =>
           applyGrammarSuggestion(_editorState, suggestion),
-      snapshot: () => _agent.snapshot(widget.page.title),
+      snapshot: () => _agent.snapshot(
+        widget.page.title,
+        htmlArtifact: rawHtmlOverride.value,
+      ),
       restore: (snapshot) async {
         final ok = await _agent.restore(snapshot);
         // The title lives on the index entry, not in the document, so it has
@@ -598,10 +601,16 @@ class _EditorState extends ConsumerState<_Editor> {
         if (ok && snapshot.title != widget.page.title) {
           await _renamePage(snapshot.title);
         }
+        if (ok) rawHtmlOverride.value = snapshot.htmlArtifact;
         return ok;
       },
       applyAgentAction: (action) => _agent.apply(action),
       renamePage: _renamePage,
+      setHtmlArtifact: (html) async {
+        if (!mounted || html.trim().isEmpty) return false;
+        rawHtmlOverride.value = html;
+        return true;
+      },
     );
   }
 
@@ -941,9 +950,21 @@ class _EditorState extends ConsumerState<_Editor> {
             ),
           Expanded(
             child: _previewMode
-                ? _HtmlPreviewPane(
-                    html: _previewHtml,
-                    isDark: isDark,
+                ? ValueListenableBuilder<String>(
+                    valueListenable: _previewHtml,
+                    builder: (context, html, _) {
+                      final pinned = rawHtmlOverride.value?.isNotEmpty == true;
+                      return HtmlPreviewPane(
+                        html: html,
+                        isDark: isDark,
+                        title: pinned
+                            ? 'HTML preview · pinned source'
+                            : 'HTML preview',
+                        primaryActionLabel: pinned ? 'Unpin' : null,
+                        onPrimaryAction:
+                            pinned ? () => rawHtmlOverride.value = null : null,
+                      );
+                    },
                   )
                 : DropTarget(
                     onDragEntered: (_) => setState(() => _dragOver = true),
@@ -1177,257 +1198,6 @@ const _overriddenShortcutKeys = <String>{
   'toggle code', // Ctrl+E — AppFlowy uses for code; Word uses for align-center
   'paste the content', // Ctrl+V — replaced by smart paste (image+markdown+rich)
 };
-
-/// One-time CEF init — `WebviewManager().initialize()` is safe to await
-/// repeatedly but we cache the future so concurrent preview opens don't race.
-Future<void>? _cefInit;
-Future<void> _ensureCef() {
-  return _cefInit ??= WebviewManager().initialize();
-}
-
-/// Wraps documentToHTML output in a full HTML5 doc with default styling so
-/// the webview has something to render (otherwise it'd inherit no margins,
-/// no font, etc.). The body content is the AppFlowy-emitted HTML.
-String _wrapPreviewHtml(String body, {required bool isDark}) {
-  final bg = isDark ? '#1f1f1f' : '#ffffff';
-  final fg = isDark ? '#e6e6e6' : '#1a1a18';
-  return '''<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8">
-<style>
-  html, body { margin: 0; padding: 0; }
-  body {
-    background: $bg;
-    color: $fg;
-    font-family: -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-    font-size: 15px;
-    line-height: 1.6;
-    padding: 24px 32px;
-    max-width: 820px;
-    margin: 0 auto;
-  }
-  h1, h2, h3, h4 { font-weight: 600; line-height: 1.25; margin-top: 1.4em; }
-  p { margin: 0.5em 0; }
-  ul, ol { padding-left: 1.5em; }
-  blockquote { border-left: 3px solid #888; margin: 0.5em 0; padding-left: 1em; color: #888; }
-  code { font-family: ui-monospace, "Fira Code", monospace; background: rgba(127,127,127,0.15); padding: 1px 4px; border-radius: 3px; font-size: 0.92em; }
-  pre { background: rgba(127,127,127,0.1); padding: 12px; border-radius: 6px; overflow-x: auto; }
-  img { max-width: 100%; height: auto; }
-  table { border-collapse: collapse; }
-  th, td { border: 1px solid rgba(127,127,127,0.4); padding: 4px 8px; }
-  a { color: #5fa8e9; }
-</style>
-</head><body>$body</body></html>''';
-}
-
-class _HtmlPreviewPane extends StatefulWidget {
-  const _HtmlPreviewPane({required this.html, required this.isDark});
-
-  final ValueListenable<String> html;
-  final bool isDark;
-
-  @override
-  State<_HtmlPreviewPane> createState() => _HtmlPreviewPaneState();
-}
-
-class _HtmlPreviewPaneState extends State<_HtmlPreviewPane> {
-  WebViewController? _controller;
-  String? _error;
-  File? _tempFile;
-
-  @override
-  void initState() {
-    super.initState();
-    widget.html.addListener(_onHtmlChanged);
-    _setup();
-  }
-
-  @override
-  void dispose() {
-    widget.html.removeListener(_onHtmlChanged);
-    _controller?.dispose();
-    final f = _tempFile;
-    if (f != null) {
-      // Fire-and-forget — file deletion is best-effort; an OS cleanup will
-      // sweep stragglers eventually.
-      f.delete().catchError((_) => f);
-    }
-    super.dispose();
-  }
-
-  // Set by _onHtmlChanged when the listener fires before _controller is ready,
-  // so _setup can catch up after init with the latest value.
-  bool _dirtyDuringInit = false;
-
-  Future<void> _setup() async {
-    try {
-      await _ensureCef().timeout(const Duration(seconds: 15));
-      final c = WebviewManager().createWebView(
-        loading: const Center(child: MarioLoader(size: 18)),
-      );
-      final url = await _writeTempFile(widget.html.value);
-      await c.initialize(url);
-      if (!mounted) {
-        c.dispose();
-        return;
-      }
-      setState(() => _controller = c);
-      if (_dirtyDuringInit) {
-        _dirtyDuringInit = false;
-        final url2 = await _writeTempFile(widget.html.value);
-        if (!mounted) return;
-        await c.loadUrl(url2);
-      }
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _error = '$e');
-    }
-  }
-
-  void _onHtmlChanged() async {
-    final c = _controller;
-    if (c == null) {
-      // Controller not ready yet — flag for _setup to catch up post-init.
-      _dirtyDuringInit = true;
-      return;
-    }
-    final url = await _writeTempFile(widget.html.value);
-    if (!mounted) return;
-    c.loadUrl(url);
-  }
-
-  /// Writing to disk avoids the size & cross-origin headaches of base64
-  /// data: URIs. Per-State unique filename so two preview panes (sequential
-  /// after a page switch, or briefly overlapping during dispose) never share
-  /// a path — same-URL reuse triggered stale renders from CEF's cache layer.
-  ///
-  /// If `body` is already a full HTML document (DOCTYPE or `<html>` root),
-  /// it's written verbatim — wrapping it again would nest two `<html>` trees
-  /// and most of the user's CSS would never apply.
-  Future<String> _writeTempFile(String body) async {
-    final t = body.trimLeft().toLowerCase();
-    final isFullDoc = t.startsWith('<!doctype') || t.startsWith('<html');
-    final content =
-        isFullDoc ? body : _wrapPreviewHtml(body, isDark: widget.isDark);
-    var f = _tempFile;
-    if (f == null) {
-      final dir = Directory.systemTemp;
-      final stamp = DateTime.now().microsecondsSinceEpoch;
-      f = File('${dir.path}/mario_preview_$stamp.html');
-      _tempFile = f;
-    }
-    await f.writeAsString(content);
-    return Uri.file(f.path).toString();
-  }
-
-  Future<void> _openInBrowser() async {
-    final url = await _writeTempFile(widget.html.value);
-    final path = Uri.parse(url).toFilePath();
-    try {
-      if (Platform.isLinux) {
-        await Process.start('xdg-open', [path]);
-      } else if (Platform.isMacOS) {
-        await Process.start('open', [path]);
-      } else if (Platform.isWindows) {
-        await Process.start('cmd', ['/c', 'start', '', path]);
-      }
-    } catch (_) {
-      // ignore — user can copy the path manually
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final isDark = widget.isDark;
-    final bg = isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF7F7F7);
-    final muted =
-        isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
-    final border = isDark ? const Color(0xFF2C2C2C) : const Color(0xFFDADADA);
-    final controller = _controller;
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: bg,
-        border: Border(left: BorderSide(color: border)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: ValueListenableBuilder<String?>(
-              valueListenable: rawHtmlOverride,
-              builder: (context, override, _) {
-                final pinned = override != null && override.isNotEmpty;
-                return Row(
-                  children: [
-                    Text(
-                      pinned ? 'HTML preview · pinned source' : 'HTML preview',
-                      style: GoogleFonts.inter(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: pinned ? MarioColors.primary : muted,
-                        letterSpacing: 0.4,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (pinned)
-                      TextButton.icon(
-                        onPressed: () => rawHtmlOverride.value = null,
-                        icon: const Icon(Icons.close, size: 14),
-                        label: const Text('Unpin'),
-                        style: TextButton.styleFrom(
-                          foregroundColor: muted,
-                          textStyle: GoogleFonts.inter(fontSize: 11),
-                          padding: const EdgeInsets.symmetric(horizontal: 8),
-                          minimumSize: const Size(0, 28),
-                        ),
-                      ),
-                    TextButton.icon(
-                      onPressed: _openInBrowser,
-                      icon: const Icon(Icons.open_in_new, size: 14),
-                      label: const Text('Open in browser'),
-                      style: TextButton.styleFrom(
-                        foregroundColor: muted,
-                        textStyle: GoogleFonts.inter(fontSize: 11),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: const Size(0, 28),
-                      ),
-                    ),
-                  ],
-                );
-              },
-            ),
-          ),
-          Divider(height: 1, color: border),
-          Expanded(
-            child: _error != null
-                ? Center(
-                    child: Padding(
-                      padding: const EdgeInsets.all(16),
-                      child: Text(
-                        'Preview unavailable: $_error\n\nClick "Open in '
-                        'browser" above to render in your default browser.',
-                        textAlign: TextAlign.center,
-                        style: GoogleFonts.inter(fontSize: 12, color: muted),
-                      ),
-                    ),
-                  )
-                : controller == null
-                    ? const Center(child: MarioLoader(size: 18))
-                    : ValueListenableBuilder<bool>(
-                        valueListenable: controller,
-                        builder: (context, ready, _) => SizedBox.expand(
-                          child: ready
-                              ? controller.webviewWidget
-                              : controller.loadingWidget,
-                        ),
-                      ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 /// The header overflow menu: the page-level actions the design's three
 /// buttons have no room for. Both are real actions this screen owns.

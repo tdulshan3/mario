@@ -11,12 +11,14 @@
 library;
 
 import 'dart:async';
+import 'dart:math' as math;
 
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/llm_types.dart';
 import '../../core/services/ai/web_search_service.dart';
 import 'agent_actions.dart';
 import 'ai_progress.dart';
+import 'html_artifact.dart';
 import 'note_context.dart';
 import 'note_images.dart';
 import 'note_style.dart';
@@ -108,6 +110,10 @@ class AgentTask {
       'block gets code that runs, a formula gets LaTeX.\n'
       'Tables and spreadsheets take "rows", the first row being the header, '
       'and every row must have the same number of cells.\n'
+      'For a browser-rendered result, use one html action whose text is a '
+      'complete self-contained HTML document with inline CSS and JavaScript. '
+      'If a current HTML artifact is supplied, edit that artifact rather than '
+      'creating a disconnected second version.\n'
       'Keep the plan short. Several small, clear actions beat one enormous '
       'one.';
 
@@ -180,16 +186,17 @@ class AgentTask {
 
   /// Plans a change to the page and returns the run driving it.
   ///
-  /// [onPlanned] is called once the plan has been validated, so the caller can
-  /// snapshot the document before anything is applied. [applyAction] performs
-  /// one action and reports whether it landed.
+  /// [onPlanned] is called once the plan has been validated and waits for the
+  /// user's review. Returning true applies it; false discards it untouched.
+  /// [applyAction] performs one approved action and reports whether it landed.
   AiRun run({
     required String instruction,
     required NoteText note,
-    required void Function(AgentPlan plan) onPlanned,
+    required Future<bool> Function(AgentPlan plan) onPlanned,
     required Future<bool> Function(AgentAction action) applyAction,
     List<NoteImage> images = const [],
     bool? useWeb,
+    String? htmlArtifact,
   }) {
     // Tri-state, as on Ask: null lets the instruction decide, true forces a
     // look-up, false forbids one.
@@ -202,7 +209,7 @@ class AgentTask {
       AiStepKind.answering,
     ]);
     unawaited(_run(agentRun, instruction, note, onPlanned, applyAction, images,
-        wantsWeb, useWeb));
+        wantsWeb, useWeb, htmlArtifact));
     return agentRun;
   }
 
@@ -210,21 +217,29 @@ class AgentTask {
     AiRun run,
     String instruction,
     NoteText note,
-    void Function(AgentPlan plan) onPlanned,
+    Future<bool> Function(AgentPlan plan) onPlanned,
     Future<bool> Function(AgentAction action) applyAction,
     List<NoteImage> images,
     bool wantsWeb,
     bool? useWeb,
+    String? htmlArtifact,
   ) async {
     try {
       final provider = await llm.requireProvider();
       run.setBackend(provider.displayName);
+      final htmlRequested = asksForHtmlArtifact(instruction) ||
+          htmlArtifact?.trim().isNotEmpty == true;
 
       run.begin(AiStepKind.readingNote);
       // Ids go in the prompt so the model can target existing blocks. They are
       // session-scoped (see NoteBlock.nodeId), which is fine: the plan is made
       // and executed within one session.
-      final labelled = _withBlockIds(note);
+      final promptNote = htmlRequested
+          ? note.limitToTokens(
+              (provider.capabilities.contextTokens * 0.25).round(),
+            )
+          : note;
+      final labelled = _withBlockIds(promptNote);
       final knownIds = {for (final b in note.blocks) b.nodeId};
       run.detail('${note.blocks.length} block(s)');
 
@@ -236,16 +251,27 @@ class AgentTask {
       // agent uses to move things — which is what lets "put the diagram next
       // to the section it illustrates" resolve to a specific block.
       final imageText = renderImageTextForPrompt(images);
+      final htmlText = _htmlForPrompt(
+        htmlArtifact,
+        (provider.capabilities.contextTokens * 0.35).round(),
+      );
       final raw = await llm.structured(
         request: LlmRequest(
-          system: '$_system\n\n${noteStyleFor(NoteStyleContext.agent)}',
+          system: '$_system\n\n'
+              '${htmlRequested ? _htmlArtifactStyle : noteStyleFor(NoteStyleContext.agent)}',
           messages: [
             LlmMessage.user('Current page:\n$labelled\n\n'
                 '${imageText.isEmpty ? '' : '$imageText\n'}'
+                '${htmlText.isEmpty ? '' : '$htmlText\n'}'
                 '${webContext.isEmpty ? '' : '$webContext\n'}'
                 '---\n\nDo this: $instruction'),
           ],
-          maxTokens: 3000,
+          maxTokens: htmlRequested
+              ? math.min(
+                  8000,
+                  math.max(3000, provider.capabilities.contextTokens ~/ 2),
+                )
+              : 3000,
           // Planning an edit to someone's page is user-facing work, so it
           // follows the depth they chose.
           effort: llm.userEffort,
@@ -289,8 +315,14 @@ class AgentTask {
           : '${plan.actions.length} action(s), ${plan.dropped} not used '
               '(${plan.rejectionSummary.join('; ')})');
 
-      // The caller snapshots here, between validation and the first edit.
-      onPlanned(plan);
+      run.detail('review the preview, then apply or discard');
+      final approved = await onPlanned(plan);
+      run.cancelToken.throwIfCancelled();
+      if (!approved) {
+        run.appendAnswer('Preview discarded. No changes were applied.');
+        run.finish();
+        return;
+      }
 
       run.begin(AiStepKind.answering);
       final applied = <String>[];
@@ -335,4 +367,22 @@ class AgentTask {
     }
     return buf.toString().trimRight();
   }
+
+  String _htmlForPrompt(String? html, int budget) {
+    final value = html?.trim();
+    if (value == null || value.isEmpty) return '';
+    final maxChars = math.max(1, budget * 2);
+    final clipped = value.length <= maxChars
+        ? value
+        : '${value.substring(0, maxChars)}\n<!-- HTML clipped to fit context -->';
+    return 'Current HTML artifact (verbatim):\n'
+        '<CURRENT_HTML_ARTIFACT>\n$clipped\n</CURRENT_HTML_ARTIFACT>\n';
+  }
+
+  static const _htmlArtifactStyle =
+      'Create a working browser artifact, not prose about one. Return one html '
+      'action containing a complete self-contained document. Put CSS in '
+      '<style> and JavaScript in <script>. Keep it responsive and accessible. '
+      'Do not use placeholders or omit code. The user will review a live '
+      'sandboxed preview before choosing whether to apply it.';
 }

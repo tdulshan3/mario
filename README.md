@@ -7,7 +7,7 @@ editor with first-class support for math, code, drawing, spreadsheets and voice 
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
 native Linux desktop app and in the browser.
 
-**Current release: 1.3.0** — see [What's new](#whats-new-in-130).
+**Current release: 1.3.1** — see [What's new](#whats-new-in-131).
 
 ---
 
@@ -40,6 +40,30 @@ native Linux desktop app and in the browser.
 > [docs/screenshots/README.md](docs/screenshots/README.md) says how to regenerate them.
 
 ---
+
+## What's new in 1.3.1
+
+**AI artifacts and review-before-write.** Ask is now a general assistant rather
+than being artificially limited to facts already present in a note. A full HTML
+document pasted into a page is retained as exact model context — including its
+CSS and JavaScript — so a follow-up can revise the real artifact instead of a
+flattened text approximation.
+
+- **Claude-style HTML artifacts** — Ask answers containing a fenced HTML
+  document get a **Preview HTML** action. The Do tab renders the result live in
+  a sandboxed Chromium preview, with an explicit **Apply to page** step.
+- **HTML from Do** — the page agent can create or revise a complete,
+  self-contained HTML artifact. It receives the page's persisted HTML source,
+  not only the editor's lossy block conversion, and gets a larger output budget
+  so complete documents are not cut off halfway through.
+- **Do previews before writing** — every validated page-edit plan now pauses on
+  a readable list of proposed changes. Nothing touches the page until **Apply
+  changes** is pressed; **Discard** leaves it untouched, and **Undo all** still
+  restores the full page, title, and prior HTML artifact.
+- **Safety stays at the execution boundary** — generated HTML can use inline
+  CSS and JavaScript, but its in-app preview has no same-origin, top-navigation,
+  pop-up, download, or fetch/XHR privilege. Web-search injection checks
+  and validated editor actions remain in place.
 
 ## What's new in 1.3.0
 
@@ -125,9 +149,10 @@ nothing is sent anywhere, until you set a backend up.
   opinion, not a grade.
 - **Writing check** — on-demand spelling and grammar suggestions, accepted or
   ignored one at a time, each its own undo step.
-- **Do** — act on the page: pull out the to-dos, turn a bullet list into a table,
-  translate it, or tighten the writing. Each action is planned, then applied to
-  the page as a single undoable step.
+- **Do** — preview and apply work on the page: pull out the to-dos, turn a bullet
+  list into a table, translate it, tighten the writing, or create an interactive
+  HTML artifact. The proposed actions are shown before anything is written,
+  then applied as one undoable run.
 
 The panel keeps all four — Ask, Quiz, Writing and Do — behind one composer, and
 says what the model is doing while it works: the running step in its own words
@@ -154,7 +179,8 @@ about a long section fast.
 
 ### Desktop experience
 - Native window management and a system tray (`window_manager`, `tray_manager`).
-- Embedded HTML preview via Chromium/CEF (`webview_cef`).
+- Embedded HTML preview via Chromium/CEF (`webview_cef`), including sandboxed
+  live previews for AI-created artifacts.
 - **Four themes** — Light (cream), White (for bright rooms and printing),
   Calm night (the mark's navy) and Black (pure `#000`, for OLED) — plus a
   system mode that pairs Light by day with Calm night after dark.

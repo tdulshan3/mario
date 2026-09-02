@@ -39,6 +39,7 @@ import 'ai_progress.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
+import 'html_artifact.dart';
 
 class InlineAsk extends ConsumerStatefulWidget {
   const InlineAsk({super.key, this.inset = 0});
@@ -110,6 +111,7 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
             pageId: bridge.pageId,
             note: above ?? bridge.readPage(),
             document: bridge.readDocument(),
+            htmlArtifact: bridge.readHtmlArtifact(),
           ),
           useWeb: session.useWeb,
           focus: session.quoted,
@@ -164,6 +166,16 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
         error: ok ? null : 'Nothing is highlighted to replace.');
   }
 
+  void _previewHtml(String html) {
+    ref.read(agentSessionProvider.notifier).previewArtifact(html);
+    ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.agent);
+  }
+
+  VoidCallback? _previewAction(String answer) {
+    final html = extractHtmlArtifact(answer);
+    return html == null ? null : () => _previewHtml(html);
+  }
+
   @override
   Widget build(BuildContext context) {
     final t = marioTokens(context);
@@ -212,6 +224,7 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
                 onInsert: () => _insert(state),
                 onReplace: () => _replace(state),
                 onAskAgain: _askAgain,
+                onPreview: _previewAction(state.answer),
                 onDiscard: () {
                   ref.read(askSessionProvider.notifier).clear();
                   _close();
@@ -297,6 +310,7 @@ class _Answer extends StatelessWidget {
     required this.onInsert,
     required this.onReplace,
     required this.onAskAgain,
+    required this.onPreview,
     required this.onDiscard,
     required this.onStop,
   });
@@ -309,6 +323,7 @@ class _Answer extends StatelessWidget {
   final VoidCallback onInsert;
   final VoidCallback onReplace;
   final VoidCallback onAskAgain;
+  final VoidCallback? onPreview;
   final VoidCallback onDiscard;
   final VoidCallback onStop;
 
@@ -425,6 +440,12 @@ class _Answer extends StatelessWidget {
                   tone: _ActionTone.secondary,
                   onTap: busy ? null : onAskAgain,
                 ),
+                if (onPreview != null)
+                  _AnswerAction(
+                    label: 'Preview HTML',
+                    tone: _ActionTone.secondary,
+                    onTap: onPreview,
+                  ),
                 _AnswerAction(
                   label: 'Discard',
                   tone: _ActionTone.muted,

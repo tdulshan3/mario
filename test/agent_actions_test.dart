@@ -351,6 +351,26 @@ void main() {
   });
 
   group('what the UI needs to tell the user', () {
+    test('a complete HTML artifact is a first-class action', () {
+      final p = parseAgentPlan(plan([
+        {
+          'kind': 'html',
+          'text': '<!doctype html><html><body>Hi</body></html>',
+        },
+      ]));
+
+      expect(p.actions.single.kind, AgentActionKind.htmlArtifact);
+      expect(p.actions.single.summary, contains('HTML artifact'));
+    });
+
+    test('plain prose mislabeled as HTML is rejected', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'html', 'text': 'this is not markup'},
+      ]));
+      expect(p.actions, isEmpty);
+      expect(p.rejectionSummary.single, contains('no HTML'));
+    });
+
     test('destructive actions are counted apart from additions', () {
       final p = parseAgentPlan(
         plan([
@@ -679,7 +699,7 @@ void main() {
             // Enough fields that only an unknown *kind* can reject it.
             {
               'kind': name,
-              'text': 'x',
+              'text': '<p>x</p>',
               'items': ['x'],
               'rows': [
                 ['a']

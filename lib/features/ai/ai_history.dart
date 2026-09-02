@@ -17,6 +17,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
 import 'ai_markdown.dart';
+import 'html_artifact.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
 import '../../ui/widgets/mario_loader.dart';
@@ -92,10 +93,21 @@ class AskHistoryList extends ConsumerWidget {
               );
             }
             final entry = entries[i - 1];
+            final html = extractHtmlArtifact(entry.answer);
             return _AskHistoryTile(
               entry: entry,
               fromThisPage: entry.pageId == bridge.pageId,
               onReplay: () => onReplay(entry),
+              onPreview: html == null
+                  ? null
+                  : () {
+                      ref
+                          .read(agentSessionProvider.notifier)
+                          .previewArtifact(html);
+                      ref
+                          .read(aiPanelProvider.notifier)
+                          .showTab(AiPanelTab.agent);
+                    },
             );
           },
         );
@@ -109,11 +121,13 @@ class _AskHistoryTile extends StatelessWidget {
     required this.entry,
     required this.fromThisPage,
     required this.onReplay,
+    required this.onPreview,
   });
 
   final AskEntry entry;
   final bool fromThisPage;
   final VoidCallback onReplay;
+  final VoidCallback? onPreview;
 
   @override
   Widget build(BuildContext context) {
@@ -186,6 +200,16 @@ class _AskHistoryTile extends StatelessWidget {
                       textStyle: GoogleFonts.inter(fontSize: 11.5),
                     ),
                   ),
+                  if (onPreview != null)
+                    TextButton.icon(
+                      onPressed: onPreview,
+                      icon: const Icon(Icons.preview_outlined, size: 14),
+                      label: const Text('Preview'),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        textStyle: GoogleFonts.inter(fontSize: 11.5),
+                      ),
+                    ),
                   const Spacer(),
                   Text(
                     entry.provenance.backend,

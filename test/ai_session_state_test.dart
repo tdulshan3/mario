@@ -18,6 +18,8 @@ import 'package:mario/features/ai/ai_progress.dart';
 import 'package:mario/features/ai/ai_session_state.dart';
 import 'package:mario/features/ai/ai_state.dart';
 import 'package:mario/features/ai/ai_tasks.dart';
+import 'package:mario/features/ai/agent_actions.dart';
+import 'package:mario/features/ai/agent_executor.dart';
 import 'package:mario/features/ai/grammar_check.dart';
 
 void main() {
@@ -143,6 +145,58 @@ void main() {
     });
   });
 
+  group('agent review and HTML preview', () {
+    AgentPlan plan() => const AgentPlan(
+          summary: 'Add one paragraph',
+          actions: [
+            AgentAction(kind: AgentActionKind.paragraph, text: 'new text'),
+          ],
+        );
+
+    AgentSnapshot snapshot() =>
+        const AgentSnapshot(document: {}, title: 'Before');
+
+    test('a validated plan waits until it is approved', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(agentSessionProvider.notifier);
+
+      final decision = notifier.reviewPlan(plan());
+      expect(container.read(agentSessionProvider).review?.plan.actions,
+          hasLength(1));
+
+      notifier.approve(snapshot());
+      expect(await decision, isTrue);
+      expect(container.read(agentSessionProvider).review, isNull);
+      expect(container.read(agentSessionProvider).snapshot?.title, 'Before');
+    });
+
+    test('discarding a preview applies nothing', () async {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(agentSessionProvider.notifier);
+
+      final decision = notifier.reviewPlan(plan());
+      notifier.discardReview();
+
+      expect(await decision, isFalse);
+      expect(container.read(agentSessionProvider).review, isNull);
+    });
+
+    test('an Ask artifact survives the tab switch until applied or closed', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      const html = '<!doctype html><html><body>Artifact</body></html>';
+
+      container.read(agentSessionProvider.notifier).previewArtifact(html);
+      container.read(aiPanelProvider.notifier).showTab(AiPanelTab.ask);
+      container.read(aiPanelProvider.notifier).showTab(AiPanelTab.agent);
+
+      expect(container.read(agentSessionProvider).artifactDraft, html);
+      expect(container.read(agentSessionProvider).artifactApplied, isFalse);
+    });
+  });
+
   group('quiz session', () {
     test('answers survive a tab switch', () {
       final container = ProviderContainer();
@@ -225,10 +279,14 @@ void main() {
       container.read(quizSessionProvider.notifier)
         ..generated([mcq('q1'), mcq('q2')], 'Q')
         ..startMarking('attempt-1', CancelToken())
-        ..graded('q1',
-            const QuizGrade(itemId: 'q1', awarded: 1, outOf: 1, isProvisional: false))
-        ..graded('q2',
-            const QuizGrade(itemId: 'q2', awarded: 0, outOf: 1, isProvisional: false))
+        ..graded(
+            'q1',
+            const QuizGrade(
+                itemId: 'q1', awarded: 1, outOf: 1, isProvisional: false))
+        ..graded(
+            'q2',
+            const QuizGrade(
+                itemId: 'q2', awarded: 0, outOf: 1, isProvisional: false))
         ..markingFinished();
 
       final s = container.read(quizSessionProvider);
@@ -255,7 +313,8 @@ void main() {
       expect(cancel.isCancelled, isTrue);
       final s = container.read(quizSessionProvider);
       expect(s.phase, QuizPhase.results);
-      expect(s.grades, hasLength(1), reason: 'a half-marked paper still counts');
+      expect(s.grades, hasLength(1),
+          reason: 'a half-marked paper still counts');
     });
 
     test('remembers which notebook the quiz belongs to', () {

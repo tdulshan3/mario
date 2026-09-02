@@ -24,10 +24,18 @@ import 'ai_markdown_blocks.dart';
 
 /// The document as it was before a run, so it can be put back exactly.
 class AgentSnapshot {
-  const AgentSnapshot({required this.document, required this.title});
+  const AgentSnapshot({
+    required this.document,
+    required this.title,
+    this.htmlArtifact,
+  });
 
   final Map<String, dynamic> document;
   final String title;
+
+  /// The page's verbatim HTML artifact, which lives beside the AppFlowy
+  /// document in the Drive payload rather than inside its block tree.
+  final String? htmlArtifact;
 }
 
 /// Applies agent actions to an [afe.EditorState].
@@ -65,7 +73,7 @@ class AgentExecutor {
 
   /// Called once per run, before any action — so it doubles as the point to
   /// forget the previous run's bookkeeping.
-  AgentSnapshot snapshot(String title) {
+  AgentSnapshot snapshot(String title, {String? htmlArtifact}) {
     _orderAtRunStart = [
       for (final n in editorState.document.root.children) n.id,
     ];
@@ -74,6 +82,7 @@ class AgentExecutor {
     return AgentSnapshot(
       document: editorState.document.toJson(),
       title: title,
+      htmlArtifact: htmlArtifact,
     );
   }
 
@@ -117,6 +126,7 @@ class AgentExecutor {
         return _moveBlock(action);
       case AgentActionKind.renamePage:
       case AgentActionKind.setting:
+      case AgentActionKind.htmlArtifact:
         // Handled by the caller: neither lives in the document.
         return true;
       default:
@@ -327,6 +337,7 @@ class AgentExecutor {
         return [_tableNode(a.rows)];
       case AgentActionKind.spreadsheet:
         return [spreadsheetNode(workbook: _workbook(a.rows, a.text))];
+      case AgentActionKind.htmlArtifact:
       case AgentActionKind.renamePage:
       case AgentActionKind.replaceBlock:
       case AgentActionKind.deleteBlock:

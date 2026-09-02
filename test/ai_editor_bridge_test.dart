@@ -49,14 +49,15 @@ class _FakeEditorState extends ConsumerState<_FakeEditor> {
         readPage: () => const NoteText(title: '', blocks: []),
         readAboveCursor: () => const NoteText(title: '', blocks: []),
         readDocument: afe.Document.blank,
+        readHtmlArtifact: () => null,
         insertMarkdown: (_) async => true,
         replaceSelection: (_) async => true,
         applyGrammar: (_) async => true,
-        snapshot: () =>
-            const AgentSnapshot(document: {}, title: 'fake'),
+        snapshot: () => const AgentSnapshot(document: {}, title: 'fake'),
         restore: (_) async => true,
         applyAgentAction: (_) async => true,
         renamePage: (_) async => true,
+        setHtmlArtifact: (_) async => true,
       );
     });
   }

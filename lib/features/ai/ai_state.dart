@@ -100,6 +100,7 @@ class AiEditorBridge {
     required this.readPage,
     required this.readAboveCursor,
     required this.readDocument,
+    required this.readHtmlArtifact,
     required this.insertMarkdown,
     required this.replaceSelection,
     required this.applyGrammar,
@@ -107,6 +108,7 @@ class AiEditorBridge {
     required this.restore,
     required this.applyAgentAction,
     required this.renamePage,
+    required this.setHtmlArtifact,
   });
 
   final String pageId;
@@ -125,6 +127,10 @@ class AiEditorBridge {
   /// getter rather than a parsed result because resolving images is slow —
   /// a Drive fetch and possibly OCR — and only some backends want it.
   final afe.Document Function() readDocument;
+
+  /// Verbatim HTML attached to the page, typically from a full-document paste
+  /// or an AI artifact. It is persisted in the page's Drive JSON.
+  final String? Function() readHtmlArtifact;
 
   /// Inserts Markdown after the current block. Returns false when the editor
   /// went away mid-flight.
@@ -152,6 +158,9 @@ class AiEditorBridge {
   /// Renames the page. Separate from [applyAgentAction] because the title is
   /// index metadata in Firestore, not a block in the document.
   final Future<bool> Function(String title) renamePage;
+
+  /// Replaces the page's HTML artifact and opens its rendered preview.
+  final Future<bool> Function(String html) setHtmlArtifact;
 }
 
 /// Text the user has highlighted in the editor, or null when nothing is
