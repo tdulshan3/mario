@@ -7,19 +7,50 @@ editor with first-class support for math, code, drawing, spreadsheets and voice 
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
 native Linux desktop app and in the browser.
 
+**Current release: 1.3.0** — see [What's new](#whats-new-in-130).
+
 ---
 
 ## Screenshots
 
 |  |  |
 |---|---|
-| ![Home](docs/screenshots/01-home.png) <br> **Home** — where you land, with your notebooks | ![Editor](docs/screenshots/02-editor.png) <br> **Editor** — the page, its breadcrumb and save state |
-| ![AI panel](docs/screenshots/03-ai-panel.png) <br> **AI panel** — Ask, Quiz, Writing and Do, with the model and what it is doing | ![Settings](docs/screenshots/04-settings.png) <br> **Settings** — one pane at a time, not one long scroll |
+| ![Recent](docs/screenshots/01-home.png) <br> **Recent** — where you land: your pages newest-first, notebooks as tabs above | ![Editor](docs/screenshots/02-editor.png) <br> **Editor** — the page, its breadcrumb and save state |
+| ![AI panel](docs/screenshots/03-ai-panel.png) <br> **AI panel** — Ask, Quiz, Writing and Do behind one composer, naming the model and its context budget | ![Settings](docs/screenshots/04-settings.png) <br> **Settings** — one pane at a time, not one long scroll |
 
 ![Black theme](docs/screenshots/05-black-theme.png)
 
 *The same layout on the Black ground. All four themes share one layout and one type
 system — only the ground changes.*
+
+---
+
+## What's new in 1.3.0
+
+**The Simple remodel.** The chrome got out of the way. The top bar went from 68px
+of glass and pill buttons to a 43px flat strip separated by a single rule; the
+notebook rail — a 60px column of coloured avatars — became a 35px strip of plain
+text tabs under it, led by **Recent**. Turning that column on its side is what
+lets the sidebar be one flat tree of sections and pages instead of a picker card
+stacked over a tree.
+
+- **Search is a command palette** — `↑↓`, `↵`, `esc`, with a breadcrumb under each
+  hit. Titles only for now, and it says so rather than implying otherwise.
+- **Settings is two panes** — categories on the left, one pane at a time on the
+  right, so the theme picker is findable. On a narrow window the rail collapses
+  to a list rather than becoming unreachable.
+- **Ask on the page** — `/ask` opens at the caret instead of in the side panel,
+  and shares its run with the Ask tab.
+- **Inserted answers keep their code** — fenced code blocks used to be dropped
+  on the way into a note, so an answer explaining a function wrote the prose and
+  threw the function away. They now land as real, syntax-highlighted code blocks
+  with the language already selected.
+- **Page width works** — Narrow / Medium / Full were stored but ignored by an
+  editor that hard-coded a 780px card. They are now 620 / 720 / 880.
+- **Gemini** joins Ollama, OpenAI-compatible servers, OpenAI and Claude.
+- **Local models get room to think** — the assumed context window for a local
+  backend went from 8k to 64k, and is now sent as `num_ctx` with every call, so
+  a long page stops being trimmed to fit a window the hardware never imposed.
 
 ---
 
@@ -40,25 +71,32 @@ custom blocks:
 - **Table** and **Audio** blocks.
 
 ### Capture & organize
-- **Notebooks → sections → pages** in a single sidebar — the notebook picker,
-  its sections and their pages in one column rather than a rail beside a tree.
+- **Notebooks → sections → pages** — notebooks are text tabs along a strip under
+  the top bar, led by **Recent** (the home screen, so there is always a way back
+  to it from inside a page). That frees the sidebar to be one flat tree of the
+  live notebook's sections and their pages, with no picker card above it.
 - **Voice dictation** — speech-to-text (`speech_to_text`) plus audio recording and
   playback (`record`, `just_audio`).
 - **OCR** — extract text from images.
-- **Search** across your notes.
+- **Search** — a command palette over your pages, driven from the keyboard
+  (`↑↓` moves, `↵` opens, `esc` closes). It matches titles and shows each hit's
+  breadcrumb; full content search waits on the SQLite FTS index.
 - **AI assist** — see the section below.
 
 ### AI study tools
 Bring your own model. Mario talks to a local one through **Ollama**, to any
 **OpenAI-compatible** server on your network (llama.cpp's `llama-server`,
-LM Studio, vLLM, Jan), to **OpenAI**, or to **Claude** — configured in
-*Settings → AI models*, with a Test button that says what is actually wrong when
-a connection fails. Keys live in the OS secure storage; nothing works, and
+LM Studio, vLLM, Jan), to **OpenAI**, to **Claude**, or to **Gemini** — configured
+in *Settings → AI models*, with a Test button that says what is actually wrong
+when a connection fails. Keys live in the OS secure storage; nothing works, and
 nothing is sent anywhere, until you set a backend up.
 
 - **`/summary`** — summarises the note above the cursor.
-- **`/ask`** — reads the page, optionally searches the web (Serper), answers,
-  and offers to insert the answer into the note with its sources.
+- **`/ask`** — opens a composer *at the caret*, on the page, rather than sending
+  you to the side panel. It reads the page, optionally searches the web (Serper),
+  and puts the answer inline above the composer, ready to insert into the note
+  with its sources. It is the same run as the Ask tab: start it inline and open
+  the panel to watch it finish, or the other way round.
 - **`/quiz`** — a right-hand panel that builds a paper from the current page or
   a whole section: multiple choice plus essay questions, generated in batches
   and validated as they arrive.
@@ -201,7 +239,7 @@ lib/
 │   ├── spreadsheet/       # sheet data, formula evaluator, xlsx parser
 │   ├── export/            # PDF + Markdown exporters
 │   ├── voice/             # dictation
-│   ├── shell/             # nav tree, notebook rail, toolbar, shortcuts
+│   ├── shell/             # nav tree, notebook tabs, toolbar, shortcuts
 │   ├── auth/ · search/ · settings/ · sharing/
 └── platform/
     ├── linux/             # firedart client, secrets loader, window config
