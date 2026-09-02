@@ -25,7 +25,7 @@ import 'settings_state.dart';
 
 /// Kept in step with `version:` in pubspec.yaml by hand — the app has no
 /// package_info dependency, so there is nothing to read it from at runtime.
-const _kVersion = '1.3.2+14';
+const _kVersion = '1.3.3+15';
 
 enum _Pane {
   appearance(

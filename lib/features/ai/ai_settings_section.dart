@@ -20,6 +20,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/services/ai/anthropic_provider.dart';
 import '../../core/services/ai/llm_provider.dart';
 import '../../core/services/ai/llm_provider_config.dart';
+import '../../core/services/ai/llm_types.dart';
 import '../../core/services/ai/local_model_discovery.dart';
 import '../../core/services/ai/web_search_service.dart';
 import '../../ui/colors.dart';
@@ -173,7 +174,9 @@ class _BackendTile extends StatelessWidget {
                         color: scheme.onSurface)),
                 const SizedBox(height: 1),
                 Text(
-                  '${config.kind.label} · ${config.model.isEmpty ? 'no model set' : config.model}',
+                  '${config.kind.label} · '
+                  '${config.model.isEmpty ? 'no model set' : config.model} · '
+                  '${formatContextWindow(config.effectiveCapabilities.contextTokens)} context',
                   style: GoogleFonts.inter(
                       fontSize: 11, color: scheme.onSurfaceVariant),
                 ),
@@ -225,12 +228,16 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   late final _model = TextEditingController(text: widget.existing?.model ?? '');
   late final _embedModel =
       TextEditingController(text: widget.existing?.embeddingModel ?? '');
+  late final _contextWindow = TextEditingController(
+    text: widget.existing?.contextTokens?.toString() ?? '',
+  );
   final _apiKey = TextEditingController();
 
   bool _keyLoaded = false;
   bool _testing = false;
   LlmProbeResult? _probe;
   List<String> _models = const [];
+  String? _contextWindowError;
 
   @override
   void initState() {
@@ -249,6 +256,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
     _baseUrl.dispose();
     _model.dispose();
     _embedModel.dispose();
+    _contextWindow.dispose();
     _apiKey.dispose();
     super.dispose();
   }
@@ -285,7 +293,22 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
           _embedModel.text.trim().isEmpty ? null : _embedModel.text.trim(),
       hasApiKey: _apiKey.text.trim().isNotEmpty || _keyLoaded,
       capabilities: widget.existing?.capabilities ?? _probe?.capabilities,
+      contextTokens: parseContextWindowOverride(_contextWindow.text),
+      effort: widget.existing?.effort ?? LlmEffort.medium,
     );
+  }
+
+  bool _validateContextWindow() {
+    try {
+      parseContextWindowOverride(_contextWindow.text);
+      if (_contextWindowError != null) {
+        setState(() => _contextWindowError = null);
+      }
+      return true;
+    } on FormatException catch (error) {
+      setState(() => _contextWindowError = error.message);
+      return false;
+    }
   }
 
   String _defaultLabel() => switch (_kind) {
@@ -303,6 +326,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   }
 
   Future<void> _test() async {
+    if (!_validateContextWindow()) return;
     setState(() {
       _testing = true;
       _probe = null;
@@ -332,6 +356,7 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
   }
 
   Future<void> _save() async {
+    if (!_validateContextWindow()) return;
     final backends = ref.read(aiBackendsProvider);
     final config = _buildConfig();
     final configs = [
@@ -417,6 +442,61 @@ class _BackendDialogState extends ConsumerState<_BackendDialog> {
                   ],
                 ),
               ],
+              const SizedBox(height: 12),
+              TextField(
+                key: const ValueKey('ai-context-window'),
+                controller: _contextWindow,
+                keyboardType: TextInputType.text,
+                onChanged: (_) {
+                  if (_contextWindowError != null) {
+                    setState(() => _contextWindowError = null);
+                  }
+                },
+                decoration: InputDecoration(
+                  labelText: 'Context window (tokens)',
+                  hintText:
+                      'Auto · ${formatContextWindow(_kind.assumedCapabilities.contextTokens)}',
+                  helperText: _kind == LlmProviderKind.ollama ||
+                          _kind == LlmProviderKind.openAiCompatible
+                      ? 'Sets how much Mario sends and the local server’s '
+                          'num_ctx. Larger windows use more RAM or VRAM.'
+                      : 'Limits how much Mario sends. Leave empty to use the '
+                          'model default.',
+                  errorText: _contextWindowError,
+                  isDense: true,
+                ),
+              ),
+              const SizedBox(height: 7),
+              Wrap(
+                spacing: 5,
+                runSpacing: 4,
+                children: [
+                  ActionChip(
+                    label: const Text('Auto'),
+                    onPressed: () => setState(() {
+                      _contextWindow.clear();
+                      _contextWindowError = null;
+                    }),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  for (final preset in const [
+                    8192,
+                    32768,
+                    65536,
+                    131072,
+                    262144,
+                    1048576,
+                  ])
+                    ActionChip(
+                      label: Text(formatContextWindow(preset)),
+                      onPressed: () => setState(() {
+                        _contextWindow.text = preset.toString();
+                        _contextWindowError = null;
+                      }),
+                      visualDensity: VisualDensity.compact,
+                    ),
+                ],
+              ),
               const SizedBox(height: 12),
               TextField(
                 controller: _apiKey,

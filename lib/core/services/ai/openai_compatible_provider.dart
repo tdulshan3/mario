@@ -47,6 +47,7 @@ class OpenAiCompatibleProvider implements LlmProvider {
     this.idleTimeout = const Duration(minutes: 3),
     bool flatJsonSchema = false,
     this.sendThinkingControls = true,
+    this.sendContextWindowOption = true,
     http.Client Function()? clientFactory,
   })  : baseUrl = normalizeBaseUrl(baseUrl),
         usesFlatJsonSchema = flatJsonSchema,
@@ -88,6 +89,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
   /// accept. The real OpenAI API rejects unknown body fields with a 400, so
   /// this is off for that backend.
   final bool sendThinkingControls;
+
+  /// Local servers accept or ignore Ollama's `options.num_ctx`; official
+  /// OpenAI and Gemini endpoints reject unknown request fields instead.
+  final bool sendContextWindowOption;
   final http.Client Function() _clientFactory;
 
   LlmCapabilities _capabilities;
@@ -229,9 +234,10 @@ class OpenAiCompatibleProvider implements LlmProvider {
       // run. Claiming a big context app-side without this would just mean
       // sending a long page into a short window and never being told.
       //
-      // Same bet as `stream_options` above: llama-server, vLLM and the rest
-      // ignore what they do not know.
-      'options': {'num_ctx': _capabilities.contextTokens},
+      // Local OpenAI-compatible servers ignore what they do not know. Hosted
+      // APIs reject this field, so their configs disable it explicitly.
+      if (sendContextWindowOption)
+        'options': {'num_ctx': _capabilities.contextTokens},
     };
 
     final fmt = req.jsonFormat;

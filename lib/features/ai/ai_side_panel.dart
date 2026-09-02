@@ -440,9 +440,11 @@ class _ComposerState extends ConsumerState<_Composer> {
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
+    // Hand the value off first. If a destination unexpectedly rejects by
+    // throwing, the draft remains available for retry instead of disappearing.
+    widget.onSubmit(text);
     _controller.clear();
     _setDraft('');
-    widget.onSubmit(text);
   }
 
   @override

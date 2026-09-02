@@ -43,6 +43,7 @@ class AnthropicProvider implements LlmProvider {
     required this.apiKey,
     this.model = kDefaultAnthropicModel,
     this.baseUrl = 'https://api.anthropic.com/v1',
+    this.contextTokens = 200000,
     this.timeout = const Duration(minutes: 5),
     http.Client Function()? clientFactory,
   }) : _clientFactory = clientFactory ?? http.Client.new;
@@ -55,13 +56,14 @@ class AnthropicProvider implements LlmProvider {
   final String apiKey;
   final String model;
   final String baseUrl;
+  final int contextTokens;
   final Duration timeout;
   final http.Client Function() _clientFactory;
 
   static const _version = '2023-06-01';
 
   @override
-  LlmCapabilities get capabilities => const LlmCapabilities(
+  LlmCapabilities get capabilities => LlmCapabilities(
         streaming: true,
         // output_config.format constrains the decoder — valid by construction.
         strictJsonSchema: true,
@@ -72,7 +74,7 @@ class AnthropicProvider implements LlmProvider {
         embeddings: false,
         systemRole: true,
         vision: true,
-        contextTokens: 200000,
+        contextTokens: contextTokens,
       );
 
   Map<String, String> get _headers => {

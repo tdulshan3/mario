@@ -44,6 +44,51 @@ enum LlmProviderKind {
 
 const kDefaultGeminiModel = 'gemini-2.5-flash';
 
+/// Bounds for a user-supplied context window.
+///
+/// 1k still leaves enough room for the smallest completion Mario makes. Four
+/// million covers current long-context models without letting a mistyped zero
+/// ask a local runtime to reserve an absurd amount of RAM or VRAM.
+const int kMinContextTokens = 1024;
+const int kMaxContextTokens = 4 * 1024 * 1024;
+
+/// Parses the Settings field used for a model's context window.
+///
+/// Empty means automatic. Binary shorthand matches how model windows are
+/// normally named: `32k` is 32 * 1024 and `1m` is 1024 * 1024.
+int? parseContextWindowOverride(String input) {
+  final source = input.trim().toLowerCase().replaceAll(RegExp(r'[, _]'), '');
+  if (source.isEmpty) return null;
+
+  final match = RegExp(r'^(\d+(?:\.\d+)?)([km]?)$').firstMatch(source);
+  if (match == null) {
+    throw const FormatException('Enter a value like 32768, 32k or 1m.');
+  }
+
+  final number = double.parse(match.group(1)!);
+  final multiplier = switch (match.group(2)) {
+    'k' => 1024,
+    'm' => 1024 * 1024,
+    _ => 1,
+  };
+  final scaled = number * multiplier;
+  if (!scaled.isFinite ||
+      scaled < kMinContextTokens ||
+      scaled > kMaxContextTokens) {
+    throw const FormatException('Use a context window from 1k to 4m tokens.');
+  }
+  final tokens = scaled.round();
+  return tokens;
+}
+
+String formatContextWindow(int tokens) {
+  if (tokens % (1024 * 1024) == 0) {
+    return '${tokens ~/ (1024 * 1024)}m';
+  }
+  if (tokens % 1024 == 0) return '${tokens ~/ 1024}k';
+  return '$tokens';
+}
+
 extension LlmProviderKindLabel on LlmProviderKind {
   String get label => switch (this) {
         LlmProviderKind.openAiCompatible => 'OpenAI-compatible server',
@@ -245,6 +290,7 @@ class LlmProviderConfig {
           apiKey: apiKey ?? '',
           model: model.isEmpty ? kDefaultAnthropicModel : model,
           baseUrl: baseUrl.isEmpty ? 'https://api.anthropic.com/v1' : baseUrl,
+          contextTokens: effectiveCapabilities.contextTokens,
         );
       case LlmProviderKind.openAi:
       case LlmProviderKind.gemini:
@@ -264,6 +310,8 @@ class LlmProviderConfig {
           // ignore what they do not know.
           sendThinkingControls:
               kind != LlmProviderKind.openAi && kind != LlmProviderKind.gemini,
+          sendContextWindowOption: kind == LlmProviderKind.ollama ||
+              kind == LlmProviderKind.openAiCompatible,
         );
     }
   }

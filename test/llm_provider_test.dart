@@ -134,6 +134,25 @@ void main() {
       expect(sized.effectiveCapabilities.contextTokens, 32768);
     });
 
+    test('a context override survives saved JSON', () {
+      final sized = config.copyWith(contextTokens: 131072);
+      final restored = LlmProviderConfig.fromJson(sized.toJson());
+      expect(restored.contextTokens, 131072);
+      expect(restored.effectiveCapabilities.contextTokens, 131072);
+    });
+
+    test('a context override reaches the Claude provider too', () {
+      const claude = LlmProviderConfig(
+        id: 'claude',
+        label: 'Claude',
+        kind: LlmProviderKind.anthropic,
+        baseUrl: 'https://api.anthropic.com/v1',
+        model: 'claude-opus-5',
+        contextTokens: 32768,
+      );
+      expect(claude.build(apiKey: 'key').capabilities.contextTokens, 32768);
+    });
+
     test('builds the right provider class for its kind', () {
       expect(config.build(apiKey: null), isA<OpenAiCompatibleProvider>());
     });
@@ -213,6 +232,35 @@ void main() {
           isTrue);
       expect(const LlmResponse(text: '', finishReason: 'stop').hitTokenLimit,
           isFalse);
+    });
+  });
+
+  group('context window input', () {
+    test('empty selects the detected or provider default', () {
+      expect(parseContextWindowOverride(''), isNull);
+      expect(parseContextWindowOverride('   '), isNull);
+    });
+
+    test('accepts exact tokens and model-style shorthand', () {
+      expect(parseContextWindowOverride('32768'), 32768);
+      expect(parseContextWindowOverride('32k'), 32768);
+      expect(parseContextWindowOverride('1M'), 1048576);
+      expect(parseContextWindowOverride('1.5m'), 1572864);
+    });
+
+    test('rejects malformed or dangerous allocations', () {
+      expect(() => parseContextWindowOverride('lots'), throwsFormatException);
+      expect(() => parseContextWindowOverride('512'), throwsFormatException);
+      expect(() => parseContextWindowOverride('8m'), throwsFormatException);
+      expect(
+        () => parseContextWindowOverride('999999999999999999999999999999'),
+        throwsFormatException,
+      );
+    });
+
+    test('formats common presets for the settings chips', () {
+      expect(formatContextWindow(32768), '32k');
+      expect(formatContextWindow(1048576), '1m');
     });
   });
 }

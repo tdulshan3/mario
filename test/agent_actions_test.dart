@@ -302,6 +302,61 @@ void main() {
       expect(p.actions.single.blockId, 'abc123');
     });
 
+    test('rewrite replacement text under common replacement field names', () {
+      for (final key in [
+        'replacement',
+        'replacementText',
+        'replacement_text',
+        'newText',
+        'new_text',
+        'replacementContent',
+        'replacement_content',
+        'newContent',
+        'new_content',
+      ]) {
+        final p = parseAgentPlan(
+          plan([
+            {
+              'kind': 'replace_block',
+              'blockId': 'abc123',
+              key: 'the rewritten text',
+            },
+          ]),
+          knownBlockIds: {'abc123'},
+        );
+        expect(p.actions.single.text, 'the rewritten text', reason: key);
+      }
+    });
+
+    test('rewrite replacement can be wrapped in an object', () {
+      final p = parseAgentPlan(
+        plan([
+          {
+            'kind': 'replace_block',
+            'blockId': 'abc123',
+            'replacement': {'text': 'the rewritten text'},
+          },
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions.single.text, 'the rewritten text');
+    });
+
+    test('a blank schema text does not hide populated replacement text', () {
+      final p = parseAgentPlan(
+        plan([
+          {
+            'kind': 'replace_block',
+            'blockId': 'abc123',
+            'text': '',
+            'replacement': 'the rewritten text',
+          },
+        ]),
+        knownBlockIds: {'abc123'},
+      );
+      expect(p.actions.single.text, 'the rewritten text');
+    });
+
     test('a paragraph whose body arrived as a list is joined, not lost', () {
       final p = parseAgentPlan(plan([
         {

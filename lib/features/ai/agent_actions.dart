@@ -459,6 +459,35 @@ String? _normaliseId(String? raw, Set<String>? known) {
   return ci.length == 1 ? ci.first : s;
 }
 
+/// Reads replacement content from the shapes unconstrained models commonly
+/// choose. A few models wrap it as `{ "replacement": { "text": "..." } }`
+/// instead of using the schema's top-level `text`; that is still unambiguous,
+/// so it is safe to recover rather than discarding the rewrite.
+String? _readReplacementText(Object? raw) {
+  final direct = asString(raw);
+  if (direct != null && direct.trim().isNotEmpty) return direct;
+  final wrapped = asMap(raw);
+  if (wrapped == null) return null;
+  for (final candidate in [
+    wrapped['text'],
+    wrapped['content'],
+    wrapped['body'],
+    wrapped['value'],
+  ]) {
+    final text = asString(candidate);
+    if (text != null && text.trim().isNotEmpty) return text;
+  }
+  return null;
+}
+
+String _firstReplacementText(Iterable<Object?> values) {
+  for (final value in values) {
+    final text = _readReplacementText(value);
+    if (text != null) return text.trim();
+  }
+  return '';
+}
+
 AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds,
     List<DroppedAction> rejected) {
   // `kind` is the discriminator and had no alias of its own, unlike every
@@ -477,8 +506,23 @@ AgentAction? _parseOne(Map<String, dynamic> m, Set<String>? knownBlockIds,
 
   // Field aliases, because the schema is advisory on any backend without
   // strict decoding and models reach for the obvious synonym.
-  final text =
-      asStringOr(m['text'] ?? m['content'] ?? m['body'] ?? m['value']).trim();
+  final text = _firstReplacementText([
+    m['text'],
+    m['content'],
+    m['body'],
+    m['value'],
+    if (kind == AgentActionKind.replaceBlock) ...[
+      m['replacement'],
+      m['replacementText'],
+      m['replacement_text'],
+      m['newText'],
+      m['new_text'],
+      m['replacementContent'],
+      m['replacement_content'],
+      m['newContent'],
+      m['new_content'],
+    ],
+  ]);
   // Two views of the same field. List entries are trimmed, because leading
   // space in a bullet is noise; a code body is not, because indentation is
   // the difference between Python that runs and Python that does not.
