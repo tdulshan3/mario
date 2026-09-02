@@ -15,13 +15,29 @@ native Linux desktop app and in the browser.
 
 |  |  |
 |---|---|
-| ![Recent](docs/screenshots/01-home.png) <br> **Recent** — where you land: your pages newest-first, notebooks as tabs above | ![Editor](docs/screenshots/02-editor.png) <br> **Editor** — the page, its breadcrumb and save state |
-| ![AI panel](docs/screenshots/03-ai-panel.png) <br> **AI panel** — Ask, Quiz, Writing and Do behind one composer, naming the model and its context budget | ![Settings](docs/screenshots/04-settings.png) <br> **Settings** — one pane at a time, not one long scroll |
+| ![Recent](docs/screenshots/light/01-home.png) <br> **Recent** — where you land: your pages newest-first, notebooks as tabs above | ![Editor](docs/screenshots/light/02-editor.png) <br> **Editor** — the page, its breadcrumb and save state |
+| ![AI panel](docs/screenshots/light/03-ai-panel.png) <br> **AI panel** — Ask, Quiz, Writing and Do behind one composer, naming the model and its context budget | ![Settings](docs/screenshots/light/04-settings.png) <br> **Settings** — one pane at a time, not one long scroll |
 
-![Black theme](docs/screenshots/05-black-theme.png)
+![Search](docs/screenshots/light/05-search.png)
 
-*The same layout on the Black ground. All four themes share one layout and one type
-system — only the ground changes.*
+*Search — one palette over every page, driven from the keyboard.*
+
+### On the Black ground
+
+|  |  |
+|---|---|
+| ![Recent on black](docs/screenshots/dark/01-home.png) | ![Editor on black](docs/screenshots/dark/02-editor.png) |
+| ![AI panel on black](docs/screenshots/dark/03-ai-panel.png) | ![Settings on black](docs/screenshots/dark/04-settings.png) |
+
+![Search on black](docs/screenshots/dark/05-search.png)
+
+*All four themes share one layout and one type system — only the ground changes.*
+
+> **The notebooks in these shots are invented.** They come from a demo build
+> (`--dart-define=MARIO_DEMO=true`) running against the fixtures in
+> [`lib/core/demo/demo_data.dart`](lib/core/demo/demo_data.dart), so the app can
+> be photographed without putting anyone's real notes in a public repository.
+> [docs/screenshots/README.md](docs/screenshots/README.md) says how to regenerate them.
 
 ---
 
@@ -51,6 +67,9 @@ stacked over a tree.
 - **Local models get room to think** — the assumed context window for a local
   backend went from 8k to 64k, and is now sent as `num_ctx` with every call, so
   a long page stops being trimmed to fit a window the hardware never imposed.
+- **A demo mode**, for screenshots and demos. `--dart-define=MARIO_DEMO=true`
+  runs the real build against fixture notebooks and never reaches the network,
+  so the app can be shown without an account and without anyone's real notes.
 
 ---
 
@@ -231,6 +250,7 @@ lib/
 ├── app.dart               # root MaterialApp.router, theming, auth-aware routing
 ├── core/
 │   ├── models/            # Notebook, Section, NotePage, Collaborator
+│   ├── demo/              # fixture data behind --dart-define=MARIO_DEMO
 │   └── services/          # auth, drive, firestore, sync, OCR, voice, caching
 ├── features/
 │   ├── editor/            # editor screen + custom blocks (code, math, drawing, …)

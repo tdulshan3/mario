@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
 
 import 'app.dart';
+import 'core/demo/demo_data.dart';
 import 'core/services/ai/ai_artifact_store.dart';
 import 'core/services/ai/llm_provider_config.dart';
 import 'core/services/ai/llm_service.dart';
@@ -52,7 +53,13 @@ Future<void> main() async {
         options: DefaultFirebaseOptions.currentPlatform);
   } else {
     await linux_win.configureLinuxWindow();
-    _linuxSecrets = await SecretsLoader.load();
+    try {
+      _linuxSecrets = await SecretsLoader.load();
+    } catch (_) {
+      // Demo mode carries on without them; every other build still fails
+      // below, where the missing credentials get a message worth reading.
+      if (!kDemoMode) rethrow;
+    }
     final webOpts = DefaultFirebaseOptions.web;
     _linuxTokenStore = fd.VolatileStore();
     fd.FirebaseAuth.initialize(webOpts.apiKey, _linuxTokenStore!);
@@ -64,10 +71,16 @@ Future<void> main() async {
   // Load the image-asset index before the first editor can mount. It is one
   // small JSON read, and having it in memory is what lets an image block
   // resolve a cached picture synchronously instead of flashing a spinner on
-  // every page open.
-  await GetIt.I<AssetSyncService>().warmUp();
+  // every page open. Demo mode skips it: the index lives in Drive, and demo
+  // mode is defined by not going there.
+  if (!kDemoMode) {
+    await GetIt.I<AssetSyncService>().warmUp();
+  }
 
-  runApp(const ProviderScope(child: MarioApp()));
+  runApp(ProviderScope(
+    overrides: kDemoMode ? demoOverrides() : const [],
+    child: const MarioApp(),
+  ));
 }
 
 void _registerServices(bool isLinuxNative) {
@@ -80,7 +93,12 @@ void _registerServices(bool isLinuxNative) {
         CloudFirestoreClient(FirebaseFirestore.instance));
   } else if (isLinuxNative) {
     final webOpts = DefaultFirebaseOptions.web;
-    final secrets = _linuxSecrets;
+    // Demo mode never signs in — its auth state is a fixture — so it must not
+    // require OAuth credentials just to reach a screenshot.
+    final secrets = _linuxSecrets ??
+        (kDemoMode
+            ? const MarioSecrets(desktopClientId: '', desktopClientSecret: '')
+            : null);
     if (secrets == null) {
       throw StateError(
           'No `secrets` file found in the project root. Create one with '
