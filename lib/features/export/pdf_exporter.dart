@@ -16,6 +16,7 @@ import '../../core/models/note_page.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../editor/blocks/mario_image_block.dart';
+import '../math/latex_normalizer.dart';
 
 /// The paper a PDF is laid out on.
 ///
@@ -338,7 +339,9 @@ class PdfExporter {
           ),
         ];
       case 'math_equation':
-        final f = (node.attributes['formula'] as String?) ?? '';
+        final f = normalizeLatexFormula(
+          (node.attributes['formula'] as String?) ?? '',
+        );
         return [
           pw.Padding(
             padding: const pw.EdgeInsets.symmetric(vertical: 4),

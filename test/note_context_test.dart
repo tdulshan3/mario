@@ -39,6 +39,16 @@ void main() {
       expect(note.blocks.first.text, r'$$E = mc^2$$');
     });
 
+    test('an older wrapped math block is not fenced twice', () {
+      final note = extractNoteText(docOf([
+        {
+          'type': 'math_equation',
+          'data': {'formula': r'$$E = mc^2$$'},
+        }
+      ]));
+      expect(note.blocks.first.text, r'$$E = mc^2$$');
+    });
+
     test('a code block keeps its body and language', () {
       final note = extractNoteText(docOf([
         {

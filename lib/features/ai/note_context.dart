@@ -33,6 +33,7 @@ import '../editor/blocks/drawing_block.dart';
 import '../editor/blocks/math_block.dart';
 import '../editor/blocks/mario_image_block.dart';
 import '../editor/blocks/spreadsheet_block.dart';
+import '../math/latex_normalizer.dart';
 import '../../core/services/ai/json_coercion.dart';
 import '../../core/services/ai/llm_types.dart';
 
@@ -241,7 +242,9 @@ void _walk(afe.Node node, List<NoteBlock> out) {
 
   switch (node.type) {
     case MathBlockKeys.type:
-      final formula = asStringOr(attrs[MathBlockKeys.formula]).trim();
+      final formula = normalizeLatexFormula(
+        asStringOr(attrs[MathBlockKeys.formula]),
+      );
       if (formula.isEmpty) return null;
       // Fenced as LaTeX: an unfenced formula reads as broken prose, and models
       // handle `$$…$$` far better than a bare string of backslashes.

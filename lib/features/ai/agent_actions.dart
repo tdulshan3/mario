@@ -23,6 +23,7 @@
 library;
 
 import '../../core/services/ai/json_coercion.dart';
+import '../math/latex_normalizer.dart';
 
 /// The operations an agent may perform.
 ///
@@ -608,8 +609,13 @@ AgentAction? _build(
       return AgentAction(kind: kind, text: html);
 
     case AgentActionKind.math:
-      if (text.isEmpty) return reject('a formula with no LaTeX');
-      return AgentAction(kind: kind, text: text, afterBlockId: afterBlockId);
+      final formula = normalizeLatexFormula(text);
+      if (formula.isEmpty) return reject('a formula with no LaTeX');
+      return AgentAction(
+        kind: kind,
+        text: formula,
+        afterBlockId: afterBlockId,
+      );
 
     case AgentActionKind.table:
     case AgentActionKind.spreadsheet:

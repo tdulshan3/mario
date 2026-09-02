@@ -61,6 +61,13 @@ void main() {
       expect(p.actions.single.language, 'plaintext');
     });
 
+    test('a math block loses Markdown delimiters before execution', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'math', 'text': r'$$E = mc^2$$'}
+      ]));
+      expect(p.actions.single.text, r'E = mc^2');
+    });
+
     test('a square table', () {
       final p = parseAgentPlan(plan([
         {

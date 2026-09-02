@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../../../ui/colors.dart';
+import '../../math/latex_normalizer.dart';
 import '_safe_transaction.dart';
 import 'block_context_menu.dart';
 
@@ -19,7 +20,7 @@ class MathBlockKeys {
 
 afe.Node mathEquationNode({String formula = ''}) => afe.Node(
       type: MathBlockKeys.type,
-      attributes: {MathBlockKeys.formula: formula},
+      attributes: {MathBlockKeys.formula: normalizeLatexFormula(formula)},
     );
 
 class MathBlockComponentBuilder extends afe.BlockComponentBuilder {
@@ -58,8 +59,11 @@ class _MathBlockComponentWidgetState extends State<MathBlockComponentWidget> {
   late TextEditingController _controller;
   bool _editing = false;
 
-  String get _formula =>
-      (widget.node.attributes[MathBlockKeys.formula] as String?) ?? '';
+  // Normalising on read repairs already-saved affected blocks immediately;
+  // they do not have to be recreated before they can render again.
+  String get _formula => normalizeLatexFormula(
+        (widget.node.attributes[MathBlockKeys.formula] as String?) ?? '',
+      );
 
   @override
   void initState() {
@@ -84,11 +88,15 @@ class _MathBlockComponentWidgetState extends State<MathBlockComponentWidget> {
 
   Future<void> _commit() async {
     final editorState = context.read<afe.EditorState>();
+    final formula = normalizeLatexFormula(_controller.text);
     await safeApply(editorState, (tx) {
-      tx.updateNode(widget.node, {MathBlockKeys.formula: _controller.text});
+      tx.updateNode(widget.node, {MathBlockKeys.formula: formula});
     });
     if (!mounted) return;
-    setState(() => _editing = false);
+    setState(() {
+      _controller.text = formula;
+      _editing = false;
+    });
   }
 
   @override

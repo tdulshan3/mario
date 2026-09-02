@@ -7,7 +7,7 @@ editor with first-class support for math, code, drawing, spreadsheets and voice 
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
 native Linux desktop app and in the browser.
 
-**Current release: 1.3.1** — see [What's new](#whats-new-in-131).
+**Current release: 1.3.2** — see [What's new](#whats-new-in-132).
 
 ---
 
@@ -38,6 +38,16 @@ native Linux desktop app and in the browser.
 > [`lib/core/demo/demo_data.dart`](lib/core/demo/demo_data.dart), so the app can
 > be photographed without putting anyone's real notes in a public repository.
 > [docs/screenshots/README.md](docs/screenshots/README.md) says how to regenerate them.
+
+---
+
+## What's new in 1.3.2
+
+**Math delimiters render correctly.** Math blocks now accept formulas pasted or
+generated as `$...$`, `$$...$$`, `\(...\)`, `\[...\]`, or fenced LaTeX. Mario
+removes the outer Markdown wrapper before entering the renderer's existing math
+mode, preventing the “Can't use function '$' in math mode” error. Previously
+saved affected blocks are repaired when read, without recreating the formula.
 
 ---
 

@@ -97,6 +97,17 @@ void main() {
       expect(blockTexts(state).last, r'$$E = mc^2$$');
     });
 
+    test('a wrapped formula is stored without nested math delimiters',
+        () async {
+      final state = editorWith(['x']);
+      await AgentExecutor(state).apply(
+        const AgentAction(kind: AgentActionKind.math, text: r'$$E = mc^2$$'),
+      );
+      final node = state.document.root.children.last;
+      expect(node.attributes['formula'], r'E = mc^2');
+      expect(blockTexts(state).last, r'$$E = mc^2$$');
+    });
+
     test('a table is transposed into AppFlowy column-major form', () async {
       // The model writes rows, as a person would; AppFlowy's table is columns.
       // Getting this backwards produces a table with the axes swapped, which

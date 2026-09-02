@@ -113,7 +113,8 @@ You are editing the page directly, so also:
 - Add a heading only when you are adding a genuinely new section, and only at
   the level that fits beneath what surrounds it.
 - Write real content. A table gets real rows, a code block gets code that runs,
-  a formula gets real LaTeX. Never a placeholder.
+  a formula gets raw LaTeX without Markdown delimiters such as dollar signs.
+  Never a placeholder.
 ''';
 
 /// Extra rules for quiz explanations, which are read after a wrong answer.
