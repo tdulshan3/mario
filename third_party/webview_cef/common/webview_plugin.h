@@ -38,6 +38,9 @@ namespace webview_cef {
 
     void initCEFProcesses(CefMainArgs args);
     void initCEFProcesses();
+#ifdef OS_WIN
+    int initializeCEFForWindows(HINSTANCE instance);
+#endif
     void startCEF();
     void doMessageLoopWork();
     void SwapBufferFromBgraToRgba(void* _dest, const void* _src, int width, int height);

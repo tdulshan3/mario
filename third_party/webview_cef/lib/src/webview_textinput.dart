@@ -11,10 +11,15 @@ mixin WebeViewTextInput implements DeltaTextInputClient {
 
   TextInputConnection? _textInputConnection;
 
+  int? get textInputViewId => null;
+
   attachTextInputClient() {
     _textInputConnection?.close();
     _textInputConnection = TextInput.attach(
-        this, const TextInputConfiguration(enableDeltaModel: true));
+        this, TextInputConfiguration(
+          enableDeltaModel: true,
+          viewId: textInputViewId,
+        ));
     if (!Platform.isWindows) {
       _textInputConnection?.show();
     }

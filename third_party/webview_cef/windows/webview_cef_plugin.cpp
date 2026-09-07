@@ -70,7 +70,7 @@ namespace webview_cef {
 		FlutterDesktopTextureRegistrarRef registrar_;
 		std::unique_ptr<flutter::TextureVariant> texture;
 		mutable std::shared_ptr<FlutterDesktopPixelBuffer> pixel_buffer;
-		std::unique_ptr<uint8_t> backing_pixel_buffer;
+		std::unique_ptr<uint8_t[]> backing_pixel_buffer;
 		mutable std::mutex mutex_;
 	};
 
@@ -265,9 +265,9 @@ namespace webview_cef {
 		case WM_USER + 1:
 		{
 			if (webviewPlugins.find(hwnd) != webviewPlugins.end()) {
-				flutter::EncodableValue *method = (flutter::EncodableValue *)wparam;
-				flutter::EncodableValue *args = (flutter::EncodableValue *)lparam;
-				webviewChannels[hwnd]((*std::get_if<std::string>(method)), args);
+				std::unique_ptr<flutter::EncodableValue> method(reinterpret_cast<flutter::EncodableValue*>(wparam));
+				std::unique_ptr<flutter::EncodableValue> args(reinterpret_cast<flutter::EncodableValue*>(lparam));
+				webviewChannels[hwnd]((*std::get_if<std::string>(method.get())), args.get());
 			}
 			break;
 		}

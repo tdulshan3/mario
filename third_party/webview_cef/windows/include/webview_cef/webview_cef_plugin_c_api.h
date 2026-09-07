@@ -19,6 +19,9 @@ FLUTTER_PLUGIN_EXPORT void WebviewCefPluginCApiRegisterWithRegistrar(
 
 FLUTTER_PLUGIN_EXPORT void initCEFProcesses();
 
+// Returns -1 for Mario's main process, or the completed CEF subprocess code.
+FLUTTER_PLUGIN_EXPORT int initializeCEFForWindows();
+
 FLUTTER_PLUGIN_EXPORT void handleWndProcForCEF(HWND hwnd, unsigned int message, unsigned __int64 wParam, __int64 lParam);
 
 #if defined(__cplusplus)

@@ -49,7 +49,9 @@ try {
     $version = $versionLine.Matches[0].Groups[1].Value.Replace('+', '-')
     Copy-Item -Path (Join-Path $CrtDirectory '*.dll') -Destination 'build/windows/x64/runner/Release' -Force
     $archive = Join-Path $projectRoot "build/mario-$version-windows-x64.zip"
-    Compress-Archive -Path 'build/windows/x64/runner/Release/*' -DestinationPath $archive -Force
+    $bundleEntries = Get-ChildItem 'build/windows/x64/runner/Release' |
+        Where-Object { $_.Name -notlike 'smoke-*' -and $_.Extension -notin @('.lib', '.exp', '.pdb', '.log') }
+    Compress-Archive -Path $bundleEntries.FullName -DestinationPath $archive -Force
     Get-FileHash -LiteralPath $archive -Algorithm SHA256 |
         ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $archive -Leaf)" } |
         Set-Content -LiteralPath "$archive.sha256" -Encoding ascii

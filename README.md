@@ -7,7 +7,7 @@ editor with first-class support for math, code, drawing, spreadsheets and voice 
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
 native Linux or Windows desktop app and in the browser.
 
-**Current release: 1.3.4** — see [What's new](#whats-new-in-134).
+**Current release: 1.3.5** — see [What's new](#whats-new-in-135).
 
 ---
 
@@ -40,6 +40,15 @@ native Linux or Windows desktop app and in the browser.
 > [docs/screenshots/README.md](docs/screenshots/README.md) says how to regenerate them.
 
 ---
+
+## What's new in 1.3.5
+
+**Windows typing and HTML previews work again.** Note-editor and preview input
+connections now identify their Flutter view on Windows. The runner handles
+Chromium subprocesses before starting Flutter and forwards browser callbacks
+and keyboard messages, fixing blank previews and repeated Mario windows.
+Preview focus changes no longer take the note editor's input connection while
+it owns focus. Linux input configuration is unchanged.
 
 ## What's new in 1.3.4
 
@@ -420,6 +429,19 @@ To also create an installer, install Inno Setup and pass
 to `build/mario-<version>-windows-x64-setup.exe` and the adjacent `.sha256` file.
 To regenerate the multi-size Windows icon from `assets/logo/mario_mark.png`, run
 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-icon.ps1`.
+
+To check native Windows typing and Chromium integration, build and run the
+isolated test app (it does not use your notes or sign-in):
+
+```powershell
+flutter build windows --release --target test/support/windows_desktop_smoke.dart
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/test-windows-desktop.ps1
+```
+
+This checks text fields, note editing, rendered HTML pixels, typing in the
+preview, returning focus to the editor, and the absence of duplicate app windows.
+Rebuild the normal app with `scripts/build-windows.ps1` afterwards; the test
+build uses the same output folder.
 
 ---
 

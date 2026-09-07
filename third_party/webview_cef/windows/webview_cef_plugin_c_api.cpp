@@ -11,6 +11,11 @@ FLUTTER_PLUGIN_EXPORT void initCEFProcesses()
 {
 	webview_cef::initCEFProcesses();
 }
+
+FLUTTER_PLUGIN_EXPORT int initializeCEFForWindows()
+{
+	return webview_cef::initializeCEFForWindows(GetModuleHandle(nullptr));
+}
  
 FLUTTER_PLUGIN_EXPORT void handleWndProcForCEF(HWND hwnd, unsigned int message, unsigned __int64 wParam, __int64 lParam)
 {

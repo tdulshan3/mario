@@ -288,6 +288,9 @@ class WebView extends StatefulWidget {
 }
 
 class WebViewState extends State<WebView> with WebeViewTextInput {
+  @override
+  int? get textInputViewId => Platform.isWindows ? View.of(context).viewId : null;
+
   // Mario patch: Flutter 3.44 added TextInputClient.onFocusReceived; this
   // package predates it. Upstream fix pending. Keep on package upgrades.
   @override
@@ -340,7 +343,11 @@ class WebViewState extends State<WebView> with WebeViewTextInput {
     super.initState();
     _controller._onFocusedNodeChangeMessage = (editable) {
       _composingText = '';
-      editable ? attachTextInputClient() : detachTextInputClient();
+      // A page can autofocus an HTML input while the note editor owns focus.
+      // On Windows, do not replace the editor's platform input connection.
+      if (!Platform.isWindows || _focusNode.hasFocus) {
+        editable ? attachTextInputClient() : detachTextInputClient();
+      }
       _controller._focusEditable = editable;
     };
 

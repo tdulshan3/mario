@@ -537,6 +537,13 @@ namespace webview_cef {
 		return 1;
 	}
 
+#ifdef OS_WIN
+    int initializeCEFForWindows(HINSTANCE instance) {
+        mainArgs = CefMainArgs(instance);
+        app = new WebviewApp();
+        return CefExecuteProcess(mainArgs, app, nullptr);
+    }
+#endif
 	void initCEFProcesses(CefMainArgs args){
 		mainArgs = args;
 		initCEFProcesses();

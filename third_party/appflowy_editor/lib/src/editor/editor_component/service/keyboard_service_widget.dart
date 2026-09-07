@@ -232,6 +232,10 @@ class KeyboardServiceWidgetState extends State<KeyboardServiceWidget>
       textInputService.attach(
         textEditingValue,
         TextInputConfiguration(
+          // Flutter's Windows text-input plugin requires the owning view.
+          viewId: !kIsWeb && defaultTargetPlatform == TargetPlatform.windows
+              ? View.of(context).viewId
+              : null,
           enableDeltaModel: false,
           inputType: TextInputType.multiline,
           textCapitalization: TextCapitalization.sentences,
