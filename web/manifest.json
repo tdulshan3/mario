@@ -3,7 +3,7 @@
     "short_name": "Mario",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#1E1E1E",
+    "background_color": "#17233D",
     "theme_color": "#FFDE7A",
     "description": "Mario — your notes, your world.",
     "orientation": "any",

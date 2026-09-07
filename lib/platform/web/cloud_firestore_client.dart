@@ -28,8 +28,8 @@ class CloudFirestoreClient implements MarioFirestore {
   MarioDoc _wrap(QueryDocumentSnapshot<Map<String, dynamic>> d) =>
       MarioDoc(id: d.id, path: d.reference.path, data: d.data());
 
-  MarioDoc _wrapDoc(DocumentSnapshot<Map<String, dynamic>> d) => MarioDoc(
-      id: d.id, path: d.reference.path, data: d.data() ?? const {});
+  MarioDoc _wrapDoc(DocumentSnapshot<Map<String, dynamic>> d) =>
+      MarioDoc(id: d.id, path: d.reference.path, data: d.data() ?? const {});
 
   @override
   Stream<List<MarioDoc>> watchCollection(
@@ -41,9 +41,7 @@ class CloudFirestoreClient implements MarioFirestore {
     Query<Map<String, dynamic>> q = _db.collection(collectionPath);
     q = _applyFilter(q, where);
     q = _applyOrder(q, orderBy, descending);
-    return q
-        .snapshots()
-        .map((s) => s.docs.map(_wrap).toList(growable: false));
+    return q.snapshots().map((s) => s.docs.map(_wrap).toList(growable: false));
   }
 
   @override
@@ -63,7 +61,7 @@ class CloudFirestoreClient implements MarioFirestore {
 
   @override
   Future<void> set(String docPath, Map<String, dynamic> data,
-      {bool merge = false}) =>
+          {bool merge = false}) =>
       _db.doc(docPath).set(data, SetOptions(merge: merge));
 
   @override
@@ -74,10 +72,10 @@ class CloudFirestoreClient implements MarioFirestore {
   Future<void> delete(String docPath) => _db.doc(docPath).delete();
 
   @override
-  Future<void> arrayUnion(
-          String docPath, String field, List<Object?> items) =>
-      _db.doc(docPath).set({field: FieldValue.arrayUnion(items)},
-          SetOptions(merge: true));
+  Future<void> arrayUnion(String docPath, String field, List<Object?> items) =>
+      _db
+          .doc(docPath)
+          .set({field: FieldValue.arrayUnion(items)}, SetOptions(merge: true));
 
   /// Convenience for share_dialog when it wants the raw doc once.
   Future<MarioDoc> getDoc(String path) async =>
