@@ -90,12 +90,12 @@ BEGIN
         BLOCK "040904e4"
         BEGIN
             VALUE "CompanyName", "com.marionote.app" "\0"
-            VALUE "FileDescription", "mario" "\0"
+            VALUE "FileDescription", "Mario" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "mario" "\0"
             VALUE "LegalCopyright", "Copyright (C) 2026 com.marionote.app. All rights reserved." "\0"
             VALUE "OriginalFilename", "mario.exe" "\0"
-            VALUE "ProductName", "mario" "\0"
+            VALUE "ProductName", "Mario" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

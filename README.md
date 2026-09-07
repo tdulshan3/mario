@@ -5,9 +5,9 @@
 Mario is a block-based notes app built with Flutter. It pairs a rich, Notion-style
 editor with first-class support for math, code, drawing, spreadsheets and voice —
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
-native Linux desktop app and in the browser.
+native Linux or Windows desktop app and in the browser.
 
-**Current release: 1.3.3** — see [What's new](#whats-new-in-133).
+**Current release: 1.3.4** — see [What's new](#whats-new-in-134).
 
 ---
 
@@ -41,7 +41,17 @@ native Linux desktop app and in the browser.
 
 ---
 
-## Unreleased
+## What's new in 1.3.4
+
+**Windows installer and Mario icon.** Install Mario with the Windows x64 setup
+EXE from [GitHub Releases](https://github.com/tdulshan3/mario/releases/latest),
+or extract the portable ZIP and run `mario.exe`. The installer adds a Start menu
+shortcut, offers a desktop shortcut, and supports uninstalling through Windows
+Settings. Both packages include the Visual C++ runtime and desktop Google sign-in
+configuration. The app and installer use Mario's notebook logo.
+
+Windows builds also fix compatibility with newer CMake and Flutter message
+codecs in the embedded browser plugin.
 
 **Pages read like a Markdown preview.** The editor now sets text the way VS
 Code's preview does: 14px on a 22px line, headings on the browser scale with a
@@ -391,6 +401,25 @@ firedart), so the same Desktop OAuth client works. If you would rather not
 bake the credentials in, a `.env` file next to `mario.exe` with
 `desktopclientid=` and `desktopclientsecret=` lines is read at start-up.
 OCR needs `tesseract` on the PATH; without it the feature is simply off.
+
+To build a distributable ZIP using credentials in the ignored root `.env`
+(`desktopclientid=` and `desktopclientsecret=`), run:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1
+```
+
+Pass `-Flutter <path-to-flutter.bat>` if Flutter is not on your PATH. The script
+embeds the credentials, packages the entire Release folder into
+`build/mario-<version>-windows-x64.zip`, and writes a SHA-256 checksum beside it.
+It includes the x64 Visual C++ runtime from the installed Visual Studio tools;
+use `-CrtDirectory <directory>` to supply those redistributable DLLs explicitly.
+
+To also create an installer, install Inno Setup and pass
+`-InstallerCompiler <path-to-ISCC.exe>`. The installer and its checksum are written
+to `build/mario-<version>-windows-x64-setup.exe` and the adjacent `.sha256` file.
+To regenerate the multi-size Windows icon from `assets/logo/mario_mark.png`, run
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows-icon.ps1`.
 
 ---
 

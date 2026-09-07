@@ -74,6 +74,13 @@ namespace webview_cef {
 		mutable std::mutex mutex_;
 	};
 
+	// Flutter's codec owns typed-list data; raw pointers are not codec values.
+	template <typename T>
+	static flutter::EncodableValue encode_typed_list(const T* data, size_t length) {
+		if (length == 0) return flutter::EncodableValue(std::vector<T>{});
+		return flutter::EncodableValue(std::vector<T>(data, data + length));
+	}
+
 	static flutter::EncodableValue encode_wvalue_to_flvalue(WValue* args) {
 		WValueType type = webview_value_get_type(args);
 		switch(type){
@@ -88,15 +95,15 @@ namespace webview_cef {
 			case Webview_Value_Type_String:
 				return flutter::EncodableValue(webview_value_get_string(args));
 			case Webview_Value_Type_Uint8_List:
-				return flutter::EncodableValue(webview_value_get_uint8_list(args));
+				return encode_typed_list(webview_value_get_uint8_list(args), webview_value_get_len(args));
 			case Webview_Value_Type_Int32_List:
-				return flutter::EncodableValue(webview_value_get_int32_list(args));
+				return encode_typed_list(webview_value_get_int32_list(args), webview_value_get_len(args));
 			case Webview_Value_Type_Int64_List:
-				return flutter::EncodableValue(webview_value_get_int64_list(args));
+				return encode_typed_list(webview_value_get_int64_list(args), webview_value_get_len(args));
 			case Webview_Value_Type_Float_List:
-				return flutter::EncodableValue(webview_value_get_float_list(args));
+				return encode_typed_list(webview_value_get_float_list(args), webview_value_get_len(args));
 			case Webview_Value_Type_Double_List:
-				return flutter::EncodableValue(webview_value_get_double_list(args));
+				return encode_typed_list(webview_value_get_double_list(args), webview_value_get_len(args));
 			case Webview_Value_Type_List:
 			{
 				flutter::EncodableList ret;
@@ -116,7 +123,7 @@ namespace webview_cef {
 				return ret;
 			}
 			default:
-				return flutter::EncodableValue(nullptr);
+				return flutter::EncodableValue();
 		}
 	}
 

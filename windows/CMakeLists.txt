@@ -10,6 +10,10 @@ set(BINARY_NAME "mario")
 # versions of CMake.
 cmake_policy(VERSION 3.14...3.25)
 
+# Firebase's bundled C++ SDK declares an older policy version. CMake 4,
+# included with newer Visual Studio installs, requires at least 3.5.
+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+
 # Define build configuration option.
 get_property(IS_MULTICONFIG GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(IS_MULTICONFIG)
