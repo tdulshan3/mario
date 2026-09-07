@@ -31,6 +31,7 @@ import '../export/pdf_exporter.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
 import 'shell_state.dart';
+import 'tree_order.dart';
 
 class NavTree extends ConsumerStatefulWidget {
   const NavTree({super.key});
@@ -382,10 +383,52 @@ class _SectionListState extends ConsumerState<_SectionList> {
               filter: widget.filter,
               onToggle: () => widget.onToggleSection(s.id),
               onMenu: (a) => _handleSectionAction(context, s, a),
+              onDropSection: (dragged, before) =>
+                  _reorderSections(sections, dragged, s, before: before),
+              onDropPageInto: (page) => _movePageInto(page, s),
             );
           },
         );
       },
+    );
+  }
+
+  /// A section dragged to sit before or after another. Every section whose
+  /// place changed is written; the rest are left alone.
+  Future<void> _reorderSections(
+    List<Section> sections,
+    Section dragged,
+    Section target, {
+    required bool before,
+  }) async {
+    final order = reorderedIds(
+      [for (final s in sections) s.id],
+      dragged.id,
+      target.id,
+      before: before,
+    );
+    final byId = {for (final s in sections) s.id: s};
+    final writes =
+        ordersToWrite(order, {for (final s in sections) s.id: s.order});
+    final sync = ref.read(syncServiceProvider);
+    for (final e in writes.entries) {
+      await sync.updateSection(byId[e.key]!.copyWith(order: e.value));
+    }
+  }
+
+  /// A page dropped on a section's header goes to the end of that section.
+  Future<void> _movePageInto(NotePage page, Section target) async {
+    final pages = ref
+            .read(pagesStreamProvider(
+                (notebookId: target.notebookId, sectionId: target.id)))
+            .valueOrNull ??
+        const <NotePage>[];
+    await _writePageOrder(
+      ref,
+      appendedIds([for (final p in pages) p.id], page.id),
+      {for (final p in pages) p.id: p, page.id: page},
+      sectionId: target.id,
+      notebookId: target.notebookId,
     );
   }
 
@@ -434,6 +477,8 @@ class _SectionGroup extends ConsumerStatefulWidget {
     required this.filter,
     required this.onToggle,
     required this.onMenu,
+    required this.onDropSection,
+    required this.onDropPageInto,
   });
 
   final Section section;
@@ -441,6 +486,12 @@ class _SectionGroup extends ConsumerStatefulWidget {
   final String filter;
   final VoidCallback onToggle;
   final ValueChanged<_SectionAction> onMenu;
+
+  /// Another section was dropped on this one's header: before or after it.
+  final void Function(Section dragged, bool before) onDropSection;
+
+  /// A page was dropped on this section's header.
+  final ValueChanged<NotePage> onDropPageInto;
 
   @override
   ConsumerState<_SectionGroup> createState() => _SectionGroupState();
@@ -472,62 +523,82 @@ class _SectionGroupState extends ConsumerState<_SectionGroup> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        MouseRegion(
-          onEnter: (_) => setState(() => _hovered = true),
-          onExit: (_) => setState(() => _hovered = false),
-          child: Material(
-            color: Colors.transparent,
-            child: InkWell(
-              onTap: () {
-                ref.read(selectionProvider.notifier).selectSection(section.id);
-                if (!widget.expanded) widget.onToggle();
-              },
-              onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
-              child: SizedBox(
-                height: t.row,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Row(
-                    children: [
-                      // The chevron swaps glyph rather than rotating: the
-                      // artboard draws `expand_more` open and
-                      // `chevron_right` closed, which are not the same shape
-                      // turned 90°.
-                      GestureDetector(
-                        onTap: widget.onToggle,
-                        behavior: HitTestBehavior.opaque,
-                        child: Icon(
-                          widget.expanded
-                              ? Icons.expand_more
-                              : Icons.chevron_right,
-                          size: 17,
-                          color: t.mut,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          section.name,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: t.rowFontSize,
-                            height: 1.2,
-                            fontWeight: FontWeight.w600,
-                            color: t.ink,
+        _DropZone(
+          // A section lands before or after this one; a page lands inside.
+          accepts: (d) => switch (d) {
+            _DragSection(:final section) => section.id != widget.section.id,
+            _DragPage() => true,
+          },
+          split: (d) => d is _DragSection,
+          onDrop: (d, before) => switch (d) {
+            _DragSection(:final section) =>
+              widget.onDropSection(section, before),
+            _DragPage(:final page) => widget.onDropPageInto(page),
+          },
+          child: _DragHandle(
+            data: _DragSection(section),
+            label: section.name,
+            child: MouseRegion(
+              onEnter: (_) => setState(() => _hovered = true),
+              onExit: (_) => setState(() => _hovered = false),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  onTap: () {
+                    ref
+                        .read(selectionProvider.notifier)
+                        .selectSection(section.id);
+                    if (!widget.expanded) widget.onToggle();
+                  },
+                  onSecondaryTapDown: (d) =>
+                      _showMenu(context, d.globalPosition),
+                  child: SizedBox(
+                    height: t.row,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        children: [
+                          // The chevron swaps glyph rather than rotating: the
+                          // artboard draws `expand_more` open and
+                          // `chevron_right` closed, which are not the same shape
+                          // turned 90°.
+                          GestureDetector(
+                            onTap: widget.onToggle,
+                            behavior: HitTestBehavior.opaque,
+                            child: Icon(
+                              widget.expanded
+                                  ? Icons.expand_more
+                                  : Icons.chevron_right,
+                              size: 17,
+                              color: t.mut,
+                            ),
                           ),
-                        ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              section.name,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: t.rowFontSize,
+                                height: 1.2,
+                                fontWeight: FontWeight.w600,
+                                color: t.ink,
+                              ),
+                            ),
+                          ),
+                          _HoverReveal(
+                            visible: _hovered,
+                            child: _MenuButton<_SectionAction>(
+                              onSelected: widget.onMenu,
+                              items: const [
+                                ('Rename / recolor', _SectionAction.rename),
+                                ('Delete', _SectionAction.delete),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
-                      _HoverReveal(
-                        visible: _hovered,
-                        child: _MenuButton<_SectionAction>(
-                          onSelected: widget.onMenu,
-                          items: const [
-                            ('Rename / recolor', _SectionAction.rename),
-                            ('Delete', _SectionAction.delete),
-                          ],
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
                 ),
               ),
@@ -622,15 +693,21 @@ class _PageListState extends ConsumerState<_PageList> {
         // so by showing nothing, not by claiming the section is empty.
         if (pages.isEmpty && f.isNotEmpty) return const SizedBox.shrink();
         if (pages.isEmpty) {
+          // An empty section still takes a page dropped into it.
           return rail(
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
-              child: Text(
-                'No pages yet',
-                style: text.bodySmall?.copyWith(
-                  fontSize: 13,
-                  color: scheme.onSurfaceVariant,
-                  fontStyle: FontStyle.italic,
+            _DropZone(
+              accepts: (d) => d is _DragPage,
+              split: (_) => false,
+              onDrop: (d, _) => _dropIntoEmpty(d as _DragPage),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                child: Text(
+                  'No pages yet',
+                  style: text.bodySmall?.copyWith(
+                    fontSize: 13,
+                    color: scheme.onSurfaceVariant,
+                    fontStyle: FontStyle.italic,
+                  ),
                 ),
               ),
             ),
@@ -650,6 +727,8 @@ class _PageListState extends ConsumerState<_PageList> {
                         notebookId: p.notebookId,
                       ),
                   onMenu: (a) => _handlePageAction(context, p, a),
+                  onDrop: (d, before) =>
+                      _dropOnPage(d, p, before: before, all: all),
                 ),
             ],
           ),
@@ -657,6 +736,40 @@ class _PageListState extends ConsumerState<_PageList> {
       },
     );
   }
+
+  /// A page dropped before or after [target] — from this section, or from
+  /// another, in which case it moves here at that spot.
+  Future<void> _dropOnPage(
+    _Drag d,
+    NotePage target, {
+    required bool before,
+    required List<NotePage> all,
+  }) async {
+    if (d is! _DragPage) return;
+    final dragged = d.page;
+    if (dragged.id == target.id) return;
+    final order = reorderedIds(
+      [for (final p in all) p.id],
+      dragged.id,
+      target.id,
+      before: before,
+    );
+    await _writePageOrder(
+      ref,
+      order,
+      {for (final p in all) p.id: p, dragged.id: dragged},
+      sectionId: widget.sectionId,
+      notebookId: widget.notebookId,
+    );
+  }
+
+  Future<void> _dropIntoEmpty(_DragPage d) => _writePageOrder(
+        ref,
+        [d.page.id],
+        {d.page.id: d.page},
+        sectionId: widget.sectionId,
+        notebookId: widget.notebookId,
+      );
 
   Future<void> _handlePageAction(
     BuildContext context,
@@ -705,12 +818,16 @@ class _PageTile extends StatefulWidget {
     required this.selected,
     required this.onTap,
     required this.onMenu,
+    required this.onDrop,
   });
 
   final NotePage page;
   final bool selected;
   final VoidCallback onTap;
   final ValueChanged<_PageAction> onMenu;
+
+  /// A page was dropped before or after this one.
+  final void Function(_Drag dragged, bool before) onDrop;
 
   @override
   State<_PageTile> createState() => _PageTileState();
@@ -724,58 +841,67 @@ class _PageTileState extends State<_PageTile> {
     final t = marioTokens(context);
     final selected = widget.selected;
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hovered = true),
-      onExit: (_) => setState(() => _hovered = false),
-      child: MarioAccentEdge(
-        active: selected,
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            onTap: widget.onTap,
-            onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
-            child: SizedBox(
-              height: t.row,
-              child: Padding(
-                // Leading 12 only. The selected row's bar is an overlay, so
-                // it does not push the label across the way a border would —
-                // selected and unselected rows stay on the same left edge.
-                padding: const EdgeInsets.only(left: 12, right: 10),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        widget.page.title.isEmpty
-                            ? 'Untitled'
-                            : widget.page.title,
-                        overflow: TextOverflow.ellipsis,
-                        softWrap: false,
-                        style: TextStyle(
-                          fontSize: t.rowFontSize,
-                          height: 1.2,
-                          fontWeight:
-                              selected ? FontWeight.w600 : FontWeight.w400,
-                          color: selected ? t.accentText : t.sec,
+    return _DropZone(
+      accepts: (d) => d is _DragPage && d.page.id != widget.page.id,
+      split: (_) => true,
+      onDrop: widget.onDrop,
+      child: _DragHandle(
+        data: _DragPage(widget.page),
+        label: widget.page.title.isEmpty ? 'Untitled' : widget.page.title,
+        child: MouseRegion(
+          onEnter: (_) => setState(() => _hovered = true),
+          onExit: (_) => setState(() => _hovered = false),
+          child: MarioAccentEdge(
+            active: selected,
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: widget.onTap,
+                onSecondaryTapDown: (d) => _showMenu(context, d.globalPosition),
+                child: SizedBox(
+                  height: t.row,
+                  child: Padding(
+                    // Leading 12 only. The selected row's bar is an overlay, so
+                    // it does not push the label across the way a border would —
+                    // selected and unselected rows stay on the same left edge.
+                    padding: const EdgeInsets.only(left: 12, right: 10),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            widget.page.title.isEmpty
+                                ? 'Untitled'
+                                : widget.page.title,
+                            overflow: TextOverflow.ellipsis,
+                            softWrap: false,
+                            style: TextStyle(
+                              fontSize: t.rowFontSize,
+                              height: 1.2,
+                              fontWeight:
+                                  selected ? FontWeight.w600 : FontWeight.w400,
+                              color: selected ? t.accentText : t.sec,
+                            ),
+                          ),
                         ),
-                      ),
+                        // Same trade as the section rows: quiet by default, menu
+                        // on hover, right-click anywhere on the row. Export has no
+                        // other entry point here, so it must not be hover-only on
+                        // touch.
+                        _HoverReveal(
+                          visible: _hovered,
+                          child: _MenuButton<_PageAction>(
+                            onSelected: widget.onMenu,
+                            items: const [
+                              ('Rename', _PageAction.rename),
+                              ('Export as Markdown', _PageAction.exportMd),
+                              ('Export as PDF', _PageAction.exportPdf),
+                              ('Delete', _PageAction.delete),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                    // Same trade as the section rows: quiet by default, menu
-                    // on hover, right-click anywhere on the row. Export has no
-                    // other entry point here, so it must not be hover-only on
-                    // touch.
-                    _HoverReveal(
-                      visible: _hovered,
-                      child: _MenuButton<_PageAction>(
-                        onSelected: widget.onMenu,
-                        items: const [
-                          ('Rename', _PageAction.rename),
-                          ('Export as Markdown', _PageAction.exportMd),
-                          ('Export as PDF', _PageAction.exportPdf),
-                          ('Delete', _PageAction.delete),
-                        ],
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -804,6 +930,223 @@ class _PageTileState extends State<_PageTile> {
       ],
     );
     if (result != null) widget.onMenu(result);
+  }
+}
+
+/// Writes the orders that changed once [order] became the order of the pages
+/// in [sectionId], moving any page that came from another section.
+///
+/// The open page can be the one that moved: the editor host looks it up in
+/// the selected section's list, so the selection follows it across.
+Future<void> _writePageOrder(
+  WidgetRef ref,
+  List<String> order,
+  Map<String, NotePage> byId, {
+  required String sectionId,
+  required String notebookId,
+}) async {
+  final sync = ref.read(syncServiceProvider);
+  final selection = ref.read(selectionProvider);
+  for (var i = 0; i < order.length; i++) {
+    final p = byId[order[i]];
+    if (p == null) continue;
+    if (p.order == i && p.sectionId == sectionId) continue;
+    await sync.updatePage(p.copyWith(order: i, sectionId: sectionId));
+    if (p.sectionId != sectionId && selection.pageId == p.id) {
+      ref.read(selectionProvider.notifier).selectPage(
+            p.id,
+            sectionId: sectionId,
+            notebookId: notebookId,
+          );
+    }
+  }
+}
+
+// ── Drag and drop ──────────────────────────────────────────────────────────
+//
+// Rows are picked up with a short press and dropped on other rows. A
+// section dropped on a section header lands before or after it, by which
+// half of the row the pointer is in; a page dropped on a page does the same,
+// in that page's section; a page dropped on a section header, or on an
+// empty section's placeholder, goes to the end of that section. The drop
+// zone draws a 2px accent line where the row will land, or a frame around
+// the section it will join. Orders are renumbered and written through the
+// sync service, so a drag works offline like everything else.
+
+/// What is being dragged.
+sealed class _Drag {
+  const _Drag();
+}
+
+class _DragSection extends _Drag {
+  const _DragSection(this.section);
+  final Section section;
+}
+
+class _DragPage extends _Drag {
+  const _DragPage(this.page);
+  final NotePage page;
+}
+
+/// Makes a row draggable after a short press — short enough to feel like
+/// picking it up, long enough that a click still selects. The feedback hangs
+/// from the pointer, which is what lets drop zones read the pointer's
+/// position from the drag details.
+class _DragHandle extends StatelessWidget {
+  const _DragHandle({
+    required this.data,
+    required this.label,
+    required this.child,
+  });
+
+  final _Drag data;
+  final String label;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => LongPressDraggable<_Drag>(
+        data: data,
+        delay: const Duration(milliseconds: 160),
+        dragAnchorStrategy: pointerDragAnchorStrategy,
+        feedback: _DragFeedback(label: label),
+        childWhenDragging: Opacity(opacity: 0.35, child: child),
+        child: child,
+      );
+}
+
+class _DragFeedback extends StatelessWidget {
+  const _DragFeedback({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = marioTokens(context);
+    return Transform.translate(
+      offset: const Offset(10, -16),
+      child: Material(
+        elevation: 4,
+        color: t.paper,
+        borderRadius: BorderRadius.circular(MarioRadius.sm),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 220),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            child: Text(
+              label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: t.rowFontSize,
+                fontWeight: FontWeight.w500,
+                color: t.ink,
+                decoration: TextDecoration.none,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A row that other rows can be dropped on.
+///
+/// [split] says whether a drag lands before or after this row (an accent
+/// line shows which) or inside it (a frame shows that).
+class _DropZone extends StatefulWidget {
+  const _DropZone({
+    required this.accepts,
+    required this.split,
+    required this.onDrop,
+    required this.child,
+  });
+
+  final bool Function(_Drag drag) accepts;
+  final bool Function(_Drag drag) split;
+  final void Function(_Drag drag, bool before) onDrop;
+  final Widget child;
+
+  @override
+  State<_DropZone> createState() => _DropZoneState();
+}
+
+class _DropZoneState extends State<_DropZone> {
+  /// Where the drag would land: true above, false below, null not here.
+  bool? _before;
+  bool _into = false;
+
+  void _track(DragTargetDetails<_Drag> d) {
+    if (!widget.accepts(d.data)) return;
+    final box = context.findRenderObject();
+    if (box is! RenderBox || !box.hasSize) return;
+    final local = box.globalToLocal(d.offset);
+    final split = widget.split(d.data);
+    final before = split && local.dy < box.size.height / 2;
+    final into = !split;
+    if (before != _before || into != _into) {
+      setState(() {
+        _before = before;
+        _into = into;
+      });
+    }
+  }
+
+  void _clear() {
+    if (_before == null && !_into) return;
+    setState(() {
+      _before = null;
+      _into = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final t = marioTokens(context);
+    return DragTarget<_Drag>(
+      onWillAcceptWithDetails: (d) {
+        final ok = widget.accepts(d.data);
+        if (ok) _track(d);
+        return ok;
+      },
+      onMove: _track,
+      onLeave: (_) => _clear(),
+      onAcceptWithDetails: (d) {
+        final before = _before ?? false;
+        _clear();
+        widget.onDrop(d.data, before);
+      },
+      builder: (context, candidates, _) {
+        final hovering = candidates.isNotEmpty;
+        return Stack(
+          clipBehavior: Clip.none,
+          children: [
+            widget.child,
+            if (hovering && _into)
+              Positioned.fill(
+                child: IgnorePointer(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: t.accentBase, width: 1.5),
+                      borderRadius: BorderRadius.circular(MarioRadius.sm),
+                    ),
+                  ),
+                ),
+              ),
+            if (hovering && !_into && _before != null)
+              Positioned(
+                left: 8,
+                right: 8,
+                top: _before! ? -1 : null,
+                bottom: _before! ? null : -1,
+                child: IgnorePointer(
+                  child: Container(height: 2, color: t.accentBase),
+                ),
+              ),
+          ],
+        );
+      },
+    );
   }
 }
 

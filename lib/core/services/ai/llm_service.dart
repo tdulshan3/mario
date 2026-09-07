@@ -254,6 +254,25 @@ class LlmService {
     if (response.text.trim().isEmpty && response.reasoning.trim().isNotEmpty) {
       final fromReasoning = extractJsonObject(response.reasoning);
       if (fromReasoning != null) return fromReasoning;
+
+      // It thought and never answered. The JSON it was going to write is
+      // short; the deliberation is what did not fit. Ask once more with
+      // thinking off — the provider knows how to say that to each server —
+      // rather than repairing an answer that does not exist. Quiz batches
+      // of a dozen questions died here on a 4B model at the default depth:
+      // six thousand characters of planning, then the ceiling, then nothing.
+      if (withSchema.effort != LlmEffort.low) {
+        final quiet = await provider.complete(
+          withSchema.copyWith(effort: LlmEffort.low),
+          cancel: cancel,
+        );
+        final parsed = extractJsonObject(quiet.text) ??
+            (quiet.text.trim().isEmpty
+                ? extractJsonObject(quiet.reasoning)
+                : null);
+        if (parsed != null) return parsed;
+        response = quiet;
+      }
     }
 
     if (repairAttempts <= 0) {

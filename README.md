@@ -80,6 +80,24 @@ your notebooks on a train instead of an error. A page created offline gets
 its Drive file when Drive is back, and a save that failed to upload is pushed
 then too. The editor's status line counts changes still waiting to sync.
 
+**Drag to reorder and move.** Sections and pages in the sidebar can be
+picked up with a short press and dropped: a section before or after another,
+a page before or after another page — in its own section or a different one —
+or onto a section's header to move it there. An accent line shows where the
+drop will land. The new order is written through the sync service, so it
+works offline like everything else.
+
+**Quizzes generate on thinking models, and essays have room.** A hybrid
+model at the default depth planned a batch of multiple-choice questions
+straight through its output budget and wrote nothing, so quizzes came back
+with no MCQs. Any structured request that thinks its budget away is now
+asked once more without thinking, so a quiz comes back instead of an error
+while you keep the depth you chose. The item validator also reads the shapes small models actually
+write — a letter or the option's text for the answer, labelled options,
+three to six choices — and the step line says why a batch was unusable. The
+essay answer box starts at eight lines, grows as you write, and opens in a
+window-sized editor.
+
 **Markdown imports keep more.** Pasted or generated Markdown now keeps its
 `$$…$$` and ```` ```math ```` formulas (as formula blocks) and its
 `> [!NOTE]` / `[!TIP]` / `[!IMPORTANT]` callouts (as titled quotes), where the
@@ -343,6 +361,36 @@ sudo rm -rf /opt/mario /usr/local/bin/mario \
 
 ### Arch Linux
 Packaging scripts and a `PKGBUILD` live under [`packaging/arch/`](packaging/arch/).
+
+## Build on Windows
+
+Flutter builds Windows apps only on Windows (there is no cross-compiling from
+Linux), so this happens on a Windows machine or VM:
+
+1. Install [Flutter](https://docs.flutter.dev/get-started/install/windows)
+   (the same stable channel as this repo), Git, and **Visual Studio 2022**
+   with the **Desktop development with C++** workload (CMake and the Windows
+   SDK come with it). `flutter doctor` must show the Visual Studio line green.
+2. Clone the repo, then in PowerShell from its root:
+
+   ```powershell
+   flutter pub get
+   flutter build windows --release `
+     --dart-define=MARIO_DESKTOP_CLIENT_ID=<your desktop client id> `
+     --dart-define=MARIO_DESKTOP_CLIENT_SECRET=<your desktop client secret>
+   ```
+
+   The first build downloads the CEF binaries for the HTML preview (a few
+   hundred megabytes) and the Firebase C++ SDK; both are cached afterwards.
+3. The app is the whole folder `build\windows\x64\runner\Release\` —
+   `mario.exe` plus the DLLs and `data\` beside it. Copy that folder as one
+   unit; the exe does not run alone.
+
+Windows shares the Linux sign-in and sync stack (a loopback OAuth flow and
+firedart), so the same Desktop OAuth client works. If you would rather not
+bake the credentials in, a `.env` file next to `mario.exe` with
+`desktopclientid=` and `desktopclientsecret=` lines is read at start-up.
+OCR needs `tesseract` on the PATH; without it the feature is simply off.
 
 ---
 

@@ -1,4 +1,5 @@
-/// Linux OcrService — runs `tesseract <path> stdout` and splits on newlines.
+/// Desktop OcrService — runs `tesseract <path> stdout` and splits on newlines.
+/// Linux and Windows alike: tesseract is on the PATH or it is not.
 import 'dart:io';
 
 import '../../core/services/ocr_service.dart';
@@ -10,7 +11,8 @@ class OcrServiceLinux implements OcrService {
   bool get isAvailable {
     if (_checked != null) return _checked!;
     try {
-      final r = Process.runSync('which', ['tesseract']);
+      final r = Process.runSync(
+          Platform.isWindows ? 'where' : 'which', ['tesseract']);
       _checked = r.exitCode == 0;
     } catch (_) {
       _checked = false;

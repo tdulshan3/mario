@@ -1048,6 +1048,11 @@ extension QuizTasks on AiTasks {
             ),
           ],
           maxTokens: ask * tokensPerItem + 400,
+          // The depth the user chose, as everywhere else. A hybrid model at
+          // a deep setting can plan a dozen questions straight through this
+          // budget and write nothing; that is the model's fit for the
+          // machine, which the user picks, and LlmService.structured asks
+          // once more without thinking if it happens.
           effort: llm.userEffort,
         ),
         schemaName: 'quiz',
@@ -1058,9 +1063,15 @@ extension QuizTasks on AiTasks {
       final title = asString(result['title']);
       if (title != null && title.trim().isNotEmpty) onTitle(title.trim());
 
+      final raw = asMapList(result['items']);
+      final validated = validateQuizItemsDetailed(raw);
       final fresh = <QuizItem>[];
-      for (final item in validateQuizItems(asMapList(result['items']))) {
-        if (item.kind != kind) continue;
+      var offKind = 0;
+      for (final item in validated.items) {
+        if (item.kind != kind) {
+          offKind++;
+          continue;
+        }
         if (!seen.add(questionKey(item.question))) continue;
         fresh.add(item);
         if (kept.length + fresh.length >= target) break;
@@ -1068,11 +1079,20 @@ extension QuizTasks on AiTasks {
 
       if (fresh.isEmpty) {
         barren++;
+        // Say why, in the step line: a barren round that reads "0 of 20"
+        // twice is indistinguishable from a model that answered nothing.
+        final reasons = [
+          for (final e in validated.rejected.entries) '${e.key} ×${e.value}',
+          if (offKind > 0) 'wrong kind ×$offKind',
+        ];
+        run.detail('${alreadyHave + kept.length} of $total — '
+            '${raw.length} came back, none usable'
+            '${reasons.isEmpty ? '' : ' (${reasons.join(', ')})'}');
       } else {
         barren = 0;
         kept.addAll(fresh);
+        run.detail('${alreadyHave + kept.length} of $total');
       }
-      run.detail('${alreadyHave + kept.length} of $total');
     }
     return kept;
   }
@@ -1279,30 +1299,67 @@ String _wrongAnswerFeedback(QuizItem item) {
 ///  * duplicate options, which make two answers correct
 ///  * a blank question, option or rubric
 ///  * an essay with no rubric points, which there is then no honest way to mark
-List<QuizItem> validateQuizItems(List<Map<String, dynamic>> raw) {
+List<QuizItem> validateQuizItems(List<Map<String, dynamic>> raw) =>
+    validateQuizItemsDetailed(raw).items;
+
+/// What validation kept, and a count of why it dropped the rest.
+class QuizValidation {
+  const QuizValidation(this.items, this.rejected);
+
+  final List<QuizItem> items;
+
+  /// Reason → how many items it accounts for. Short phrases, for a step line.
+  final Map<String, int> rejected;
+}
+
+/// Validates generated items, forgiving the shapes small models actually
+/// write and refusing only what cannot be marked.
+///
+/// A 4B model asked for `correctIndex` answers "B", or "2" in quotes, or the
+/// option's text under `answer`, or 1-based; it labels options "A) …"; it
+/// gives five choices when asked for four. None of those makes the question
+/// unmarkable, and dropping them was dropping most of a paper. What still
+/// goes: a question with no words, options that are blank or duplicated, an
+/// answer that names no option, an essay with no rubric.
+QuizValidation validateQuizItemsDetailed(List<Map<String, dynamic>> raw) {
   final out = <QuizItem>[];
+  final rejected = <String, int>{};
+  void reject(String reason) => rejected[reason] = (rejected[reason] ?? 0) + 1;
+
   for (var i = 0; i < raw.length; i++) {
     final m = raw[i];
-    final question = asStringOr(m['question']).trim();
-    if (question.isEmpty) continue;
+    final question =
+        asStringOr(m['question'] ?? m['stem'] ?? m['prompt']).trim();
+    if (question.isEmpty) {
+      reject('no question');
+      continue;
+    }
 
-    final kind = m['kind'] == 'essay' ? QuizItemKind.essay : QuizItemKind.mcq;
+    final kind = _quizKindOf(m);
     final id =
         'q${i + 1}-${question.hashCode.toUnsigned(20).toRadixString(36)}';
 
     if (kind == QuizItemKind.mcq) {
-      final options = asStringList(m['options']).map((o) => o.trim()).toList();
-      if (options.length != 4) continue;
-      if (options.any((o) => o.isEmpty)) continue;
+      final options = _quizOptions(m);
+      if (options.length < 3 || options.length > 6) {
+        reject(options.isEmpty ? 'no options' : 'not 3–6 options');
+        continue;
+      }
+      if (options.any((o) => o.isEmpty)) {
+        reject('blank option');
+        continue;
+      }
       // Case-insensitive: "Paris" and "paris" are the same option to a reader.
       if (options.map((o) => o.toLowerCase()).toSet().length !=
           options.length) {
+        reject('duplicate options');
         continue;
       }
-      // asInt, not a cast: a small model asked for an integer answers with
-      // `[0]` often enough that `as num?` took quiz generation down entirely.
-      final correct = asInt(m['correctIndex']);
-      if (correct == null || correct < 0 || correct >= options.length) continue;
+      final correct = _quizCorrectIndex(m, options);
+      if (correct == null) {
+        reject('no correct answer');
+        continue;
+      }
 
       out.add(QuizItem(
         id: id,
@@ -1310,26 +1367,119 @@ List<QuizItem> validateQuizItems(List<Map<String, dynamic>> raw) {
         question: question,
         options: options,
         correctIndex: correct,
-        explanation: asStringOr(m['explanation']).trim(),
+        explanation: asStringOr(m['explanation'] ?? m['rationale']).trim(),
       ));
     } else {
-      final points = asStringList(m['expectedPoints'])
+      final points = asStringList(m['expectedPoints'] ??
+              m['expected_points'] ??
+              m['rubric'] ??
+              m['keyPoints'] ??
+              m['key_points'])
           .map((p) => p.trim())
           .where((p) => p.isNotEmpty)
           .toList();
-      if (points.isEmpty) continue;
+      if (points.isEmpty) {
+        reject('essay with no rubric');
+        continue;
+      }
 
       out.add(QuizItem(
         id: id,
         kind: QuizItemKind.essay,
         question: question,
         expectedPoints: points,
-        explanation: asStringOr(m['explanation']).trim(),
+        explanation: asStringOr(m['explanation'] ?? m['rationale']).trim(),
         // One mark per rubric point, so partial credit is meaningful rather
         // than a fraction the model invented.
         marks: points.length.clamp(1, 10),
       ));
     }
   }
-  return out;
+  return QuizValidation(out, rejected);
+}
+
+QuizItemKind _quizKindOf(Map<String, dynamic> m) {
+  final kind = asStringOr(m['kind'] ?? m['type']).trim().toLowerCase();
+  if (kind.contains('essay') ||
+      kind.contains('open') ||
+      kind.contains('short') ||
+      kind.contains('long')) {
+    return QuizItemKind.essay;
+  }
+  // No kind at all: a rubric with no options is an essay, options are an MCQ.
+  if (kind.isEmpty &&
+      m['options'] == null &&
+      m['choices'] == null &&
+      (m['expectedPoints'] != null || m['rubric'] != null)) {
+    return QuizItemKind.essay;
+  }
+  return QuizItemKind.mcq;
+}
+
+/// A leading enumerator a model likes to write into each option — "A) ",
+/// "b. ", "(C) ", "1: " — which the panel draws its own way.
+final RegExp _optionLabel = RegExp(r'^\(?([A-Fa-f]|[1-6])[\)\].:]\s*');
+
+List<String> _quizOptions(Map<String, dynamic> m) {
+  final raw = m['options'] ?? m['choices'] ?? m['answers'];
+  final options = <String>[];
+  if (raw is List) {
+    for (final o in raw) {
+      if (o is String) {
+        options.add(o.trim());
+      } else if (o is Map) {
+        final text =
+            asStringOr(o['text'] ?? o['option'] ?? o['label'] ?? o['value']);
+        options.add(text.trim());
+      }
+    }
+  }
+  // Strip the labels only when the list is labelled throughout; one option
+  // that happens to start with "A." is content.
+  final labelled = options.where((o) => _optionLabel.hasMatch(o)).length;
+  if (options.isNotEmpty && labelled >= (options.length + 1) ~/ 2) {
+    return [for (final o in options) o.replaceFirst(_optionLabel, '').trim()];
+  }
+  return options;
+}
+
+/// The right answer's index, however the model pointed at it.
+int? _quizCorrectIndex(Map<String, dynamic> m, List<String> options) {
+  final raw = m['correctIndex'] ??
+      m['correct_index'] ??
+      m['answerIndex'] ??
+      m['answer_index'] ??
+      m['correct'] ??
+      m['answer'] ??
+      m['correctAnswer'] ??
+      m['correct_answer'] ??
+      m['correctOption'] ??
+      m['correct_option'];
+  if (raw == null) return null;
+
+  // asInt, not a cast: a small model asked for an integer answers with
+  // `[0]` often enough that `as num?` took quiz generation down entirely.
+  final n = asInt(raw);
+  if (n != null) {
+    if (n >= 0 && n < options.length) return n;
+    // 1-based, one past the end: "4" in a list of four.
+    if (n == options.length) return n - 1;
+    return null;
+  }
+
+  final text = asStringOr(raw).trim();
+  if (text.isEmpty) return null;
+  // A letter: "B", "b", "(B)", "B)".
+  final letter = RegExp(r'^\(?([A-Fa-f])\)?$').firstMatch(text);
+  if (letter != null) {
+    final idx =
+        letter.group(1)!.toLowerCase().codeUnitAt(0) - 'a'.codeUnitAt(0);
+    return idx < options.length ? idx : null;
+  }
+  // The option's own text, with or without its label.
+  final wanted = text.replaceFirst(_optionLabel, '').trim().toLowerCase();
+  for (var i = 0; i < options.length; i++) {
+    if (options[i].toLowerCase() == wanted) return i;
+  }
+  return null;
 }

@@ -1,5 +1,12 @@
-/// Mario entrypoint — initialises Firebase (web only), firedart (Linux),
-/// the window/tray, then runs MarioApp.
+/// Mario entrypoint — initialises Firebase (web, mobile and macOS), firedart
+/// (Linux and Windows), the window/tray, then runs MarioApp.
+///
+/// Linux and Windows share one Dart-only stack: firedart for Firestore, a
+/// loopback OAuth flow for sign-in, and credentials baked in with
+/// `--dart-define`. FlutterFire's desktop sign-in is a browser popup that
+/// does not exist on Windows, and the "Linux" platform code never depended on
+/// Linux — it is HTTP, a local HTTP server and the keyring — so Windows takes
+/// the same road rather than a broken one.
 library;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -48,11 +55,12 @@ MarioSecrets? _linuxSecrets;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  final isLinuxNative =
-      !kIsWeb && defaultTargetPlatform == TargetPlatform.linux;
+  final isNativeDesktop = !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.linux ||
+          defaultTargetPlatform == TargetPlatform.windows);
 
-  if (!isLinuxNative) {
-    // Firebase Flutter has no Linux SDK; web/mobile takes the official path.
+  if (!isNativeDesktop) {
+    // Web, mobile and macOS take the official FlutterFire path.
     await Firebase.initializeApp(
         options: DefaultFirebaseOptions.currentPlatform);
   } else {
@@ -70,7 +78,7 @@ Future<void> main() async {
     fd.Firestore.initialize(webOpts.projectId);
   }
 
-  _registerServices(isLinuxNative);
+  _registerServices(isNativeDesktop);
 
   // Load the image-asset index before the first editor can mount. It is one
   // small JSON read, and having it in memory is what lets an image block
@@ -87,7 +95,7 @@ Future<void> main() async {
   ));
 }
 
-void _registerServices(bool isLinuxNative) {
+void _registerServices(bool isNativeDesktop) {
   final getIt = GetIt.instance;
 
   if (kIsWeb) {
@@ -95,7 +103,7 @@ void _registerServices(bool isLinuxNative) {
     getIt.registerSingleton<OcrService>(OcrServiceWeb());
     getIt.registerSingleton<MarioFirestore>(
         CloudFirestoreClient(FirebaseFirestore.instance));
-  } else if (isLinuxNative) {
+  } else if (isNativeDesktop) {
     final webOpts = DefaultFirebaseOptions.web;
     // Demo mode never signs in — its auth state is a fixture — so it must not
     // require OAuth credentials just to reach a screenshot.
@@ -118,7 +126,7 @@ void _registerServices(bool isLinuxNative) {
     getIt.registerSingleton<MarioFirestore>(
         FiredartClient(fd.Firestore.instance));
   } else {
-    // Other desktops (mac/windows) — fall back to FlutterFire if init succeeded.
+    // macOS and mobile — FlutterFire, initialised above.
     getIt.registerSingleton<AuthService>(AuthServiceWeb());
     getIt.registerSingleton<OcrService>(OcrServiceWeb());
     getIt.registerSingleton<MarioFirestore>(

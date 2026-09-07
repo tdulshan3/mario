@@ -735,26 +735,135 @@ class _QuestionCard extends StatelessWidget {
                 ),
               )
           else
-            TextField(
-              controller: essayController,
+            _EssayField(
+              controller: essayController!,
               onChanged: onEssayChanged,
-              minLines: 4,
-              maxLines: 10,
-              style: GoogleFonts.inter(fontSize: 12.5, height: 1.45),
-              decoration: InputDecoration(
-                hintText: 'Write your answer...',
-                isDense: true,
-                contentPadding: const EdgeInsets.all(10),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(6),
-                  borderSide: BorderSide(color: scheme.outlineVariant),
-                ),
-              ),
+              question: item.question,
             ),
         ],
       ),
     );
   }
+}
+
+/// Room to write an essay in.
+///
+/// A four-line box in a 360px panel is a place to type a sentence, not an
+/// answer worth marks. This one starts at eight lines and grows with the
+/// text, and the corner button opens the same answer in a dialog the size of
+/// the window — the same controller, so nothing is copied or lost between
+/// the two.
+class _EssayField extends StatelessWidget {
+  const _EssayField({
+    required this.controller,
+    required this.onChanged,
+    required this.question,
+  });
+
+  final TextEditingController controller;
+  final ValueChanged<String> onChanged;
+  final String question;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        TextField(
+          controller: controller,
+          onChanged: onChanged,
+          minLines: 8,
+          maxLines: null,
+          keyboardType: TextInputType.multiline,
+          textInputAction: TextInputAction.newline,
+          style: GoogleFonts.inter(fontSize: 13, height: 1.5),
+          decoration: InputDecoration(
+            hintText: 'Write your answer…',
+            isDense: true,
+            contentPadding: const EdgeInsets.all(12),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(6),
+              borderSide: BorderSide(color: scheme.outlineVariant),
+            ),
+          ),
+        ),
+        Align(
+          alignment: Alignment.centerRight,
+          child: TextButton.icon(
+            onPressed: () => _openLarge(context),
+            icon: const Icon(Icons.open_in_full, size: 14),
+            label: const Text('Write in a larger editor'),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              textStyle: GoogleFonts.inter(fontSize: 11.5),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openLarge(BuildContext context) => showDialog<void>(
+        context: context,
+        builder: (context) {
+          final scheme = Theme.of(context).colorScheme;
+          final size = MediaQuery.sizeOf(context);
+          return Dialog(
+            insetPadding: const EdgeInsets.all(24),
+            child: SizedBox(
+              width: size.width * 0.8,
+              height: size.height * 0.85,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    AiInlineMarkdown(
+                      question,
+                      style: GoogleFonts.inter(
+                          fontSize: 14,
+                          height: 1.4,
+                          fontWeight: FontWeight.w500,
+                          color: scheme.onSurface),
+                    ),
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        onChanged: onChanged,
+                        autofocus: true,
+                        maxLines: null,
+                        expands: true,
+                        textAlignVertical: TextAlignVertical.top,
+                        keyboardType: TextInputType.multiline,
+                        style: GoogleFonts.inter(fontSize: 14, height: 1.55),
+                        decoration: InputDecoration(
+                          hintText: 'Write your answer…',
+                          contentPadding: const EdgeInsets.all(14),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(6),
+                            borderSide:
+                                BorderSide(color: scheme.outlineVariant),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton(
+                        onPressed: () => Navigator.of(context).pop(),
+                        child: const Text('Done'),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
+      );
 }
 
 class _ResultCard extends StatelessWidget {

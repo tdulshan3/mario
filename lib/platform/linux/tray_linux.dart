@@ -1,7 +1,10 @@
-/// Linux system tray — yellow square icon with M, context menu (Open / Quit).
+/// System tray for Linux and Windows — yellow square icon with M, context
+/// menu (Open / Quit). Windows wants an `.ico`; one is written around the
+/// same PNG, since an ICO may carry PNG-compressed images.
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
@@ -50,7 +53,8 @@ Future<void> setupLinuxTray() async {
 Future<String?> _ensureTrayIcon() async {
   try {
     final dir = await getApplicationSupportDirectory();
-    final file = File('${dir.path}/mario_tray.png');
+    final file =
+        File('${dir.path}/mario_tray.${Platform.isWindows ? 'ico' : 'png'}');
     if (await file.exists()) return file.path;
 
     const size = 64.0;
@@ -70,7 +74,8 @@ Future<String?> _ensureTrayIcon() async {
     ))
       ..pushStyle(ui.TextStyle(color: const Color(0xFFFFFFFF)))
       ..addText('M');
-    final paragraph = pb.build()..layout(const ui.ParagraphConstraints(width: size));
+    final paragraph = pb.build()
+      ..layout(const ui.ParagraphConstraints(width: size));
     canvas.drawParagraph(paragraph, const Offset(0, 8));
 
     final picture = recorder.endRecording();
@@ -78,9 +83,30 @@ Future<String?> _ensureTrayIcon() async {
     final bytes = await image.toByteData(format: ui.ImageByteFormat.png);
     image.dispose();
     if (bytes == null) return null;
-    await file.writeAsBytes(bytes.buffer.asUint8List());
+    final png = bytes.buffer.asUint8List();
+    await file.writeAsBytes(Platform.isWindows ? _icoAround(png) : png);
     return file.path;
   } catch (_) {
     return null;
   }
+}
+
+/// An ICO container holding one PNG image: a 6-byte header, one 16-byte
+/// directory entry, then the PNG bytes verbatim. Windows has read PNG
+/// entries in ICO files since Vista.
+Uint8List _icoAround(Uint8List png, {int size = 64}) {
+  final out = BytesBuilder();
+  void u16(int v) => out.add([v & 0xff, (v >> 8) & 0xff]);
+  void u32(int v) =>
+      out.add([v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, (v >> 24) & 0xff]);
+  u16(0); // reserved
+  u16(1); // type: icon
+  u16(1); // one image
+  out.add([size & 0xff, size & 0xff, 0, 0]); // width, height, colours, reserved
+  u16(1); // colour planes
+  u16(32); // bits per pixel
+  u32(png.length);
+  u32(6 + 16); // offset of the image data
+  out.add(png);
+  return out.toBytes();
 }

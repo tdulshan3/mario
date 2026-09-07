@@ -28,10 +28,11 @@ class NotePage {
     int? order,
     int? indentLevel,
     DateTime? updatedAt,
+    String? sectionId,
   }) =>
       NotePage(
         id: id,
-        sectionId: sectionId,
+        sectionId: sectionId ?? this.sectionId,
         notebookId: notebookId,
         title: title ?? this.title,
         driveFileId: driveFileId ?? this.driveFileId,
