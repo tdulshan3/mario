@@ -124,10 +124,25 @@ class AgentExecutor {
         return _deleteBlock(action);
       case AgentActionKind.moveBlock:
         return _moveBlock(action);
+      case AgentActionKind.writePage:
+        // Only the current page reaches here; the panel sends a named page
+        // to the tools, which write through the content repository.
+        return _writeWhole(action);
       case AgentActionKind.renamePage:
+      case AgentActionKind.createPage:
+      case AgentActionKind.createSection:
+      case AgentActionKind.renameSection:
+      case AgentActionKind.createNotebook:
       case AgentActionKind.setting:
       case AgentActionKind.htmlArtifact:
-        // Handled by the caller: neither lives in the document.
+      case AgentActionKind.readPage:
+      case AgentActionKind.listNotebooks:
+      case AgentActionKind.listPages:
+      case AgentActionKind.searchNotes:
+      case AgentActionKind.webSearch:
+      case AgentActionKind.openPage:
+      case AgentActionKind.askUser:
+        // Handled by the caller: none of these lives in the document.
         return true;
       default:
         final nodes = _nodesFor(action);
@@ -157,6 +172,29 @@ class AgentExecutor {
       }
     }
     return ok;
+  }
+
+  /// Writes Markdown after, before, or instead of everything on the page.
+  ///
+  /// `replace` inserts first and deletes second, exactly as [restore] does:
+  /// a page with no top-level block has nothing focusable.
+  Future<bool> _writeWhole(AgentAction action) async {
+    final nodes = marioMarkdownToNodes(action.text);
+    if (nodes.isEmpty) return false;
+    switch (action.mode) {
+      case 'prepend':
+        return safeApply(editorState, (tx) => tx.insertNodes([0], nodes));
+      case 'replace':
+        final existing = [...editorState.document.root.children];
+        return safeApply(editorState, (tx) {
+          tx.insertNodes([existing.length], nodes);
+          for (final node in existing) {
+            tx.deleteNode(node);
+          }
+        });
+      default:
+        return _insert(nodes, null);
+    }
   }
 
   /// Where an insert anchored to [afterBlockId] should go.
@@ -337,8 +375,22 @@ class AgentExecutor {
         return [_tableNode(a.rows)];
       case AgentActionKind.spreadsheet:
         return [spreadsheetNode(workbook: _workbook(a.rows, a.text))];
+      case AgentActionKind.markdown:
+        return marioMarkdownToNodes(a.text);
       case AgentActionKind.htmlArtifact:
       case AgentActionKind.renamePage:
+      case AgentActionKind.createPage:
+      case AgentActionKind.createSection:
+      case AgentActionKind.renameSection:
+      case AgentActionKind.createNotebook:
+      case AgentActionKind.writePage:
+      case AgentActionKind.readPage:
+      case AgentActionKind.listNotebooks:
+      case AgentActionKind.listPages:
+      case AgentActionKind.searchNotes:
+      case AgentActionKind.webSearch:
+      case AgentActionKind.openPage:
+      case AgentActionKind.askUser:
       case AgentActionKind.replaceBlock:
       case AgentActionKind.deleteBlock:
       case AgentActionKind.moveBlock:

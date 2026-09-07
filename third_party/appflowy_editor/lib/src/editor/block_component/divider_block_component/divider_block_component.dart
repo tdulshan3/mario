@@ -26,11 +26,16 @@ class DividerBlockComponentBuilder extends BlockComponentBuilder {
     super.configuration,
     this.lineColor = Colors.grey,
     this.height = 10,
+    // Mario patch: the line's thickness used to be fixed at 1px. A Markdown
+    // preview draws its rule heavier than the hairlines around it (VS Code
+    // uses 2px), and the host has no other way to ask for that.
+    this.thickness = 1,
     this.wrapper,
   });
 
   final Color lineColor;
   final double height;
+  final double thickness;
   final DividerBlockWrapper? wrapper;
 
   @override
@@ -42,6 +47,7 @@ class DividerBlockComponentBuilder extends BlockComponentBuilder {
       configuration: configuration,
       lineColor: lineColor,
       height: height,
+      thickness: thickness,
       wrapper: wrapper,
       showActions: showActions(node),
       actionBuilder: (context, state) => actionBuilder(
@@ -64,11 +70,13 @@ class DividerBlockComponentWidget extends BlockComponentStatefulWidget {
     super.configuration = const BlockComponentConfiguration(),
     this.lineColor = Colors.grey,
     this.height = 10,
+    this.thickness = 1,
     this.wrapper,
   });
 
   final Color lineColor;
   final double height;
+  final double thickness;
   final DividerBlockWrapper? wrapper;
 
   @override
@@ -95,7 +103,7 @@ class _DividerBlockComponentWidgetState
       alignment: Alignment.center,
       child: Divider(
         color: widget.lineColor,
-        thickness: 1,
+        thickness: widget.thickness,
       ),
     );
 

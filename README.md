@@ -41,6 +41,58 @@ native Linux desktop app and in the browser.
 
 ---
 
+## Unreleased
+
+**Pages read like a Markdown preview.** The editor now sets text the way VS
+Code's preview does: 14px on a 22px line, headings on the browser scale with a
+band of air above and below, a rule under a level-1 heading, a 2px horizontal
+rule, and `:tada:`-style shortcodes that turn into emoji as you type. The fix
+underneath it is spacing, not type — every block used to carry 8px of editor
+padding top and bottom, so a page written one thought per line, or any list,
+had 16px between each line and the next. Blocks now carry no padding of their
+own; the line box does the work, and a list, a quote or a heading takes only
+the space a preview gives it. AI answers in the side panel follow the same
+stylesheet, with list items a line apart instead of a line and a half.
+
+**Do is an agent now.** Instead of a rulebook, the model is handed a
+description of what Mario has and a set of skills — how to edit the open page,
+how to make pages, sections and notebooks, how to read and search, how Mario
+renders Markdown — and it works in turns: it can read another page, list the
+notebook, search your notes or the web, and decide the next step from what
+came back. It can write into any page, open one, ask you a question (reply in
+the box to carry on) and suggest follow-ups you can tap. Changes are no longer
+paused for approval by default; the step list shows each one as it happens and
+**Undo all** still puts the page back. When Mario refuses an action (a rewrite
+with no text, an id that is not on the page) or a step fails on the page, the
+reason goes back to the model and it tries another way, twice, before giving
+up — and "nothing to change" is an answer rather than an error. **Preview before writing** turns the
+old review step back on. Pages, sections and notebooks are never deleted by
+the agent. Drop your own `*.md` skills into `~/.local/share/com.marionote.app.mario/skills/` and
+they are added to what the model is told.
+
+**Notebooks, sections and pages work offline.** Creating, renaming and
+deleting no longer wait for Firestore or Drive. A change lands on this device
+first — the sidebar shows it, the editor opens a brand-new page at once — and
+goes into an outbox that sends it to the server in order, straight away when
+the network is there and on a backoff when it is not, surviving a restart in
+between. The tree the server last sent is kept on disk, so the app opens to
+your notebooks on a train instead of an error. A page created offline gets
+its Drive file when Drive is back, and a save that failed to upload is pushed
+then too. The editor's status line counts changes still waiting to sync.
+
+**Markdown imports keep more.** Pasted or generated Markdown now keeps its
+`$$…$$` and ```` ```math ```` formulas (as formula blocks) and its
+`> [!NOTE]` / `[!TIP]` / `[!IMPORTANT]` callouts (as titled quotes), where the
+stock decoder dropped both.
+
+**Do keeps its history.** Finished runs are saved beside Ask's, per notebook,
+and listed under the launcher: what was asked, what changed, **Run again**.
+Any saved chat, Ask or Do, can be deleted, and the deletion sticks across
+devices — the notebook's AI file now merges by id and remembers what was
+removed, where it used to adopt whichever copy was bigger.
+
+---
+
 ## What's new in 1.3.3
 
 **User-controlled model context.** Each AI model now has a context-window field

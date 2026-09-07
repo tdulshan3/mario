@@ -16,6 +16,7 @@ import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
+import '../shell/dialogs/text_input_dialog.dart';
 import 'ai_markdown.dart';
 import 'html_artifact.dart';
 import 'ai_session_state.dart';
@@ -59,11 +60,19 @@ class AskHistoryList extends ConsumerWidget {
       ),
       data: (data) {
         // This page first, then the rest of the notebook — a question asked
-        // about the page you are looking at is the one you want back.
+        // about the page you are looking at is the one you want back — and
+        // newest first within each. (Reversing the two groups as one list
+        // used to put the rest of the notebook on top.)
         final entries = [
-          ...data.asks.where((a) => a.pageId == bridge.pageId),
-          ...data.asks.where((a) => a.pageId != bridge.pageId),
-        ].reversed.toList();
+          ...data.asks
+              .where((a) => a.pageId == bridge.pageId)
+              .toList()
+              .reversed,
+          ...data.asks
+              .where((a) => a.pageId != bridge.pageId)
+              .toList()
+              .reversed,
+        ];
 
         if (entries.isEmpty) {
           return const _Empty(
@@ -98,6 +107,8 @@ class AskHistoryList extends ConsumerWidget {
               entry: entry,
               fromThisPage: entry.pageId == bridge.pageId,
               onReplay: () => onReplay(entry),
+              onDelete: () => deleteSavedChat(context, ref,
+                  notebookId: bridge.notebookId, id: entry.id),
               onPreview: html == null
                   ? null
                   : () {
@@ -116,17 +127,60 @@ class AskHistoryList extends ConsumerWidget {
   }
 }
 
+/// Deletes one saved chat, after asking.
+///
+/// Asks, because it is final: the entry goes from the notebook's file on
+/// Drive, and the id is remembered so a copy on another device cannot bring
+/// it back. The list is refreshed afterwards through the same provider the
+/// quiz tab invalidates after a mutation.
+Future<void> deleteSavedChat(
+  BuildContext context,
+  WidgetRef ref, {
+  required String notebookId,
+  required String id,
+}) async {
+  final ok = await showConfirmDialog(
+    context,
+    title: 'Delete this chat?',
+    message: 'It is removed from this notebook\'s history on every device. '
+        'The page itself is not changed.',
+  );
+  // The tile can be gone by the time the dialog closes, and `ref` with it.
+  if (!ok || !context.mounted) return;
+  await ref.read(aiArtifactStoreProvider).removeEntry(notebookId, id);
+  if (!context.mounted) return;
+  ref.invalidate(aiHistoryProvider);
+}
+
+/// A small trailing delete control, the same in every history tile.
+class _DeleteChatButton extends StatelessWidget {
+  const _DeleteChatButton({required this.onDelete});
+
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) => IconButton(
+        tooltip: 'Delete this chat',
+        visualDensity: VisualDensity.compact,
+        icon: Icon(Icons.delete_outline,
+            size: 16, color: Theme.of(context).colorScheme.onSurfaceVariant),
+        onPressed: onDelete,
+      );
+}
+
 class _AskHistoryTile extends StatelessWidget {
   const _AskHistoryTile({
     required this.entry,
     required this.fromThisPage,
     required this.onReplay,
+    required this.onDelete,
     required this.onPreview,
   });
 
   final AskEntry entry;
   final bool fromThisPage;
   final VoidCallback onReplay;
+  final VoidCallback onDelete;
   final VoidCallback? onPreview;
 
   @override
@@ -217,6 +271,211 @@ class _AskHistoryTile extends StatelessWidget {
                         fontSize: 10,
                         color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
                   ),
+                  _DeleteChatButton(onDelete: onDelete),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Past Do runs — what was asked, and what it did — newest first.
+///
+/// A column rather than a list, because it sits under the Do tab's launcher
+/// in a ListView of its own, and is empty (and invisible) until something
+/// has been run.
+class DoHistoryList extends ConsumerWidget {
+  const DoHistoryList({super.key, required this.onReplay});
+
+  /// Run the same instruction again. Null while a run is in flight.
+  final Future<void> Function(String instruction)? onReplay;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final bridge = ref.watch(aiEditorBridgeProvider);
+    final history = ref.watch(aiHistoryProvider);
+    if (bridge == null) return const SizedBox.shrink();
+
+    return history.maybeWhen(
+      data: (data) {
+        if (data.dos.isEmpty) return const SizedBox.shrink();
+        // This page first, then the rest of the notebook, newest first within
+        // each — same order as the Ask history, for the same reason.
+        final entries = [
+          ...data.dos.where((d) => d.pageId == bridge.pageId).toList().reversed,
+          ...data.dos.where((d) => d.pageId != bridge.pageId).toList().reversed,
+        ].take(30).toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 20),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                'Earlier instructions',
+                style: GoogleFonts.spaceGrotesk(
+                  fontSize: 10,
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.w600,
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            for (final entry in entries)
+              _DoHistoryTile(
+                entry: entry,
+                fromThisPage: entry.pageId == bridge.pageId,
+                onReplay: onReplay == null
+                    ? null
+                    : () => onReplay!(entry.instruction),
+                onDelete: () => deleteSavedChat(context, ref,
+                    notebookId: bridge.notebookId, id: entry.id),
+              ),
+          ],
+        );
+      },
+      orElse: SizedBox.shrink.call,
+    );
+  }
+}
+
+class _DoHistoryTile extends StatelessWidget {
+  const _DoHistoryTile({
+    required this.entry,
+    required this.fromThisPage,
+    required this.onReplay,
+    required this.onDelete,
+  });
+
+  final DoEntry entry;
+  final bool fromThisPage;
+  final VoidCallback? onReplay;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final muted =
+        GoogleFonts.inter(fontSize: 10, color: scheme.onSurfaceVariant);
+    // Same Material-under-the-tile arrangement as the Ask tile, for the same
+    // reason: a ListTile paints onto the nearest Material.
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: scheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Material(
+        color: scheme.surface,
+        child: Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            dense: true,
+            tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+            childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 10),
+            title: Text(
+              entry.instruction,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 12.5,
+                height: 1.35,
+                fontWeight: FontWeight.w500,
+                color: scheme.onSurface,
+              ),
+            ),
+            subtitle: Row(
+              children: [
+                if (!fromThisPage) ...[
+                  Icon(Icons.description_outlined,
+                      size: 11, color: scheme.onSurfaceVariant),
+                  const SizedBox(width: 3),
+                  Text('another page', style: muted),
+                  const SizedBox(width: 8),
+                ],
+                Text(
+                  '${entry.applied.length} change(s)',
+                  style: muted,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child:
+                      Text(_relative(entry.provenance.createdAt), style: muted),
+                ),
+              ],
+            ),
+            children: [
+              if (entry.summary.trim().isNotEmpty)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 6),
+                  child: Text(
+                    entry.summary,
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      height: 1.4,
+                      color: scheme.onSurface,
+                    ),
+                  ),
+                ),
+              for (final line in entry.applied)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 3),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.check,
+                          size: 12, color: MarioColors.labelGreen),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(line,
+                            style: GoogleFonts.inter(
+                                fontSize: 11.5,
+                                height: 1.35,
+                                color: scheme.onSurfaceVariant)),
+                      ),
+                    ],
+                  ),
+                ),
+              if (entry.failed > 0 || entry.dropped > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2, bottom: 4),
+                  child: Text(
+                    [
+                      if (entry.dropped > 0)
+                        '${entry.dropped} proposed change(s) could not be used',
+                      if (entry.failed > 0)
+                        '${entry.failed} could not be applied',
+                    ].join('. '),
+                    style: GoogleFonts.inter(
+                        fontSize: 11, color: scheme.onSurfaceVariant),
+                  ),
+                ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  TextButton.icon(
+                    onPressed: onReplay,
+                    icon: const Icon(Icons.refresh, size: 14),
+                    label: const Text('Run again'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      textStyle: GoogleFonts.inter(fontSize: 11.5),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    entry.provenance.backend,
+                    style: GoogleFonts.inter(
+                        fontSize: 10,
+                        color: scheme.onSurfaceVariant.withValues(alpha: 0.7)),
+                  ),
+                  _DeleteChatButton(onDelete: onDelete),
                 ],
               ),
             ],

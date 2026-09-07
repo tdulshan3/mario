@@ -57,6 +57,9 @@ class _FakeEditorState extends ConsumerState<_FakeEditor> {
         restore: (_) async => true,
         applyAgentAction: (_) async => true,
         renamePage: (_) async => true,
+        createPage: (_, {section, markdown = ''}) async => true,
+        createSection: (_) async => true,
+        renameSection: (_, {section}) async => true,
         setHtmlArtifact: (_) async => true,
       );
     });

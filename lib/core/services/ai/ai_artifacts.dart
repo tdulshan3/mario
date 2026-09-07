@@ -419,33 +419,99 @@ class QuizAttempt {
       );
 }
 
+/// One saved Do run — an instruction, and what it did.
+///
+/// A Do run has no answer to keep; its transcript is the list of steps it
+/// applied, and the page holds the result. So that list is what is saved,
+/// with the model's own one-line summary of the plan above it.
+class DoEntry {
+  const DoEntry({
+    required this.id,
+    required this.pageId,
+    required this.instruction,
+    required this.summary,
+    this.applied = const [],
+    this.failed = 0,
+    this.dropped = 0,
+    required this.provenance,
+  });
+
+  final String id;
+  final String pageId;
+  final String instruction;
+
+  /// The model's one sentence on what the plan did.
+  final String summary;
+
+  /// One line per applied step — "Added a 4x3 table", "Renamed the page".
+  final List<String> applied;
+
+  final int failed;
+  final int dropped;
+  final AiProvenance provenance;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'pageId': pageId,
+        'instruction': instruction,
+        'summary': summary,
+        'applied': applied,
+        'failed': failed,
+        'dropped': dropped,
+        'provenance': provenance.toJson(),
+      };
+
+  factory DoEntry.fromJson(Map<String, dynamic> m) => DoEntry(
+        id: asStringOr(m['id']),
+        pageId: asStringOr(m['pageId']),
+        instruction: asStringOr(m['instruction']),
+        summary: asStringOr(m['summary']),
+        applied: asStringList(m['applied']),
+        failed: asInt(m['failed']) ?? 0,
+        dropped: asInt(m['dropped']) ?? 0,
+        provenance: AiProvenance.fromJson(asMap(m['provenance']) ?? const {}),
+      );
+}
+
 /// Everything the AI features have stored for one notebook.
 class NotebookAiData {
   const NotebookAiData({
     this.summaries = const {},
     this.asks = const [],
+    this.dos = const [],
     this.quizzes = const [],
     this.attempts = const [],
+    this.deleted = const [],
   });
 
   /// pageId -> its cached summary.
   final Map<String, NoteSummary> summaries;
 
   final List<AskEntry> asks;
+  final List<DoEntry> dos;
   final List<Quiz> quizzes;
   final List<QuizAttempt> attempts;
+
+  /// Ids of entries the user deleted, kept so that another device's copy of
+  /// this file, which may still hold them, cannot bring them back when the
+  /// two are merged. Bounded — see [_remember].
+  final List<String> deleted;
 
   NotebookAiData copyWith({
     Map<String, NoteSummary>? summaries,
     List<AskEntry>? asks,
+    List<DoEntry>? dos,
     List<Quiz>? quizzes,
     List<QuizAttempt>? attempts,
+    List<String>? deleted,
   }) =>
       NotebookAiData(
         summaries: summaries ?? this.summaries,
         asks: asks ?? this.asks,
+        dos: dos ?? this.dos,
         quizzes: quizzes ?? this.quizzes,
         attempts: attempts ?? this.attempts,
+        deleted: deleted ?? this.deleted,
       );
 
   /// Drops everything belonging to [pageId].
@@ -460,6 +526,16 @@ class NotebookAiData {
           q,
     ];
     final keptQuizIds = {for (final q in keptQuizzes) q.id};
+    final gone = [
+      for (final a in asks)
+        if (a.pageId == pageId) a.id,
+      for (final d in dos)
+        if (d.pageId == pageId) d.id,
+      for (final q in quizzes)
+        if (!keptQuizIds.contains(q.id)) q.id,
+      for (final a in attempts)
+        if (!keptQuizIds.contains(a.quizId)) a.id,
+    ];
     return NotebookAiData(
       summaries: {
         for (final e in summaries.entries)
@@ -469,12 +545,93 @@ class NotebookAiData {
         for (final a in asks)
           if (a.pageId != pageId) a,
       ],
+      dos: [
+        for (final d in dos)
+          if (d.pageId != pageId) d,
+      ],
       quizzes: keptQuizzes,
       attempts: [
         for (final a in attempts)
           if (keptQuizIds.contains(a.quizId)) a,
       ],
+      deleted: _remember(deleted, gone),
     );
+  }
+
+  /// Drops one saved chat — an Ask or a Do entry — and remembers its id.
+  NotebookAiData withoutEntry(String id) => copyWith(
+        asks: [
+          for (final a in asks)
+            if (a.id != id) a,
+        ],
+        dos: [
+          for (final d in dos)
+            if (d.id != id) d,
+        ],
+        deleted: _remember(deleted, [id]),
+      );
+
+  /// This copy and [other], combined.
+  ///
+  /// Two devices each hold a copy of the same file, and each may have added
+  /// entries and deleted some since they last agreed. Everything either copy
+  /// holds is kept, unless either copy deleted it; a page's summary is taken
+  /// from whichever copy wrote it later. Creation order is restored by time,
+  /// because a merge interleaves two histories.
+  ///
+  /// Merging by id is what makes a deletion stick across devices. The rule
+  /// before this — adopt the remote copy only when it holds strictly more —
+  /// kept a deleted entry alive on the device that still had it, and pushed
+  /// it back to the one that had removed it on their next save.
+  NotebookAiData merge(NotebookAiData other) {
+    final gone = {...deleted, ...other.deleted};
+
+    List<T> union<T>(
+      List<T> mine,
+      List<T> theirs,
+      String Function(T) idOf, [
+      DateTime Function(T)? timeOf,
+    ]) {
+      final seen = <String>{};
+      final out = <T>[
+        for (final e in [...mine, ...theirs])
+          if (!gone.contains(idOf(e)) && seen.add(idOf(e))) e,
+      ];
+      if (timeOf != null) out.sort((a, b) => timeOf(a).compareTo(timeOf(b)));
+      return out;
+    }
+
+    final summaries = {...other.summaries};
+    for (final e in this.summaries.entries) {
+      final theirs = summaries[e.key];
+      if (theirs == null ||
+          !theirs.provenance.createdAt.isAfter(e.value.provenance.createdAt)) {
+        summaries[e.key] = e.value;
+      }
+    }
+
+    return NotebookAiData(
+      summaries: summaries,
+      asks: union(asks, other.asks, (a) => a.id, (a) => a.provenance.createdAt),
+      dos: union(dos, other.dos, (d) => d.id, (d) => d.provenance.createdAt),
+      quizzes: union(
+          quizzes, other.quizzes, (q) => q.id, (q) => q.provenance.createdAt),
+      attempts: union(attempts, other.attempts, (a) => a.id),
+      deleted: _remember(deleted, other.deleted),
+    );
+  }
+
+  /// [existing] plus [more], newest last, capped at the most recent 500.
+  ///
+  /// Tombstones only need to outlive the copies that might still hold the
+  /// entry, and every copy is refreshed on its next load; a few hundred is
+  /// years of deletions for a feature nobody deletes from daily.
+  static List<String> _remember(List<String> existing, Iterable<String> more) {
+    final out = [...existing];
+    for (final id in more) {
+      if (!out.contains(id)) out.add(id);
+    }
+    return out.length <= 500 ? out : out.sublist(out.length - 500);
   }
 
   Map<String, dynamic> toJson() => {
@@ -483,8 +640,10 @@ class NotebookAiData {
           for (final e in summaries.entries) e.key: e.value.toJson(),
         },
         'asks': [for (final a in asks) a.toJson()],
+        'dos': [for (final d in dos) d.toJson()],
         'quizzes': [for (final q in quizzes) q.toJson()],
         'attempts': [for (final a in attempts) a.toJson()],
+        'deleted': deleted,
       };
 
   factory NotebookAiData.fromJson(Map<String, dynamic> m) => NotebookAiData(
@@ -494,9 +653,11 @@ class NotebookAiData {
               e.key: NoteSummary.fromJson(asMap(e.value)!),
         },
         asks: [for (final a in asMapList(m['asks'])) AskEntry.fromJson(a)],
+        dos: [for (final d in asMapList(m['dos'])) DoEntry.fromJson(d)],
         quizzes: [for (final q in asMapList(m['quizzes'])) Quiz.fromJson(q)],
         attempts: [
           for (final a in asMapList(m['attempts'])) QuizAttempt.fromJson(a),
         ],
+        deleted: asStringList(m['deleted']),
       );
 }

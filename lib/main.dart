@@ -25,6 +25,7 @@ import 'core/services/ocr_service.dart';
 import 'core/services/page_content_cache.dart';
 import 'core/services/page_content_repository.dart';
 import 'core/services/sync_service.dart';
+import 'core/services/sync_store.dart';
 import 'core/services/voice_service.dart';
 import 'features/voice/voice_service_impl.dart';
 import 'firebase_options.dart';
@@ -34,9 +35,12 @@ import 'platform/web/auth_service_web.dart';
 import 'platform/web/cloud_firestore_client.dart';
 import 'platform/web/ocr_service_web.dart';
 
-import 'platform/linux/auth_service_linux.dart' if (dart.library.html) 'platform/web/auth_service_web.dart' as linux_auth;
-import 'platform/linux/ocr_service_linux.dart' if (dart.library.html) 'platform/web/ocr_service_web.dart' as linux_ocr;
-import 'platform/linux/window_config_linux.dart' if (dart.library.html) 'platform/web/_window_stub.dart' as linux_win;
+import 'platform/linux/auth_service_linux.dart'
+    if (dart.library.html) 'platform/web/auth_service_web.dart' as linux_auth;
+import 'platform/linux/ocr_service_linux.dart'
+    if (dart.library.html) 'platform/web/ocr_service_web.dart' as linux_ocr;
+import 'platform/linux/window_config_linux.dart'
+    if (dart.library.html) 'platform/web/_window_stub.dart' as linux_win;
 
 fd.TokenStore? _linuxTokenStore;
 MarioSecrets? _linuxSecrets;
@@ -126,8 +130,8 @@ void _registerServices(bool isLinuxNative) {
   getIt.registerSingleton<AssetSyncService>(
       AssetSyncService(getIt<DriveService>(), getIt<AssetCache>()));
   getIt.registerSingleton<PageContentCache>(PageContentCache());
-  getIt.registerSingleton<PageContentRepository>(PageContentRepository(
-      getIt<DriveService>(), getIt<PageContentCache>()));
+  getIt.registerSingleton<PageContentRepository>(
+      PageContentRepository(getIt<DriveService>(), getIt<PageContentCache>()));
   // AI. The backend list is loaded lazily by aiConfigsProvider rather than
   // here, so a slow or absent keyring cannot delay first paint — and the app
   // is entirely usable with no model configured at all.
@@ -141,6 +145,9 @@ void _registerServices(bool isLinuxNative) {
     getIt<MarioFirestore>(),
     getIt<PageContentRepository>(),
     getIt<AiArtifactStore>(),
+    // Offline changes and the last-seen tree, on disk, so a page made on a
+    // train is still there — and still going up — after a restart.
+    FileSyncStore(),
   ));
   getIt.registerSingleton<VoiceService>(VoiceServiceImpl());
 }

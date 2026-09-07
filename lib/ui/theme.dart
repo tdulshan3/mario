@@ -619,3 +619,10 @@ class MarioThemeMarker extends ThemeExtension<MarioThemeMarker> {
 MarioThemeMode marioMode(BuildContext context) =>
     Theme.of(context).extension<MarioThemeMarker>()?.mode ??
     MarioThemeMode.light;
+
+/// The rule a Markdown preview draws — under a level-1 heading, and as the
+/// horizontal rule itself. VS Code paints both at 18% of the text colour, in
+/// light and dark alike: a step quieter than a border, a step louder than a
+/// hairline, and the same on every ground because it is derived from the ink.
+Color markdownRuleColor(ColorScheme scheme) =>
+    scheme.onSurface.withValues(alpha: 0.18);

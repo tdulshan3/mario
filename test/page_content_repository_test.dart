@@ -38,9 +38,13 @@ class _FakeDrive extends DriveService {
     return Map<String, dynamic>.from(remote[fileId] ?? const {});
   }
 
+  /// When set, uploads fail — Drive is out of reach.
+  bool failUpdates = false;
+
   @override
   Future<String?> updatePageFile(
       String fileId, Map<String, dynamic> content) async {
+    if (failUpdates) throw StateError('Drive: no access token');
     updates++;
     remote[fileId] = Map<String, dynamic>.from(content);
     return modified[fileId] = 'm$updates';
@@ -88,7 +92,16 @@ class _FakeCache extends PageContentCache {
   Future<void> evict(String fileId) async {
     content.remove(fileId);
     tags.remove(fileId);
+    dirty.remove(fileId);
   }
+
+  final dirty = <String>{};
+  @override
+  Future<void> markDirty(String fileId) async => dirty.add(fileId);
+  @override
+  Future<void> clearDirty(String fileId) async => dirty.remove(fileId);
+  @override
+  Future<List<String>> dirtyIds() async => dirty.toList();
 }
 
 void main() {
@@ -135,7 +148,8 @@ void main() {
 
   test('save writes through to cache first, then Drive, recording the marker',
       () async {
-    await repo.save('f1', {'document': 'new', 'updatedAt': '2026-02-02T00:00:00Z'});
+    await repo
+        .save('f1', {'document': 'new', 'updatedAt': '2026-02-02T00:00:00Z'});
 
     expect(cache.content['f1']!['document'], 'new');
     expect(drive.updates, 1);
@@ -164,7 +178,10 @@ void main() {
 
   test('revalidation adopts the remote copy when it is strictly newer',
       () async {
-    cache.content['f1'] = {'document': 'old', 'updatedAt': '2026-01-01T00:00:00Z'};
+    cache.content['f1'] = {
+      'document': 'old',
+      'updatedAt': '2026-01-01T00:00:00Z'
+    };
     cache.tags['f1'] = 'm-old';
     drive.remote['f1'] = {
       'document': 'newer',
@@ -197,5 +214,77 @@ void main() {
     // Remote is older → keep the local edit; only refresh the marker.
     expect(cache.content['f1']!['document'], 'local-edit');
     expect(cache.tags['f1'], 'm-remote');
+  });
+
+  group('a page with no Drive file yet', () {
+    test('lives under its local key, off Drive entirely', () async {
+      final key = PageContentRepository.localKeyFor('pg1');
+      expect(PageContentRepository.isLocal(key), isTrue);
+      await repo.seedLocal(key, {'document': {}, 'title': 'New'});
+      expect((await repo.load(key))['title'], 'New');
+      await repo.save(key, {'document': {}, 'title': 'Edited'});
+      expect((await repo.load(key))['title'], 'Edited');
+      expect(drive.reads + drive.updates + drive.creates, 0);
+      expect(cache.dirty, contains(key));
+    });
+
+    test('opens blank rather than as a dead end when never seeded', () async {
+      final raw = await repo.load(PageContentRepository.localKeyFor('old'));
+      expect(raw['document'], isNotNull);
+      expect(drive.reads, 0);
+    });
+
+    test('promotion makes the Drive file from the latest save', () async {
+      final key = PageContentRepository.localKeyFor('pg1');
+      await repo.seedLocal(key, {'document': {}, 'title': 'New'});
+      await repo.save(key, {'document': {}, 'title': 'Edited'});
+
+      final fileId = await repo.promote(key, 'page-1');
+      expect(drive.remote[fileId]?['title'], 'Edited');
+      expect(cache.content.containsKey(key), isFalse);
+      expect(cache.content[fileId]?['title'], 'Edited');
+      // Promoting twice is the same file.
+      expect(await repo.promote(key, 'page-1'), fileId);
+      expect(drive.creates, 1);
+    });
+
+    test(
+        'an editor still holding the local key keeps saving to the right '
+        'place', () async {
+      final key = PageContentRepository.localKeyFor('pg1');
+      await repo.seedLocal(key, {'document': {}, 'title': 'New'});
+      final fileId = await repo.promote(key, 'page-1');
+
+      await repo.save(key, {'document': {}, 'title': 'After'});
+      expect(drive.remote[fileId]?['title'], 'After');
+      expect((await repo.load(key))['title'], 'After');
+      expect(cache.dirty, isEmpty);
+    });
+  });
+
+  group('a save that could not upload', () {
+    test('is marked dirty and pushed by uploadDirty', () async {
+      final fileId = await repo.create('page-1', {'document': {}});
+      drive.failUpdates = true;
+      await expectLater(
+        repo.save(fileId, {'document': {}, 'title': 'Offline edit'}),
+        throwsA(anything),
+      );
+      expect(cache.dirty, contains(fileId));
+      expect(await repo.hasDirty(), isTrue);
+
+      drive.failUpdates = false;
+      expect(await repo.uploadDirty(), 1);
+      expect(drive.remote[fileId]?['title'], 'Offline edit');
+      expect(cache.dirty, isEmpty);
+      expect(cache.tags[fileId], isNotNull);
+    });
+
+    test('local keys are not uploaded by the dirty sweep', () async {
+      await repo.seedLocal(PageContentRepository.localKeyFor('pg1'), {});
+      expect(await repo.uploadDirty(), 0);
+      expect(await repo.hasDirty(), isFalse);
+      expect(drive.updates, 0);
+    });
   });
 }

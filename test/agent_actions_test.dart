@@ -463,6 +463,22 @@ void main() {
       expect(p.actions[2].summary, contains('New title'));
     });
 
+    test('pages and sections can describe themselves', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'create_page', 'text': 'Krebs cycle'},
+        {'kind': 'create_page', 'text': 'Glycolysis', 'section': 'Cells'},
+        {'kind': 'create_section', 'text': 'Genetics'},
+        {'kind': 'rename_section', 'text': 'Cell biology'},
+      ]));
+      expect(p.actions, hasLength(4));
+      expect(p.actions[0].summary, 'Created page "Krebs cycle"');
+      expect(p.actions[1].summary, 'Created page "Glycolysis" in Cells');
+      expect(p.actions[2].summary, 'Created section "Genetics"');
+      expect(p.actions[3].summary, 'Renamed this section to "Cell biology"');
+      // None of these touches the user's existing words.
+      expect(p.destructiveCount, 0);
+    });
+
     test('the summary survives', () {
       final p = parseAgentPlan(plan(
         [
@@ -828,6 +844,205 @@ void main() {
         {'kind': 'nope2'},
       ]));
       expect(p.rejectionSummary.single, contains('x2'));
+    });
+  });
+
+  group('pages and sections', () {
+    test('a new page keeps its title, section and body apart', () {
+      final p = parseAgentPlan(plan([
+        {
+          'kind': 'create_page',
+          'text': 'Krebs cycle',
+          'section': 'Cells',
+          'content': '## Steps\n\n- one\n- two',
+        },
+      ]));
+      final a = p.actions.single;
+      expect(a.kind, AgentActionKind.createPage);
+      expect(a.text, 'Krebs cycle');
+      expect(a.section, 'Cells');
+      expect(a.content, '## Steps\n\n- one\n- two');
+    });
+
+    test('a page whose only field is a body is not titled with that body', () {
+      // `text` falls back to `content` for every other kind; a page must not
+      // inherit that, or its title would be its first paragraph.
+      final p = parseAgentPlan(plan([
+        {'kind': 'create_page', 'content': 'A whole paragraph of notes.'},
+      ]));
+      expect(p.actions, isEmpty);
+      expect(p.rejected.single.reason, contains('no title'));
+    });
+
+    test('a title is one line', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'create_page', 'title': 'Krebs cycle\nand more'},
+        {'kind': 'create_section', 'name': 'Genetics\nagain'},
+      ]));
+      expect(p.actions[0].text, 'Krebs cycle');
+      expect(p.actions[1].text, 'Genetics');
+    });
+
+    test('the obvious synonyms land', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'new_page', 'text': 'A'},
+        {'kind': 'add_section', 'text': 'B'},
+        {'kind': 'rename_section', 'new_name': 'C', 'section_name': 'Old'},
+      ]));
+      expect(p.actions.map((a) => a.kind), [
+        AgentActionKind.createPage,
+        AgentActionKind.createSection,
+        AgentActionKind.renameSection,
+      ]);
+      expect(p.actions[2].text, 'C');
+      expect(p.actions[2].section, 'Old');
+    });
+
+    test('an empty name is refused, with a reason', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'create_section'},
+        {'kind': 'rename_section', 'text': '   '},
+      ]));
+      expect(p.actions, isEmpty);
+      expect(p.rejected[0].reason, contains('no name'));
+      expect(p.rejected[1].reason, contains('no new name'));
+    });
+  });
+
+  group('the tools', () {
+    test('reads, listings and searches come back to the model', () {
+      expect(AgentActionKind.readPage.observes, isTrue);
+      expect(AgentActionKind.searchNotes.observes, isTrue);
+      expect(AgentActionKind.webSearch.observes, isTrue);
+      expect(AgentActionKind.paragraph.observes, isFalse);
+      // Writes are what a preview guards; a read, a question or a move to
+      // another page changes nothing.
+      expect(AgentActionKind.paragraph.isWrite, isTrue);
+      expect(AgentActionKind.writePage.isWrite, isTrue);
+      expect(AgentActionKind.readPage.isWrite, isFalse);
+      expect(AgentActionKind.askUser.isWrite, isFalse);
+      expect(AgentActionKind.openPage.isWrite, isFalse);
+    });
+
+    test('each tool parses with its arguments', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'markdown', 'text': '## Steps\n\n- one'},
+        {
+          'kind': 'write_page',
+          'page': 'Krebs cycle',
+          'text': 'more',
+          'mode': 'overwrite',
+        },
+        {'kind': 'read_page', 'title': 'Glycolysis'},
+        {'kind': 'list_notebooks'},
+        {'kind': 'list_pages', 'notebook': 'Biology', 'section': 'Cells'},
+        {'kind': 'search_notes', 'query': 'enzyme'},
+        {'kind': 'web_search', 'q': 'Krebs cycle steps'},
+        {'kind': 'create_notebook', 'name': 'Chemistry'},
+        {'kind': 'open_page', 'page': 'Glycolysis'},
+        {'kind': 'ask_user', 'question': 'Which section?'},
+      ]));
+      expect(p.rejected, isEmpty);
+      final a = p.actions;
+      expect(a[0].kind, AgentActionKind.markdown);
+      expect(a[0].text, '## Steps\n\n- one');
+      expect(a[1].kind, AgentActionKind.writePage);
+      expect(a[1].page, 'Krebs cycle');
+      expect(a[1].mode, 'replace');
+      expect(a[1].isDestructive, isTrue, reason: 'replacing a body removes');
+      expect(a[2].page, 'Glycolysis');
+      expect(a[3].kind, AgentActionKind.listNotebooks);
+      expect(a[4].notebook, 'Biology');
+      expect(a[4].section, 'Cells');
+      expect(a[5].text, 'enzyme');
+      expect(a[6].text, 'Krebs cycle steps');
+      expect(a[7].text, 'Chemistry');
+      expect(a[8].kind, AgentActionKind.openPage);
+      expect(a[9].text, 'Which section?');
+    });
+
+    test('a rewrite to nothing is a delete; a rewrite with nothing is refused',
+        () {
+      // "Remove the HTML tags" on a block that is only `</div>` comes back
+      // as replace_block with text "" — the model means "gone".
+      final p = parseAgentPlan(
+          plan([
+            {'kind': 'replace_block', 'blockId': 'a', 'text': ''},
+            {'kind': 'replace_block', 'blockId': 'b', 'new_text': '   '},
+            {'kind': 'replace_block', 'blockId': 'c'},
+          ]),
+          knownBlockIds: {'a', 'b', 'c'});
+      expect(p.actions.map((a) => a.kind), [
+        AgentActionKind.deleteBlock,
+        AgentActionKind.deleteBlock,
+      ]);
+      expect(p.actions.map((a) => a.blockId), ['a', 'b']);
+      expect(p.rejected.single.reason, contains('no replacement text'));
+    });
+
+    test('a write without a page means the current one, appended', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'write_page', 'text': 'x'},
+      ]));
+      expect(p.actions.single.page, isNull);
+      expect(p.actions.single.mode, 'append');
+      expect(p.actions.single.isDestructive, isFalse);
+    });
+
+    test('an empty search, read or question is refused', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'search_notes'},
+        {'kind': 'read_page'},
+        {'kind': 'ask_user', 'text': ' '},
+        {'kind': 'markdown'},
+      ]));
+      expect(p.actions, isEmpty);
+      expect(p.rejected, hasLength(4));
+    });
+
+    test('the synonyms a model reaches for land on the tool', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'search', 'text': 'x'},
+        {'kind': 'navigate', 'page': 'P'},
+        {'kind': 'insert_markdown', 'text': 'y'},
+        {'kind': 'clarify', 'text': 'z?'},
+      ]));
+      expect(p.actions.map((a) => a.kind), [
+        AgentActionKind.searchNotes,
+        AgentActionKind.openPage,
+        AgentActionKind.markdown,
+        AgentActionKind.askUser,
+      ]);
+    });
+
+    test('done and follow-ups ride on the plan', () {
+      final p = parseAgentPlan({
+        'summary': 's',
+        'actions': [
+          {'kind': 'read_page', 'page': 'P'},
+        ],
+        'done': false,
+        'followUps': ['Add a quiz', '', 'Split it', 'Three', 'Four'],
+      });
+      expect(p.done, isFalse);
+      expect(p.followUps, ['Add a quiz', 'Split it', 'Three']);
+      // Omitted means finished, which is what every earlier plan meant.
+      expect(parseAgentPlan(plan([])).done, isTrue);
+    });
+
+    test('every tool can describe itself', () {
+      final p = parseAgentPlan(plan([
+        {'kind': 'read_page', 'page': 'Krebs cycle'},
+        {'kind': 'write_page', 'page': 'Krebs cycle', 'text': 'x'},
+        {'kind': 'search_notes', 'text': 'enzyme'},
+        {'kind': 'ask_user', 'text': 'Which one?'},
+        {'kind': 'markdown', 'text': 'a\nb\n\nc'},
+      ]));
+      expect(p.actions[0].summary, 'Read page "Krebs cycle"');
+      expect(p.actions[1].summary, 'Wrote into page "Krebs cycle"');
+      expect(p.actions[2].summary, 'Searched the notes for "enzyme"');
+      expect(p.actions[3].summary, 'Asked: Which one?');
+      expect(p.actions[4].summary, 'Added 3 line(s)');
     });
   });
 }

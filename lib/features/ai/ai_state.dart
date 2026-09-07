@@ -108,6 +108,9 @@ class AiEditorBridge {
     required this.restore,
     required this.applyAgentAction,
     required this.renamePage,
+    required this.createPage,
+    required this.createSection,
+    required this.renameSection,
     required this.setHtmlArtifact,
   });
 
@@ -158,6 +161,18 @@ class AiEditorBridge {
   /// Renames the page. Separate from [applyAgentAction] because the title is
   /// index metadata in Firestore, not a block in the document.
   final Future<bool> Function(String title) renamePage;
+
+  /// Creates a page in this notebook — in the named section, or this page's
+  /// own — with an optional Markdown body. The new page is not opened: the
+  /// run asking for it is still editing this one.
+  final Future<bool> Function(String title, {String? section, String markdown})
+      createPage;
+
+  /// Creates a section in this notebook.
+  final Future<bool> Function(String name) createSection;
+
+  /// Renames the named section, or this page's own.
+  final Future<bool> Function(String name, {String? section}) renameSection;
 
   /// Replaces the page's HTML artifact and opens its rendered preview.
   final Future<bool> Function(String html) setHtmlArtifact;

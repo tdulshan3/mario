@@ -39,14 +39,27 @@ Node headingNode({
   );
 }
 
+/// Mario patch: lets the host draw around a heading — the rule a Markdown
+/// preview puts under a level-1 heading, for instance. The divider block has
+/// had the same hook (DividerBlockWrapper) all along; this is the same shape.
+typedef HeadingBlockWrapper = Widget Function(
+  BuildContext context,
+  Node node,
+  Widget child,
+);
+
 class HeadingBlockComponentBuilder extends BlockComponentBuilder {
   HeadingBlockComponentBuilder({
     super.configuration,
     this.textStyleBuilder,
+    this.wrapper,
   });
 
   /// The text style of the heading block.
   final TextStyle Function(int level)? textStyleBuilder;
+
+  /// Mario patch: see [HeadingBlockWrapper].
+  final HeadingBlockWrapper? wrapper;
 
   @override
   BlockComponentWidget build(BlockComponentContext blockComponentContext) {
@@ -56,6 +69,7 @@ class HeadingBlockComponentBuilder extends BlockComponentBuilder {
       node: node,
       configuration: configuration,
       textStyleBuilder: textStyleBuilder,
+      wrapper: wrapper,
       showActions: showActions(node),
       actionBuilder: (context, state) => actionBuilder(
         blockComponentContext,
@@ -76,10 +90,14 @@ class HeadingBlockComponentWidget extends BlockComponentStatefulWidget {
     super.actionBuilder,
     super.configuration = const BlockComponentConfiguration(),
     this.textStyleBuilder,
+    this.wrapper,
   });
 
   /// The text style of the heading block.
   final TextStyle Function(int level)? textStyleBuilder;
+
+  /// Mario patch: see [HeadingBlockWrapper].
+  final HeadingBlockWrapper? wrapper;
 
   @override
   State<HeadingBlockComponentWidget> createState() =>
@@ -195,6 +213,11 @@ class _HeadingBlockComponentWidgetState
         actionBuilder: widget.actionBuilder!,
         child: child,
       );
+    }
+
+    // Mario patch: outermost, exactly where the divider applies its own.
+    if (widget.wrapper != null) {
+      child = widget.wrapper!(context, node, child);
     }
 
     return child;

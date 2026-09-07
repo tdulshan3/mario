@@ -5,6 +5,7 @@ import 'package:mario/core/services/ai/llm_provider.dart';
 import 'package:mario/core/services/ai/llm_service.dart';
 import 'package:mario/core/services/ai/llm_types.dart';
 import 'package:mario/core/services/ai/web_search_service.dart';
+import 'package:mario/features/ai/agent_actions.dart';
 import 'package:mario/features/ai/agent_task.dart';
 import 'package:mario/features/ai/ai_progress.dart';
 import 'package:mario/features/ai/note_context.dart';
@@ -43,9 +44,11 @@ void main() {
       },
       applyAction: (_) async {
         applied++;
-        return true;
+        return const AgentActionResult.ok();
       },
       useWeb: false,
+      // The preview is opt-in now; this is the test of what it guards.
+      reviewBeforeWriting: true,
     );
 
     await until(() => previewed);
@@ -77,8 +80,9 @@ void main() {
         previewed = true;
         return false;
       },
-      applyAction: (_) async => true,
+      applyAction: (_) async => const AgentActionResult.ok(),
       useWeb: false,
+      reviewBeforeWriting: true,
     );
 
     await until(() => previewed);

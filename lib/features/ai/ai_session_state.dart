@@ -24,6 +24,7 @@ import '../../core/services/ai/ai_artifacts.dart';
 import '../../core/services/ai/llm_types.dart';
 import 'agent_actions.dart';
 import 'agent_executor.dart';
+import 'agent_task.dart';
 import 'ai_progress.dart';
 import 'ai_tasks.dart';
 import 'grammar_check.dart';
@@ -512,11 +513,23 @@ class AgentSession {
     this.artifactApplied = false,
     this.undone = false,
     this.isUndoing = false,
+    this.exchanges = const [],
+    this.reviewBeforeWriting = false,
   });
 
   final AiRun? run;
   final String draft;
   final String instruction;
+
+  /// Earlier instructions and what came of them — the conversation the next
+  /// instruction continues, which is what makes a reply to the agent's
+  /// question, or "now do the same for the other section", land in context.
+  final List<AgentExchange> exchanges;
+
+  /// Pause each step that writes for the user's approval, as every run used
+  /// to. Off by default: the agent works through, the step list shows what
+  /// it did, and Undo all puts the page back.
+  final bool reviewBeforeWriting;
 
   /// Tri-state web preference, as on Ask: true forces a look-up before
   /// planning, false forbids one, null decides from the instruction.
@@ -559,6 +572,8 @@ class AgentSession {
     bool? artifactApplied,
     bool? undone,
     bool? isUndoing,
+    List<AgentExchange>? exchanges,
+    bool? reviewBeforeWriting,
   }) =>
       AgentSession(
         run: clearRun ? null : (run ?? this.run),
@@ -572,6 +587,8 @@ class AgentSession {
         artifactApplied: artifactApplied ?? this.artifactApplied,
         undone: undone ?? this.undone,
         isUndoing: isUndoing ?? this.isUndoing,
+        exchanges: exchanges ?? this.exchanges,
+        reviewBeforeWriting: reviewBeforeWriting ?? this.reviewBeforeWriting,
       );
 }
 
@@ -603,8 +620,22 @@ class AgentSessionNotifier extends Notifier<AgentSession> {
       // Survives the run, so the chip does not snap back to auto the moment
       // the plan starts.
       useWeb: state.useWeb,
+      exchanges: state.exchanges,
+      reviewBeforeWriting: state.reviewBeforeWriting,
     );
   }
+
+  /// Keeps what a finished run did, for the next instruction's context.
+  /// Bounded: the last dozen is a conversation, not an archive.
+  void remember(AgentExchange exchange) {
+    final all = [...state.exchanges, exchange];
+    state = state.copyWith(
+      exchanges: all.length <= 12 ? all : all.sublist(all.length - 12),
+    );
+  }
+
+  void setReviewBeforeWriting(bool value) =>
+      state = state.copyWith(reviewBeforeWriting: value);
 
   /// Pauses an already-validated run until the user accepts its preview.
   Future<bool> reviewPlan(AgentPlan plan) {
@@ -642,6 +673,8 @@ class AgentSessionNotifier extends Notifier<AgentSession> {
       draft: state.draft,
       useWeb: state.useWeb,
       artifactDraft: html,
+      exchanges: state.exchanges,
+      reviewBeforeWriting: state.reviewBeforeWriting,
     );
   }
 

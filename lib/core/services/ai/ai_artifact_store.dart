@@ -143,6 +143,23 @@ class AiArtifactStore {
                 .toList()),
       );
 
+  /// Appends a finished Do run, under the same cap as [addAsk].
+  Future<void> addDo(String notebookId, DoEntry entry) => update(
+        notebookId,
+        (d) => d.copyWith(
+            dos: [...d.dos, entry]
+                .reversed
+                .take(200)
+                .toList()
+                .reversed
+                .toList()),
+      );
+
+  /// Deletes one saved chat, Ask or Do. Final on every device, because the
+  /// id is remembered as deleted and a merge never resurrects it.
+  Future<void> removeEntry(String notebookId, String id) =>
+      update(notebookId, (d) => d.withoutEntry(id));
+
   Future<void> markAskInserted(String notebookId, String askId) => update(
         notebookId,
         (d) => d.copyWith(asks: [
@@ -273,26 +290,14 @@ class AiArtifactStore {
     // it with the pre-save copy that Drive returned. That is silent data loss —
     // the user sees the mark, closes the panel, and it is gone.
     await update(notebookId, (current) {
-      // Only take the remote copy if nothing changed underneath us.
+      // Only merge into the remote copy if nothing changed underneath us.
       if (!identical(current, _memory[notebookId])) return current;
-      return _hasMoreThan(remote, current) ? remote : current;
+      // A union by id, not a choice between the two: nothing local is lost,
+      // whatever the other device added arrives, and whatever either side
+      // deleted stays deleted. See NotebookAiData.merge.
+      return current.merge(remote);
     });
   }
-
-  /// Whether [remote] is a superset worth adopting.
-  ///
-  /// Deliberately conservative: with no per-record timestamps to merge on, the
-  /// only safe rule is to prefer whichever copy holds strictly more, and to keep
-  /// the local one whenever that is ambiguous. Losing an unsynced mark is much
-  /// worse than briefly missing one made on another device, which the next
-  /// refresh picks up anyway.
-  bool _hasMoreThan(NotebookAiData remote, NotebookAiData local) =>
-      remote.asks.length >= local.asks.length &&
-      remote.quizzes.length >= local.quizzes.length &&
-      remote.attempts.length >= local.attempts.length &&
-      remote.summaries.length >= local.summaries.length &&
-      (remote.asks.length + remote.quizzes.length + remote.attempts.length >
-          local.asks.length + local.quizzes.length + local.attempts.length);
 
   /// True when a notebook has local changes Drive has not accepted yet.
   bool isPendingUpload(String notebookId) => _dirty.contains(notebookId);

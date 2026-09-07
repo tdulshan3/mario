@@ -15,6 +15,7 @@ import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/models/note_page.dart';
+import '../../core/models/section.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
@@ -24,6 +25,7 @@ import '../drawing/drawing_toolbar.dart';
 import '../drawing/stroke.dart';
 import '../../core/services/sync_service.dart';
 import '../ai/agent_executor.dart';
+import '../ai/ai_markdown_blocks.dart';
 import '../ai/ai_slash_commands.dart';
 import '../ai/grammar_check.dart';
 import '../ai/ai_state.dart';
@@ -32,6 +34,7 @@ import '../ai/ask_panel.dart';
 import '../ai/note_context.dart';
 import '../export/export_dialog.dart';
 import '../export/markdown_exporter.dart';
+import 'editor_typography.dart';
 import '../export/pdf_exporter.dart';
 import '../math/math_shortcut.dart';
 import '../settings/settings_state.dart';
@@ -55,28 +58,42 @@ import 'word_shortcuts.dart';
 import '../../ui/widgets/mario_loader.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
-/// Drive JSON is fetched, then mounts the AppFlowyEditor.
-class EditorScreen extends ConsumerWidget {
+/// content is fetched, then mounts the AppFlowyEditor.
+///
+/// A page with no Drive file yet — created while Drive was out of reach, or
+/// before the sync outbox existed — opens under its local content key rather
+/// than as a dead end; the outbox promotes it to a Drive file when it can.
+class EditorScreen extends ConsumerStatefulWidget {
   const EditorScreen({super.key, required this.page});
 
   final NotePage page;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final fileId = page.driveFileId;
-    if (fileId == null) {
-      return const _UnavailableContent(
-        message: 'This page has no Drive content yet.',
-      );
-    }
-    final docAsync = ref.watch(pageContentProvider(fileId));
+  ConsumerState<EditorScreen> createState() => _EditorScreenState();
+}
+
+class _EditorScreenState extends ConsumerState<EditorScreen> {
+  /// The key the content was loaded under, fixed for the life of this
+  /// screen. When a page opened under its local key is promoted mid-edit,
+  /// the page arrives with a Drive id; loading afresh under it would tear
+  /// the editor down and put it back up. Saves use the current id, and the
+  /// repository forwards the local key to the promoted one anyway.
+  late final String _loadKey = _contentKey(widget.page);
+
+  static String _contentKey(NotePage page) =>
+      page.driveFileId ?? PageContentRepository.localKeyFor(page.id);
+
+  @override
+  Widget build(BuildContext context) {
+    final page = widget.page;
+    final docAsync = ref.watch(pageContentProvider(_loadKey));
     return docAsync.when(
       loading: () => const Center(child: MarioLoader(size: 30)),
       error: (e, _) => _UnavailableContent(message: 'Could not load page: $e'),
       data: (rawJson) => _Editor(
-        key: ValueKey(fileId),
+        key: ValueKey(page.id),
         page: page,
-        driveFileId: fileId,
+        driveFileId: _contentKey(page),
         rawJson: rawJson,
       ),
     );
@@ -606,6 +623,9 @@ class _EditorState extends ConsumerState<_Editor> {
       },
       applyAgentAction: (action) => _agent.apply(action),
       renamePage: _renamePage,
+      createPage: _createPage,
+      createSection: _createSection,
+      renameSection: _renameSection,
       setHtmlArtifact: (html) async {
         if (!mounted || html.trim().isEmpty) return false;
         rawHtmlOverride.value = html;
@@ -684,6 +704,124 @@ class _EditorState extends ConsumerState<_Editor> {
       await GetIt.I<SyncService>().updatePage(
         widget.page.copyWith(title: clean, updatedAt: DateTime.now()),
       );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Sections an agent run created here, by lower-cased name.
+  ///
+  /// A plan that creates a section and then a page in it looks the section up
+  /// before the Firestore stream has delivered it; this is what lets the
+  /// second action find what the first one made.
+  final _createdSections = <String, String>{};
+
+  /// The id of the section called [name], or this page's own section when
+  /// no name is given. Null when the name matches nothing.
+  String? _sectionIdNamed(String? name) {
+    if (name == null || name.trim().isEmpty) return widget.page.sectionId;
+    final wanted = name.trim().toLowerCase();
+    final made = _createdSections[wanted];
+    if (made != null) return made;
+    final sections = ref
+            .read(shell.sectionsStreamProvider(widget.page.notebookId))
+            .valueOrNull ??
+        const <Section>[];
+    for (final s in sections) {
+      if (s.name.trim().toLowerCase() == wanted) return s.id;
+    }
+    return null;
+  }
+
+  /// Creates a page beside this one, for the agent.
+  ///
+  /// The new page is not opened: the run that asked for it is still editing
+  /// this page through this editor, and switching pages would dispose it
+  /// mid-plan. A section the model named that does not exist falls back to
+  /// this one — the page is the point, and it is still there to be found.
+  Future<bool> _createPage(
+    String title, {
+    String? section,
+    String markdown = '',
+  }) async {
+    if (!mounted) return false;
+    final clean = title.trim();
+    if (clean.isEmpty) return false;
+    final nid = widget.page.notebookId;
+    final sectionId = _sectionIdNamed(section) ?? widget.page.sectionId;
+    final pages = ref
+        .read(
+            shell.pagesStreamProvider((notebookId: nid, sectionId: sectionId)))
+        .valueOrNull;
+
+    afe.Document? document;
+    if (markdown.trim().isNotEmpty) {
+      final nodes = marioMarkdownToNodes(markdown);
+      if (nodes.isNotEmpty) {
+        document = afe.Document(root: afe.pageNode(children: nodes));
+      }
+    }
+
+    final now = DateTime.now();
+    try {
+      await GetIt.I<SyncService>().createPage(
+        NotePage(
+          id: '',
+          sectionId: sectionId,
+          notebookId: nid,
+          title: clean,
+          order: pages?.length ?? 0,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        document: document,
+      );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Creates a section in this notebook, for the agent.
+  Future<bool> _createSection(String name) async {
+    if (!mounted) return false;
+    final clean = name.trim();
+    if (clean.isEmpty) return false;
+    final nid = widget.page.notebookId;
+    final sections =
+        ref.read(shell.sectionsStreamProvider(nid)).valueOrNull ?? const [];
+    try {
+      final id = await GetIt.I<SyncService>().createSection(Section(
+        id: '',
+        notebookId: nid,
+        name: clean,
+        colorIndex: 2,
+        order: sections.length,
+      ));
+      _createdSections[clean.toLowerCase()] = id;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Renames the named section, or this page's own, for the agent. A name
+  /// that matches no section is refused rather than guessed at.
+  Future<bool> _renameSection(String name, {String? section}) async {
+    if (!mounted) return false;
+    final clean = name.trim();
+    if (clean.isEmpty) return false;
+    final id = _sectionIdNamed(section);
+    if (id == null) return false;
+    final sections = ref
+            .read(shell.sectionsStreamProvider(widget.page.notebookId))
+            .valueOrNull ??
+        const <Section>[];
+    final target = sections.where((s) => s.id == id).firstOrNull;
+    if (target == null || target.name == clean) return false;
+    try {
+      await GetIt.I<SyncService>().updateSection(target.copyWith(name: clean));
       return true;
     } catch (_) {
       return false;
@@ -795,53 +933,30 @@ class _EditorState extends ConsumerState<_Editor> {
 
     // AppFlowy applies editorStyle.padding to EVERY block (page_block_component
     // wraps each item in `Padding(padding: editorStyle.padding)`), so any
-    // vertical value here doubles up between adjacent blocks. Keep it 0 and
-    // get top/bottom breathing room from the editor's header/footer slots.
-    final style = isDark
-        ? afe.EditorStyle.desktop(
-            cursorColor: MarioColors.primary,
-            selectionColor: MarioColors.primary.withValues(alpha: 0.25),
-            // Horizontal inset lives HERE, not in a Padding around the
-            // editor: getNodeInOffset resolves a tap to the NEAREST node,
-            // so margin inside the editor still places the caret on the
-            // adjacent line. Wrapping the editor instead shrinks its
-            // gesture box and those taps hit dead space.
-            padding: const EdgeInsets.symmetric(
-                horizontal: kEditorInset, vertical: 8),
-            textStyleConfiguration: afe.TextStyleConfiguration(
-              text: GoogleFonts.inter(
-                  fontSize: 14, color: MarioColors.onSurfaceDark, height: 1.2),
-              lineHeight: 1.2,
-            ),
-            cursorWidth: 2.0,
-          )
-        : afe.EditorStyle.desktop(
-            cursorColor: MarioColors.primaryPressed,
-            selectionColor: MarioColors.primary.withValues(alpha: 0.35),
-            // Horizontal inset lives HERE, not in a Padding around the
-            // editor: getNodeInOffset resolves a tap to the NEAREST node,
-            // so margin inside the editor still places the caret on the
-            // adjacent line. Wrapping the editor instead shrinks its
-            // gesture box and those taps hit dead space.
-            padding: const EdgeInsets.symmetric(
-                horizontal: kEditorInset, vertical: 8),
-            textStyleConfiguration: afe.TextStyleConfiguration(
-              text: GoogleFonts.inter(
-                  fontSize: 14, color: MarioColors.onSurface, height: 1.2),
-              lineHeight: 1.2,
-            ),
-            cursorWidth: 2.0,
-          );
-
-    // Drop AppFlowy's default 4px vertical block padding to zero so the gap
-    // between adjacent paragraphs matches wrapped-line spacing inside one
-    // paragraph (otherwise 2px of padding shows up only between blocks).
-    final tightConfig = afe.BlockComponentConfiguration(
-      padding: (_) => EdgeInsets.symmetric(vertical: 1),
+    // vertical value here lands between each line and the next — 8px here was
+    // 16px between every two lines of a page. It is 0; the top and bottom
+    // breathing room comes from the header and footer slots, and the line box
+    // and block spacing are set in editor_typography.dart.
+    final style = afe.EditorStyle.desktop(
+      cursorColor: isDark ? MarioColors.primary : MarioColors.primaryPressed,
+      selectionColor:
+          MarioColors.primary.withValues(alpha: isDark ? 0.25 : 0.35),
+      // Horizontal inset lives HERE, not in a Padding around the editor:
+      // getNodeInOffset resolves a tap to the NEAREST node, so margin inside
+      // the editor still places the caret on the adjacent line. Wrapping the
+      // editor instead shrinks its gesture box and those taps hit dead space.
+      padding: const EdgeInsets.symmetric(horizontal: kEditorInset),
+      textStyleConfiguration: editorTextStyles(
+        context,
+        ink: isDark ? MarioColors.onSurfaceDark : MarioColors.onSurface,
+      ),
+      cursorWidth: 2.0,
     );
 
     final blockBuilders = <String, afe.BlockComponentBuilder>{
       ...afe.standardBlockComponentBuilderMap,
+      // Headings and dividers with the preview's type, rules and spacing.
+      ...editorTypographyBuilders(context),
       // Override the stock table with our wrapper that adds a whole-table
       // corner resize handle (keeps AppFlowy's table for editing/cells).
       afe.TableBlockKeys.type: MarioTableBlockComponentBuilder(),
@@ -852,17 +967,19 @@ class _EditorState extends ConsumerState<_Editor> {
       SpreadsheetBlockKeys.type: SpreadsheetBlockComponentBuilder(),
       AudioBlockKeys.type: AudioBlockComponentBuilder(),
     };
-    // Apply tight padding to every standard block builder (paragraphs, lists,
-    // headings, quotes…). The custom Mario blocks own their own padding so we
-    // leave them alone.
+    // Every standard block (paragraphs, lists, headings, quotes…) takes its
+    // padding from one place, editorBlockPadding — zero for text, so a page
+    // written a line per block reads like a paragraph that wraps. The custom
+    // Mario blocks own their own padding and are left alone.
     for (final entry in afe.standardBlockComponentBuilderMap.entries) {
-      blockBuilders[entry.key]?.configuration = tightConfig;
+      blockBuilders[entry.key]?.configuration = editorBlockConfiguration;
     }
 
     final standardSpaceHandlers =
         afe.standardCharacterShortcutEvents.where((e) => e.character != '/');
     final shortcutEvents = <afe.CharacterShortcutEvent>[
       marioMathShortcut,
+      marioEmojiShortcut,
       ...standardSpaceHandlers,
       afe.customSlashCommand(
         [
@@ -913,27 +1030,32 @@ class _EditorState extends ConsumerState<_Editor> {
             onToggleDraw: _toggleDraw,
             trailing: ValueListenableBuilder<int>(
               valueListenable: _assetSweeper.pendingCount,
-              builder: (context, pendingImages, _) => _PageActions(
-                dictate: IconButtonTheme(
-                  data: IconButtonThemeData(
-                    style: IconButton.styleFrom(
-                      padding: const EdgeInsets.all(5),
-                      minimumSize: const Size(28, 28),
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      foregroundColor: scheme.onSurfaceVariant,
+              builder: (context, pendingImages, _) =>
+                  ValueListenableBuilder<int>(
+                valueListenable: GetIt.I<SyncService>().pendingChanges,
+                builder: (context, pendingChanges, _) => _PageActions(
+                  pendingChanges: pendingChanges,
+                  dictate: IconButtonTheme(
+                    data: IconButtonThemeData(
+                      style: IconButton.styleFrom(
+                        padding: const EdgeInsets.all(5),
+                        minimumSize: const Size(28, 28),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        foregroundColor: scheme.onSurfaceVariant,
+                      ),
                     ),
+                    child: VoiceDictationButton(editorState: _editorState),
                   ),
-                  child: VoiceDictationButton(editorState: _editorState),
+                  status: _status,
+                  lastSavedAt: _lastSavedAt,
+                  pendingImages: pendingImages,
+                  drawMode: _drawMode,
+                  previewMode: _previewMode,
+                  onExport: _export,
+                  onToggleDraw: _toggleDraw,
+                  onTogglePreview: _togglePreview,
+                  onSaveNow: _saveNow,
                 ),
-                status: _status,
-                lastSavedAt: _lastSavedAt,
-                pendingImages: pendingImages,
-                drawMode: _drawMode,
-                previewMode: _previewMode,
-                onExport: _export,
-                onToggleDraw: _toggleDraw,
-                onTogglePreview: _togglePreview,
-                onSaveNow: _saveNow,
               ),
             ),
           ),
@@ -1295,6 +1417,7 @@ class _PageActions extends StatelessWidget {
     required this.status,
     required this.lastSavedAt,
     required this.pendingImages,
+    required this.pendingChanges,
     required this.drawMode,
     required this.previewMode,
     required this.onExport,
@@ -1311,6 +1434,11 @@ class _PageActions extends StatelessWidget {
   /// otherwise about the page JSON only, and "Saved" while a picture is still
   /// local-only would promise something the other devices won't see.
   final int pendingImages;
+
+  /// Pages, sections and notebooks made, renamed or deleted on this device
+  /// that the server has not heard about yet — the sync outbox. Same
+  /// promise: "Saved" is true here, and not yet anywhere else.
+  final int pendingChanges;
 
   final bool drawMode;
   final bool previewMode;
@@ -1340,6 +1468,10 @@ class _PageActions extends StatelessWidget {
     if (pendingImages > 0 && status != SaveStatus.error) {
       saveLabel = '$saveLabel · $pendingImages '
           'image${pendingImages == 1 ? '' : 's'} not synced';
+    }
+    if (pendingChanges > 0) {
+      saveLabel = '$saveLabel · $pendingChanges '
+          'change${pendingChanges == 1 ? '' : 's'} waiting to sync';
     }
 
     return Row(

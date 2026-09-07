@@ -16,21 +16,32 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:get_it/get_it.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../core/models/note_page.dart';
+import '../../core/models/section.dart';
+import '../../core/services/ai/ai_artifacts.dart';
+import '../../core/services/page_content_repository.dart';
+import '../auth/auth_notifier.dart';
+import '../editor/page_content_provider.dart';
 import '../../ui/colors.dart';
 import '../../ui/organic.dart';
 import '../settings/settings_state.dart';
 import '../shell/dialogs/text_input_dialog.dart';
+import '../shell/shell_state.dart' as shell;
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../editor/html_preview.dart';
 import 'agent_actions.dart';
 import 'agent_task.dart';
+import 'ai_history.dart';
 import 'ai_progress.dart';
 import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
+import 'mario_skills.dart';
+import 'mario_tools.dart';
 import 'note_images.dart';
 
 class AgentPanel extends ConsumerStatefulWidget {
@@ -102,11 +113,47 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     // Everything from `ref` is read before the first await: the run outlives
     // this widget.
     final session = ref.read(agentSessionProvider.notifier);
+    final current = ref.read(agentSessionProvider);
     final settings = ref.read(settingsProvider.notifier);
     final task = ref.read(agentTaskProvider);
     final reader = ref.read(noteImageReaderProvider);
+    final selection = ref.read(shell.selectionProvider.notifier);
+    // The container, not `ref`: the tools run after awaits, and after this
+    // widget may have been remounted for a second instruction.
+    final container = ProviderScope.containerOf(context, listen: false);
+    final tools = MarioTools(
+      sync: ref.read(shell.syncServiceProvider),
+      content: GetIt.I<PageContentRepository>(),
+      loadIndex: () => _loadIndex(container),
+      loadContent: (fileId) =>
+          container.read(pageContentProvider(fileId).future),
+      webSearch: ref.read(webSearchProvider),
+      uid: ref.read(authStateProvider).valueOrNull?.uid ??
+          ref.read(authServiceProvider).currentUser?.uid ??
+          '',
+      bridge: bridge,
+      onOpenPage: (page) => selection.selectPage(
+        page.id,
+        sectionId: page.sectionId,
+        notebookId: page.notebookId,
+      ),
+    );
     final note = bridge.readPage();
     final document = bridge.readDocument();
+
+    // The notebook's sections, by name, so the model can put a new page in
+    // one that exists — and knows which one this page is in.
+    final sections =
+        ref.read(shell.sectionsStreamProvider(bridge.notebookId)).valueOrNull ??
+            const [];
+    final sectionName =
+        sections.where((s) => s.id == bridge.sectionId).firstOrNull?.name;
+    final notebookName = ref
+        .read(shell.notebooksStreamProvider)
+        .valueOrNull
+        ?.where((n) => n.id == bridge.notebookId)
+        .firstOrNull
+        ?.name;
 
     // Text only: the agent is choosing *where* things go, and OCR labelled by
     // block id answers that. Sending the pictures themselves would multiply
@@ -123,6 +170,8 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     } catch (_) {
       // Falls through with no images.
     }
+    // The user's own skills, read fresh so an edit counts next time.
+    final userSkills = await loadUserSkills();
     if (!mounted) return;
 
     final run = task.run(
@@ -130,29 +179,170 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
       note: note,
       images: images,
       htmlArtifact: bridge.readHtmlArtifact(),
-      useWeb: ref.read(agentSessionProvider).useWeb,
+      useWeb: current.useWeb,
+      sectionName: sectionName,
+      sectionNames: [for (final s in sections) s.name],
+      notebookName: notebookName,
+      history: current.exchanges,
+      userSkills: userSkills,
+      reviewBeforeWriting: current.reviewBeforeWriting,
       onPlanned: session.reviewPlan,
-      applyAction: (action) => _perform(action, bridge, settings),
+      applyAction: (action) => _perform(action, bridge, settings, tools),
     );
+    tools.run = run;
     session.start(run, instruction: instruction);
+    _saveWhenDone(run, instruction: instruction, bridge: bridge);
+    _rememberWhenDone(run, instruction: instruction, session: session);
   }
 
-  /// Routes one action: document edits go to the executor, the two that are
-  /// not document edits are handled here.
-  Future<bool> _perform(
+  /// The notebook tree through the shell's own providers — the ones the
+  /// sidebar shows, and the ones a demo build swaps for fixtures.
+  static Future<MarioIndex> _loadIndex(ProviderContainer container) async {
+    final notebooks =
+        await container.read(shell.notebooksStreamProvider.future);
+    final sections = <String, List<Section>>{};
+    final pages = <String, List<NotePage>>{};
+    for (final nb in notebooks) {
+      final secs =
+          await container.read(shell.sectionsStreamProvider(nb.id).future);
+      sections[nb.id] = secs;
+      for (final s in secs) {
+        pages[s.id] = await container.read(
+          shell
+              .pagesStreamProvider((notebookId: nb.id, sectionId: s.id)).future,
+        );
+      }
+    }
+    return MarioIndex(notebooks, sections, pages);
+  }
+
+  /// Keeps a finished run in the session's conversation, so the next
+  /// instruction — a reply to the agent's question, a refinement — sees it.
+  /// The notifier is captured, not `ref`: the run outlives this widget.
+  void _rememberWhenDone(
+    AiRun run, {
+    required String instruction,
+    required AgentSessionNotifier session,
+  }) {
+    void listener() {
+      final s = run.value;
+      if (s.status != AiRunStatus.done) return;
+      run.removeListener(listener);
+      final outcome = s.result;
+      session.remember(AgentExchange(
+        instruction: instruction,
+        summary: outcome is AgentOutcome
+            ? [
+                if (outcome.summary.isNotEmpty) outcome.summary,
+                if (outcome.applied.isNotEmpty)
+                  'Did: ${outcome.applied.join('; ')}',
+              ].join(' ')
+            : s.answer,
+        question: outcome is AgentOutcome ? outcome.question : null,
+      ));
+    }
+
+    run.addListener(listener);
+  }
+
+  /// Persists a finished run, so the Do tab has a history like Ask's.
+  ///
+  /// Listens rather than awaits, and captures the store now, while `ref` is
+  /// valid: the run outlives this widget — a local model can still be
+  /// planning when the user switches tab — and reading `ref` from a listener
+  /// that fires after disposal throws. Same shape as AskPanel._saveWhenDone.
+  ///
+  /// Only a run that reached a result is kept. A discarded preview finishes
+  /// without one; it changed nothing, and there is nothing to come back to.
+  void _saveWhenDone(
+    AiRun run, {
+    required String instruction,
+    required AiEditorBridge bridge,
+  }) {
+    final store = ref.read(aiArtifactStoreProvider);
+    void listener() {
+      final s = run.value;
+      if (s.status != AiRunStatus.done) return;
+      run.removeListener(listener);
+      final outcome = s.result;
+      if (outcome is! AgentOutcome) return;
+      final entry = DoEntry(
+        id: 'do-${DateTime.now().microsecondsSinceEpoch}',
+        pageId: bridge.pageId,
+        instruction: instruction,
+        summary: outcome.summary,
+        applied: outcome.applied,
+        failed: outcome.failed,
+        dropped: outcome.dropped,
+        provenance: AiProvenance(
+          backend: s.backendLabel ?? 'unknown',
+          model: '',
+          createdAt: DateTime.now(),
+        ),
+      );
+      // Best-effort: the outcome is on screen either way, and the store keeps
+      // a local copy when Drive is unreachable.
+      store.addDo(bridge.notebookId, entry).ignore();
+    }
+
+    run.addListener(listener);
+  }
+
+  /// Routes one action: edits to the open page go to the executor through
+  /// the bridge, the rest to the tools or to the settings.
+  Future<AgentActionResult> _perform(
     AgentAction action,
     AiEditorBridge bridge,
     SettingsNotifier settings,
+    MarioTools tools,
   ) async {
+    AgentActionResult asResult(bool ok) =>
+        ok ? const AgentActionResult.ok() : const AgentActionResult.failed();
     switch (action.kind) {
       case AgentActionKind.renamePage:
-        return bridge.renamePage(action.text);
+        return asResult(await bridge.renamePage(action.text));
+      case AgentActionKind.createPage:
+        if (action.notebook != null) return tools.perform(action);
+        return asResult(await bridge.createPage(
+          action.text,
+          section: action.section,
+          markdown: action.content,
+        ));
+      case AgentActionKind.createSection:
+        if (action.notebook != null) return tools.perform(action);
+        return asResult(await bridge.createSection(action.text));
+      case AgentActionKind.renameSection:
+        return asResult(
+            await bridge.renameSection(action.text, section: action.section));
       case AgentActionKind.setting:
-        return _applySetting(action, settings);
+        return asResult(await _applySetting(action, settings));
       case AgentActionKind.htmlArtifact:
-        return bridge.setHtmlArtifact(action.text);
+        return asResult(await bridge.setHtmlArtifact(action.text));
+      case AgentActionKind.writePage:
+        // The open page is written through the editor, so it is watched and
+        // undoable; any other page goes through its file.
+        if (tools.isCurrentPage(action.page)) {
+          return asResult(await bridge.applyAgentAction(action));
+        }
+        return tools.perform(action);
+      case AgentActionKind.createNotebook:
+      case AgentActionKind.readPage:
+      case AgentActionKind.listNotebooks:
+      case AgentActionKind.listPages:
+      case AgentActionKind.searchNotes:
+      case AgentActionKind.webSearch:
+      case AgentActionKind.openPage:
+      case AgentActionKind.askUser:
+        return tools.perform(action);
       default:
-        return bridge.applyAgentAction(action);
+        final ok = await bridge.applyAgentAction(action);
+        if (ok) return const AgentActionResult.ok();
+        // The executor says only yes or no; the reason it says no is almost
+        // always the same one, and the model can act on it.
+        return AgentActionResult.failed(action.blockId != null
+            ? 'block ${action.blockId} is not on this page any more — it '
+                'may have been edited or removed; read the page again'
+            : 'it could not be applied to the page');
     }
   }
 
@@ -259,7 +449,9 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                         _ActOnThisPage(
                           enabled: bridge != null,
                           onRun: _runPreset,
+                          reviewToggle: const _ReviewToggle(),
                         ),
+                        DoHistoryList(onReplay: _runInstruction),
                       ],
                     )
                   : ValueListenableBuilder<AiRunState>(
@@ -295,6 +487,9 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                               canUndo:
                                   session.snapshot != null && bridge != null,
                               onUndo: _undo,
+                              onFollowUp: bridge == null || state.isRunning
+                                  ? null
+                                  : _runInstruction,
                             ),
                           ],
                           // The launcher rides along under the result too. The
@@ -306,6 +501,14 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
                             _ActOnThisPage(
                               enabled: bridge != null && !state.isRunning,
                               onRun: _runPreset,
+                              reviewToggle: const _ReviewToggle(),
+                            ),
+                            // Earlier runs, under the launcher: the session
+                            // holds one run, so this is the only way back to
+                            // what a previous instruction did.
+                            DoHistoryList(
+                              onReplay:
+                                  state.isRunning ? null : _runInstruction,
                             ),
                           ],
                         ],
@@ -496,7 +699,8 @@ class _Intro extends StatelessWidget {
       'Turn the last paragraph into bullet points',
       'Add a Python example for this algorithm',
       'Rename this page to match its heading',
-      'Add a spreadsheet for the experiment results',
+      'Create a page "Krebs cycle" with a summary of this one',
+      'Find my notes on enzymes and pull them into one page',
     ];
 
     return Column(
@@ -516,8 +720,9 @@ class _Intro extends StatelessWidget {
         const SizedBox(height: 5),
         Text(
           'Say what you want and it edits the page directly — tables, code, '
-          'formulas, spreadsheets, lists, the title. Every change is listed as '
-          'it happens, and one Undo puts everything back.',
+          'formulas, spreadsheets, lists, the title — and can add pages and '
+          'sections to the notebook. Every change is listed as it happens, '
+          'and one Undo puts the page back.',
           textAlign: TextAlign.center,
           style: GoogleFonts.inter(
               fontSize: 11.5, height: 1.45, color: scheme.onSurfaceVariant),
@@ -570,12 +775,12 @@ class _PagePreset {
 
 /// The design draws five rows. Four of them are here.
 ///
-/// **"Split into pages" is deliberately missing.** It would have to write new
-/// pages into the section, and nothing in this feature can: [AgentActionKind]
-/// is an allowlist with no create-page member, and [AiEditorBridge] exposes
-/// only the open page — read it, edit its blocks, rename it. A row for it
-/// would plan something, drop every action as unknown, and fail every time it
-/// was pressed. Better absent than broken.
+/// **"Split into pages" is still missing.** The agent can create pages now
+/// (create_page, with a Markdown body), so the row is no longer impossible —
+/// but a split also has to delete the moved blocks from this page, and a
+/// one-tap preset that removes half of someone's page is a worse default
+/// than a typed instruction whose plan they preview first. Better absent
+/// than surprising.
 const _presets = <_PagePreset>[
   _PagePreset(
     icon: Icons.checklist,
@@ -625,7 +830,15 @@ const _presets = <_PagePreset>[
 
 /// The launcher: preset instructions, one tap each.
 class _ActOnThisPage extends StatelessWidget {
-  const _ActOnThisPage({required this.enabled, required this.onRun});
+  const _ActOnThisPage({
+    required this.enabled,
+    required this.onRun,
+    required this.reviewToggle,
+  });
+
+  /// The "Preview before writing" switch, shown with the kicker so it is
+  /// seen before the first preset is tapped rather than found under them.
+  final Widget reviewToggle;
 
   /// False with no page open, and while a run is in flight — a preset that
   /// queued a second plan on top of the first would leave two sets of edits
@@ -641,6 +854,7 @@ class _ActOnThisPage extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         const MarioKicker('Act on this page'),
+        reviewToggle,
         const SizedBox(height: MarioSpace.x2),
         for (final preset in _presets)
           _PresetRow(
@@ -649,8 +863,9 @@ class _ActOnThisPage extends StatelessWidget {
           ),
         const SizedBox(height: MarioSpace.x2),
         Text(
-          'Mario previews every change before writing. Apply runs the reviewed '
-          'plan, and Undo all puts the page back.',
+          'Mario works through the job and lists each step as it happens; '
+          'Undo all puts the page back. Turn on Preview before writing to '
+          'approve each step first.',
           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 fontSize: 12,
                 height: 1.35,
@@ -740,6 +955,7 @@ class _Outcome extends StatelessWidget {
     required this.undoing,
     required this.canUndo,
     required this.onUndo,
+    required this.onFollowUp,
   });
 
   final AgentOutcome outcome;
@@ -747,6 +963,9 @@ class _Outcome extends StatelessWidget {
   final bool undoing;
   final bool canUndo;
   final VoidCallback onUndo;
+
+  /// Runs a suggested next instruction. Null while nothing can run.
+  final Future<void> Function(String instruction)? onFollowUp;
 
   @override
   Widget build(BuildContext context) {
@@ -823,12 +1042,61 @@ class _Outcome extends StatelessWidget {
                           'used${outcome.dropReasons.isEmpty ? '' : ': '
                               '${outcome.dropReasons.join('; ')}'}',
                     if (outcome.failed > 0)
-                      '${outcome.failed} could not be applied to the page',
+                      '${outcome.failed} step(s) could not be done',
                   ].join('. '),
                   style: GoogleFonts.inter(
                       fontSize: 11, color: scheme.onSurfaceVariant),
                 ),
               ),
+            // The agent stopped to ask. The reply goes in the box below; the
+            // question rides along with it as context.
+            if (outcome.question != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.all(9),
+                decoration: BoxDecoration(
+                  color: scheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      outcome.question!,
+                      style: GoogleFonts.inter(
+                        fontSize: 12.5,
+                        height: 1.4,
+                        fontWeight: FontWeight.w500,
+                        color: scheme.onSurface,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      'Reply in the box below to carry on.',
+                      style: GoogleFonts.inter(
+                          fontSize: 11, color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+            if (outcome.followUps.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 6,
+                runSpacing: 6,
+                children: [
+                  for (final f in outcome.followUps)
+                    ActionChip(
+                      label: Text(f),
+                      labelStyle: GoogleFonts.inter(fontSize: 11.5),
+                      visualDensity: VisualDensity.compact,
+                      onPressed:
+                          onFollowUp == null ? null : () => onFollowUp!(f),
+                    ),
+                ],
+              ),
+            ],
             const SizedBox(height: 10),
             Row(
               children: [
@@ -849,6 +1117,39 @@ class _Outcome extends StatelessWidget {
               ],
             ),
           ],
+        ],
+      ),
+    );
+  }
+}
+
+/// "Preview before writing": pause each writing step for approval, the way
+/// every run used to. Off by default, so the agent works through; the step
+/// list and Undo all are what stand in for the preview.
+class _ReviewToggle extends ConsumerWidget {
+  const _ReviewToggle();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
+    final value =
+        ref.watch(agentSessionProvider.select((s) => s.reviewBeforeWriting));
+    return Padding(
+      padding: const EdgeInsets.only(top: MarioSpace.x2, bottom: MarioSpace.x1),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              'Preview before writing',
+              style: GoogleFonts.inter(
+                  fontSize: 12, color: scheme.onSurfaceVariant),
+            ),
+          ),
+          MarioToggle(
+            value: value,
+            onChanged:
+                ref.read(agentSessionProvider.notifier).setReviewBeforeWriting,
+          ),
         ],
       ),
     );

@@ -17,13 +17,18 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:markdown/markdown.dart' as md;
 
 import '../editor/blocks/code_block.dart';
+import '../editor/blocks/math_block.dart';
+import '../math/latex_normalizer.dart';
 
-/// A fenced code block — ```lang … ``` — as the app's code block.
+/// A fenced code block — ```lang … ``` — as the app's code block, or, when
+/// the fence is a maths one, as the app's formula block.
 ///
 /// The `markdown` package emits `<pre><code class="language-dart">`, so the
 /// language rides on the class of the inner `code` element. An indented code
 /// block (four spaces) produces the same shape with no class, and lands as
-/// plaintext.
+/// plaintext. A ```math, ```latex or ```tex fence — and a `$$` block, which
+/// [displayMathAsFences] turns into one — becomes a formula block, rendered
+/// rather than shown as LaTeX source.
 class MarioCodeBlockParser extends afe.CustomMarkdownParser {
   const MarioCodeBlockParser();
 
@@ -52,8 +57,14 @@ class MarioCodeBlockParser extends afe.CustomMarkdownParser {
     // own trailing line, so keeping it leaves a blank last row.
     if (text.endsWith('\n')) text = text.substring(0, text.length - 1);
 
+    if (_mathLanguages.contains(language)) {
+      final formula = normalizeLatexFormula(text);
+      if (formula.isNotEmpty) return [mathEquationNode(formula: formula)];
+    }
     return [codeBlockNode(code: text, language: language)];
   }
+
+  static const _mathLanguages = {'math', 'latex', 'tex', 'katex'};
 
   String _languageOf(md.Element code) {
     final classes = code.attributes['class'];
@@ -68,12 +79,66 @@ class MarioCodeBlockParser extends afe.CustomMarkdownParser {
   }
 }
 
+/// A GitHub callout — `> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`,
+/// `[!CAUTION]` — as a quote block with the callout's title in bold.
+///
+/// The `markdown` package's GitHub set parses these into
+/// `<div class="markdown-alert markdown-alert-tip">` with a title paragraph
+/// first, which no AppFlowy parser claims, so a study note full of tips lost
+/// every one of them on the way in. Mario has no callout block of its own;
+/// a quote with a bold first line is what the same note looks like in a
+/// preview, minus the colour.
+class MarioAlertParser extends afe.CustomMarkdownParser {
+  const MarioAlertParser();
+
+  @override
+  List<afe.Node> transform(
+    md.Node element,
+    List<afe.CustomMarkdownParser> parsers, {
+    afe.MarkdownListType listType = afe.MarkdownListType.unknown,
+    int? startNumber,
+  }) {
+    if (element is! md.Element || element.tag != 'div') return [];
+    final classes = element.attributes['class'] ?? '';
+    if (!classes.contains('markdown-alert')) return [];
+
+    final delta = afe.Delta();
+    final decoder = afe.DeltaMarkdownDecoder();
+    var first = true;
+    for (final child in element.children ?? const <md.Node>[]) {
+      if (child is! md.Element) continue;
+      if (child.attributes['class'] == 'markdown-alert-title') {
+        delta.insert(child.textContent.trim(), attributes: {'bold': true});
+        first = false;
+        continue;
+      }
+      if (!first) delta.insert('\n');
+      first = false;
+      // A paragraph keeps its inline styling; anything else — a list, a
+      // fence — is kept as text rather than lost.
+      if (child.tag == 'p' && child.children != null) {
+        final inner = decoder.convertNodes(child.children!);
+        for (final op in inner) {
+          if (op is afe.TextInsert) {
+            delta.insert(op.text, attributes: op.attributes);
+          }
+        }
+      } else {
+        delta.insert(child.textContent.trim());
+      }
+    }
+    if (delta.isEmpty) return [];
+    return [afe.quoteNode(delta: delta)];
+  }
+}
+
 /// The decoder set the app uses everywhere it turns model output into blocks.
 ///
 /// AppFlowy's own defaults are appended by `markdownToDocument`; this only has
 /// to carry what it is missing.
 const List<afe.CustomMarkdownParser> marioMarkdownParsers = [
   MarioCodeBlockParser(),
+  MarioAlertParser(),
 ];
 
 /// Markdown → detached nodes, ready to insert.
@@ -83,10 +148,72 @@ const List<afe.CustomMarkdownParser> marioMarkdownParsers = [
 /// then resolves against the wrong one.
 List<afe.Node> marioMarkdownToNodes(String markdown) {
   final parsed = afe.markdownToDocument(
-    markdown,
+    displayMathAsFences(markdown),
     markdownParsers: marioMarkdownParsers,
   );
   return [for (final n in parsed.root.children) n.copyWith()];
+}
+
+/// `$$ … $$` display maths as ```math fences, so the fence parser sees it.
+///
+/// The `markdown` package knows no maths syntax, so a `$$` block would land
+/// as a paragraph of LaTeX source — which is what models and Markdown editors
+/// write for a formula, and what the maths block renders. Only blocks whose
+/// delimiters sit on lines of their own are converted; `$x$` inline and a
+/// `$$` inside a code fence are left exactly as they are.
+String displayMathAsFences(String markdown) {
+  if (!markdown.contains(r'$$')) return markdown;
+  final out = StringBuffer();
+  final lines = markdown.split('\n');
+  var inFence = false;
+  var inMath = false;
+  for (final line in lines) {
+    final trimmed = line.trim();
+    if (!inMath && _fenceRun(trimmed) >= 3) {
+      inFence = !inFence;
+      out.writeln(line);
+      continue;
+    }
+    if (inFence) {
+      out.writeln(line);
+      continue;
+    }
+    if (trimmed == r'$$') {
+      out.writeln(inMath ? '```' : '```math');
+      inMath = !inMath;
+      continue;
+    }
+    // A one-line block: `$$ E = mc^2 $$`.
+    if (!inMath &&
+        trimmed.length > 4 &&
+        trimmed.startsWith(r'$$') &&
+        trimmed.endsWith(r'$$')) {
+      out.writeln('```math');
+      out.writeln(trimmed.substring(2, trimmed.length - 2).trim());
+      out.writeln('```');
+      continue;
+    }
+    out.writeln(line);
+  }
+  var result = out.toString();
+  // writeln adds a newline the input may not have had.
+  if (!markdown.endsWith('\n') && result.endsWith('\n')) {
+    result = result.substring(0, result.length - 1);
+  }
+  // An unclosed `$$` is not a formula; put the source back as it was.
+  return inMath ? markdown : result;
+}
+
+/// Length of the leading run of ` or ~, which is what opens a fence.
+int _fenceRun(String trimmedLine) {
+  if (trimmedLine.isEmpty) return 0;
+  final marker = trimmedLine[0];
+  if (marker != '`' && marker != '~') return 0;
+  var n = 0;
+  while (n < trimmedLine.length && trimmedLine[n] == marker) {
+    n++;
+  }
+  return n;
 }
 
 /// Inline markdown — `**bold**`, `` `code` ``, `[a](b)` — as a styled delta.

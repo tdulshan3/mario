@@ -15,12 +15,21 @@ import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/theme.dart';
 import 'ai_markdown_blocks.dart';
 
 /// A model answer, rendered.
+///
+/// Laid out the way VS Code's Markdown preview lays out a document, scaled to
+/// the panel's type size — see [_renderingFor] for the measurements. Two
+/// things it adds to flutter_markdown's defaults: GitHub's `:smile:`
+/// shortcodes, and builders for the two elements the stylesheet cannot draw
+/// as a preview does, the rule under a level-1 heading and the horizontal rule
+/// itself.
 ///
 /// [selectable] is on by default — an answer people want to quote from is an
 /// answer they need to select.
@@ -38,93 +47,260 @@ class AiMarkdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final rendering =
+        _renderingFor(Theme.of(context).colorScheme, fontSize, selectable);
     return MarkdownBody(
       data: data,
       selectable: selectable,
+      inlineSyntaxes: _inlineSyntaxes,
+      builders: rendering.builders,
       onTapLink: (text, href, title) {
         if (href == null || href.isEmpty) return;
         final uri = Uri.tryParse(href);
         if (uri != null) launchUrl(uri, mode: LaunchMode.externalApplication);
       },
-      styleSheet: _styleSheetFor(Theme.of(context).colorScheme, fontSize),
+      styleSheet: rendering.styleSheet,
     );
   }
 }
 
-/// The stylesheet, built once per (scheme, size) rather than per build.
+/// `:smile:` and friends. flutter_markdown parses with the GitHub-flavoured
+/// set, which has tables, strikethrough and task lists but not the shortcodes
+/// GitHub's own renderer adds on top; this is that one addition. One instance
+/// for the app — the syntax compiles a pattern — handed to every body.
+final List<md.InlineSyntax> _inlineSyntaxes = [md.EmojiSyntax()];
+
+/// A stylesheet and the element builders that go with it.
+class _Rendering {
+  const _Rendering(this.styleSheet, this.builders);
+
+  final MarkdownStyleSheet styleSheet;
+  final Map<String, MarkdownElementBuilder> builders;
+}
+
+/// Built once per (scheme, size, selectable) rather than per build.
 ///
 /// It used to be constructed inline, which meant five GoogleFonts lookups and
 /// a thirty-field object on every rebuild — and while an answer streams, that
 /// is every frame. MarkdownStyleSheet implements ==, so a cached instance also
 /// lets the widget comparison upstream short-circuit.
-final _styleSheets = <(ColorScheme, double), MarkdownStyleSheet>{};
+final _renderings = <(ColorScheme, double, bool), _Rendering>{};
 
-MarkdownStyleSheet _styleSheetFor(ColorScheme scheme, double fontSize) {
-  final cached = _styleSheets[(scheme, fontSize)];
+/// VS Code's preview, in the panel's size.
+///
+/// The preview sets 14px text on a 22px line, gives paragraphs a 1em margin,
+/// gives list items none, sets headings at the browser's 2em / 1.5em / 1.17em
+/// with 17–19px of margin, rules the h1, draws the hr 2px, and gives a
+/// blockquote a 5px accent bar on a faint fill. Margins collapse in CSS and
+/// paddings do not here, so each value below is the half that adds up to the
+/// same gap: paragraph 0.4em top and bottom, heading 0.6em, and a 0.2em floor
+/// between any two blocks that would otherwise touch. The floor is what
+/// separates list items — the one place the preview has none — so a list
+/// is set almost as tight as a paragraph rather than a line apart.
+_Rendering _renderingFor(ColorScheme scheme, double f, bool selectable) {
+  final cached = _renderings[(scheme, f, selectable)];
   if (cached != null) return cached;
 
   // Bounded, so switching theme repeatedly does not pin every ColorScheme the
   // app has ever built.
-  if (_styleSheets.length > 4) _styleSheets.clear();
+  if (_renderings.length > 8) _renderings.clear();
 
-  final body = GoogleFonts.inter(
-    fontSize: fontSize,
-    height: 1.5,
-    color: scheme.onSurface,
+  final ink = scheme.onSurface;
+  final rule = markdownRuleColor(scheme);
+  final body = GoogleFonts.inter(fontSize: f, height: 1.5, color: ink);
+  final link = body.copyWith(
+    color: MarioColors.primaryPressed,
+    decoration: TextDecoration.underline,
+    decorationColor: MarioColors.primaryPressed.withValues(alpha: 0.4),
   );
-  return _styleSheets[(scheme, fontSize)] = MarkdownStyleSheet(
+  // Inline code: the code block's face, a step smaller than the prose, on a
+  // quiet fill.
+  final code = GoogleFonts.jetBrainsMono(
+    fontSize: f - 1,
+    color: ink,
+    backgroundColor: ink.withValues(alpha: 0.08),
+  );
+  TextStyle heading(double scale, {Color? color}) => GoogleFonts.inter(
+        fontSize: f * scale,
+        fontWeight: FontWeight.w600,
+        height: 1.25,
+        color: color ?? ink,
+      );
+  final headingPadding = EdgeInsets.symmetric(vertical: f * 0.6);
+
+  final sheet = MarkdownStyleSheet(
     p: body,
+    pPadding: EdgeInsets.symmetric(vertical: f * 0.4),
+    blockSpacing: f * 0.2,
     listBullet: body,
-    a: body.copyWith(
-      color: MarioColors.primaryPressed,
-      decoration: TextDecoration.underline,
-      decorationColor: MarioColors.primaryPressed.withValues(alpha: 0.4),
-    ),
+    listIndent: f * 1.6,
+    a: link,
     strong: body.copyWith(fontWeight: FontWeight.w600),
     em: body.copyWith(fontStyle: FontStyle.italic),
-    // Headings inside a 360px panel: the stock scale makes an h1 shout.
-    h1: GoogleFonts.spaceGrotesk(
-        fontSize: fontSize + 3,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface),
-    h2: GoogleFonts.spaceGrotesk(
-        fontSize: fontSize + 2,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface),
-    h3: GoogleFonts.spaceGrotesk(
-        fontSize: fontSize + 1,
-        fontWeight: FontWeight.w600,
-        color: scheme.onSurface),
-    code: GoogleFonts.robotoMono(
-      fontSize: fontSize - 1.5,
-      backgroundColor: scheme.surfaceContainerHighest,
-      color: scheme.onSurface,
-    ),
+    del: body.copyWith(decoration: TextDecoration.lineThrough),
+    // The browser's own scale, which is what the preview inherits. Levels 5
+    // and 6 would come out smaller than the text; they stay at body size and
+    // the last goes quiet instead.
+    h1: heading(2),
+    h2: heading(1.5),
+    h3: heading(1.17),
+    h4: heading(1),
+    h5: heading(1),
+    h6: heading(1, color: scheme.onSurfaceVariant),
+    h1Padding: headingPadding,
+    h2Padding: headingPadding,
+    h3Padding: headingPadding,
+    h4Padding: headingPadding,
+    h5Padding: headingPadding,
+    h6Padding: headingPadding,
+    code: code,
     codeblockDecoration: BoxDecoration(
       color: scheme.surfaceContainerHighest,
-      borderRadius: BorderRadius.circular(6),
-      border: Border.all(color: scheme.outlineVariant),
+      borderRadius: BorderRadius.circular(3),
     ),
-    codeblockPadding: const EdgeInsets.all(9),
-    blockquote: body.copyWith(color: scheme.onSurfaceVariant),
+    codeblockPadding: EdgeInsets.all(f * 0.9),
+    blockquote: body,
     blockquoteDecoration: BoxDecoration(
+      color: ink.withValues(alpha: 0.05),
+      borderRadius: BorderRadius.circular(2),
       border: Border(
-        left: BorderSide(color: scheme.outlineVariant, width: 3),
+        left:
+            BorderSide(color: scheme.primary.withValues(alpha: 0.55), width: 4),
       ),
     ),
-    blockquotePadding: const EdgeInsets.only(left: 10),
-    // Tighter than the defaults, which are tuned for a full-width document
-    // rather than a side panel.
-    pPadding: const EdgeInsets.only(bottom: 6),
-    h1Padding: const EdgeInsets.only(top: 10, bottom: 3),
-    h2Padding: const EdgeInsets.only(top: 10, bottom: 3),
-    h3Padding: const EdgeInsets.only(top: 8, bottom: 2),
-    listIndent: 18,
-    tableBorder: TableBorder.all(color: scheme.outlineVariant, width: 1),
-    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-    tableBody: body.copyWith(fontSize: fontSize - 1),
-    tableHead:
-        body.copyWith(fontSize: fontSize - 1, fontWeight: FontWeight.w600),
+    blockquotePadding: const EdgeInsets.fromLTRB(10, 2, 12, 2),
+    // Rows separated by rules, the head from the body by one, and no vertical
+    // lines — a preview's table, not a spreadsheet's grid.
+    tableBorder: TableBorder(
+      horizontalInside: BorderSide(color: rule),
+      bottom: BorderSide(color: rule),
+    ),
+    tableCellsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+    tableBody: body.copyWith(fontSize: f - 1),
+    tableHead: body.copyWith(fontSize: f - 1, fontWeight: FontWeight.w600),
+    horizontalRuleDecoration: _horizontalRule(rule, margin: f * 0.4),
+  );
+
+  final builders = <String, MarkdownElementBuilder>{
+    'h1': _RuledHeadingBuilder(
+      style: sheet.h1!,
+      padding: headingPadding,
+      ruleColor: rule,
+      codeStyle: code,
+      linkColor: MarioColors.primaryPressed,
+      selectable: selectable,
+    ),
+  };
+
+  return _renderings[(scheme, f, selectable)] = _Rendering(sheet, builders);
+}
+
+/// A level-1 heading with the preview's rule under it.
+///
+/// flutter_markdown has no decoration slot for a heading, and a builder
+/// replaces the element's rendering wholesale — including the inline runs the
+/// package would have styled — so the heading's children are set here too:
+/// bold, italic, code, strikethrough and link, which is everything a heading
+/// carries. The rule sits 0.3em below the text and the heading's own margin
+/// comes after it, as in VS Code's stylesheet.
+class _RuledHeadingBuilder extends MarkdownElementBuilder {
+  _RuledHeadingBuilder({
+    required this.style,
+    required this.padding,
+    required this.ruleColor,
+    required this.codeStyle,
+    required this.linkColor,
+    required this.selectable,
+  });
+
+  final TextStyle style;
+  final EdgeInsets padding;
+  final Color ruleColor;
+  final TextStyle codeStyle;
+  final Color linkColor;
+  final bool selectable;
+
+  @override
+  Widget? visitElementAfterWithContext(
+    BuildContext context,
+    md.Element element,
+    TextStyle? preferredStyle,
+    TextStyle? parentStyle,
+  ) {
+    final span = TextSpan(
+      style: style,
+      children: [
+        for (final child in element.children ?? const <md.Node>[])
+          _spanFor(child, style),
+      ],
+    );
+    return Padding(
+      padding: padding,
+      child: Container(
+        key: const ValueKey('ai-markdown-h1-rule'),
+        padding: EdgeInsets.only(bottom: (style.fontSize ?? 13) * 0.3),
+        decoration: BoxDecoration(
+          border: Border(bottom: BorderSide(color: ruleColor)),
+        ),
+        child: selectable ? SelectableText.rich(span) : Text.rich(span),
+      ),
+    );
+  }
+
+  InlineSpan _spanFor(md.Node node, TextStyle inherited) {
+    if (node is md.Text) return TextSpan(text: node.text, style: inherited);
+    if (node is! md.Element) return const TextSpan();
+    if (node.tag == 'br') return const TextSpan(text: '\n');
+    // Overlays, not the stylesheet's full styles: those carry the body size,
+    // and merging one in would shrink the heading to a paragraph.
+    final overlay = switch (node.tag) {
+      'strong' => const TextStyle(fontWeight: FontWeight.w700),
+      'em' => const TextStyle(fontStyle: FontStyle.italic),
+      'del' => const TextStyle(decoration: TextDecoration.lineThrough),
+      'code' => TextStyle(
+          fontFamily: codeStyle.fontFamily,
+          fontFamilyFallback: codeStyle.fontFamilyFallback,
+          backgroundColor: codeStyle.backgroundColor,
+        ),
+      'a' => TextStyle(color: linkColor, decoration: TextDecoration.underline),
+      _ => const TextStyle(),
+    };
+    final style = inherited.merge(overlay);
+    return TextSpan(
+      style: style,
+      children: [
+        for (final child in node.children ?? const <md.Node>[])
+          _spanFor(child, style),
+      ],
+    );
+  }
+}
+
+/// `---`, drawn as the preview draws it: a 2px rule with [margin] either side.
+///
+/// flutter_markdown gives an `hr` a bare `Container(decoration: …)` — no
+/// child, no height, and no way in for a builder, which it consults and then
+/// overrides for this tag. Such a box is exactly as tall as its border, so
+/// the margin is a transparent border top and bottom, and the rule is the
+/// box's own fill: a gradient that is clear except for the two pixels in the
+/// middle. The default decoration was a 5px slab on the top edge of nothing.
+BoxDecoration _horizontalRule(Color color, {required double margin}) {
+  const thickness = 2.0;
+  final total = margin * 2 + thickness;
+  final from = margin / total;
+  final to = (margin + thickness) / total;
+  const clear = Color(0x00000000);
+  return BoxDecoration(
+    border: Border(
+      top: BorderSide(width: margin, color: clear),
+      bottom: BorderSide(width: margin, color: clear),
+    ),
+    gradient: LinearGradient(
+      begin: Alignment.topCenter,
+      end: Alignment.bottomCenter,
+      colors: [clear, clear, color, color, clear, clear],
+      stops: [0, from, from, to, to, 1],
+    ),
   );
 }
 

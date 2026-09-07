@@ -15,6 +15,7 @@ import 'package:pasteboard/pasteboard.dart';
 
 import 'blocks/mario_image_block.dart';
 import 'paste_html_bridge.dart';
+import '../ai/ai_markdown_blocks.dart';
 
 /// All Word-style commands. Prepend to the editor's commandShortcutEvents so
 /// they win over AppFlowy's built-ins where keys collide (e.g. Ctrl+E was
@@ -669,8 +670,10 @@ Future<void> _insertHtmlSource(
 
 Future<void> _insertMarkdown(
     afe.EditorState editorState, String markdown) async {
-  final doc = afe.markdownToDocument(markdown);
-  final children = doc.root.children;
+  // Mario's own decoder set, not the package default: a pasted study note
+  // keeps its code fences, its `$$` formulas and its `> [!TIP]` callouts,
+  // where the stock decoder silently dropped all three.
+  final children = marioMarkdownToNodes(markdown);
   if (children.isEmpty) return;
   final selection = editorState.selection;
   // Mirror AppFlowy's _pasteMarkdown logic: replace empty current paragraph
