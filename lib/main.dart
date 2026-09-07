@@ -43,9 +43,11 @@ import 'platform/web/cloud_firestore_client.dart';
 import 'platform/web/ocr_service_web.dart';
 
 import 'platform/linux/auth_service_linux.dart'
-    if (dart.library.html) 'platform/web/auth_service_web.dart' as linux_auth;
+    if (dart.library.html) 'platform/web/auth_service_linux_stub.dart'
+    as linux_auth;
 import 'platform/linux/ocr_service_linux.dart'
-    if (dart.library.html) 'platform/web/ocr_service_web.dart' as linux_ocr;
+    if (dart.library.html) 'platform/web/ocr_service_linux_stub.dart'
+    as linux_ocr;
 import 'platform/linux/window_config_linux.dart'
     if (dart.library.html) 'platform/web/_window_stub.dart' as linux_win;
 
