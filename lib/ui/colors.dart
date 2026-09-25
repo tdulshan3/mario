@@ -90,36 +90,35 @@ class MarioColors {
   /// for the words a search actually matched.
   static const body = Color(0xFF242B3A);
 
-  // ── Simple roles — White. Neutral; the warmth drops out. ────────────────
+  // ── Simple roles — White. One cream ground, chrome and page alike. ──────
   static const inkWhite = Color(0xFF17233D);
   static const secWhite = Color(0xFF5A5F68);
   static const mutWhite = Color(0xFF8A8C90);
-  static const bgWhite = Color(0xFFFDFDFD);
-  static const sideWhite = Color(0xFFF6F6F6);
-  static const paperWhite = Color(0xFFFFFFFF);
+  static const bgWhite = Color(0xFFFFF8E0);
+  static const sideWhite = Color(0xFFFFF8E0);
+  static const paperWhite = Color(0xFFFFF8E0);
   static const bodyWhite = Color(0xFF242B3A);
 
-  // ── Simple roles — Calm night. The mark's navy, full bleed. ─────────────
+  // ── Simple roles — Calm night. Neutral grey, no blue in it. ─────────────
   //
-  // The light grounds run side < bg < paper in brightness, with the writing
-  // surface brightest. That order is kept rather than inverted: on navy the
-  // page still lifts off the chrome, so the eye lands in the same place.
-  static const inkNight = Color(0xFFEEF1F6);
-  static const secNight = Color(0xFFA8B0C0);
-  static const mutNight = Color(0xFF79839A);
-  static const bgNight = Color(0xFF17233D);
-  static const sideNight = Color(0xFF131D31);
-  static const paperNight = Color(0xFF1C2942);
-  static const bodyNight = Color(0xFFDDE3EE);
+  // The page sits darker than the chrome around it, so the writing surface
+  // reads as a well rather than a sheet lifted off the ground.
+  static const inkNight = Color(0xFFD0D0D0);
+  static const secNight = Color(0xFFA0A0A0);
+  static const mutNight = Color(0xFF767676);
+  static const bgNight = Color(0xFF2F2F2F);
+  static const sideNight = Color(0xFF2F2F2F);
+  static const paperNight = Color(0xFF1F1F1F);
+  static const bodyNight = Color(0xFFA0A0A0);
 
-  // ── Simple roles — Black. Pure #000, for OLED. ──────────────────────────
-  static const inkBlack = Color(0xFFF2F2F2);
+  // ── Simple roles — Black. Pure #000 everywhere, for OLED. ───────────────
+  static const inkBlack = Color(0xFFD0D0D0);
   static const secBlack = Color(0xFFA0A0A0);
   static const mutBlack = Color(0xFF767676);
   static const bgBlack = Color(0xFF000000);
-  static const sideBlack = Color(0xFF0B0B0B);
-  static const paperBlack = Color(0xFF111111);
-  static const bodyBlack = Color(0xFFE4E4E4);
+  static const sideBlack = Color(0xFF000000);
+  static const paperBlack = Color(0xFF000000);
+  static const bodyBlack = Color(0xFFA0A0A0);
 
   // ── Hairlines and the one subtle fill ───────────────────────────────────
   /// `--line` — every rule in the interface, at ink 10%.
@@ -129,7 +128,7 @@ class MarioColors {
   static const fill = Color(0x0D17233D);
 
   /// On the dark grounds the same two roles are white-alpha: a darker rule
-  /// over navy or black reads as a gap rather than as a line.
+  /// over grey or black reads as a gap rather than as a line.
   static const lineNight = Color(0x1AFFFFFF);
   static const fillNight = Color(0x0FFFFFFF);
   static const lineBlack = Color(0x1FFFFFFF);

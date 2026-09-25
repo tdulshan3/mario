@@ -29,9 +29,9 @@ class MarioApp extends ConsumerWidget {
     final ThemeMode flutterMode;
     switch (themeMode) {
       case MarioThemeMode.system:
-        // System pairs the two defaults: cream by day, the mark's navy by
-        // night. Black is deliberately not the system dark — it is a choice,
-        // not a fallback.
+        // System pairs the two defaults: cream by day, Calm night's grey
+        // after dark. Black is deliberately not the system dark — it is a
+        // choice, not a fallback.
         lightTheme = MarioTheme.light();
         darkTheme = MarioTheme.night();
         flutterMode = ThemeMode.system;

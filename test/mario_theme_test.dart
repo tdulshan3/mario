@@ -1,10 +1,10 @@
 /// The four grounds of the Simple remodel hold their spec.
 ///
 /// These are the values the design names explicitly — the near-white page,
-/// the mark's navy, pure black — so a drift here is a drift away from the
-/// design, not a matter of taste. The Light/White and Night/Black pairs also
-/// share a Brightness, which is exactly why the mode marker has to exist:
-/// brightness alone cannot tell either pair apart.
+/// the cream White, Calm night's grey, pure black — so a drift here is a
+/// drift away from the design, not a matter of taste. The Light/White and
+/// Night/Black pairs also share a Brightness, which is exactly why the mode
+/// marker has to exist: brightness alone cannot tell either pair apart.
 library;
 
 import 'package:flutter/material.dart';
@@ -20,17 +20,17 @@ void main() {
     final night = MarioTheme.night();
     final black = MarioTheme.black();
 
-    // The grounds the design names by hex. The cream is gone: the remodel
-    // puts the app on a near-white page, and White is what is left when even
-    // that trace of warmth drops out.
+    // The grounds the design names by hex. Light is the near-white page;
+    // White is one cream ground; Calm night is a neutral grey with no blue in
+    // it; Black is pure #000.
     expect(light.colorScheme.surface, const Color(0xFFFAF9F7),
         reason: 'the near-white ground');
-    expect(night.colorScheme.surface, const Color(0xFF17233D),
-        reason: "the mark's navy");
+    expect(white.colorScheme.surface, const Color(0xFFFFF8E0),
+        reason: 'the cream ground');
+    expect(night.colorScheme.surface, const Color(0xFF2F2F2F),
+        reason: 'the neutral grey');
     expect(black.colorScheme.surface, const Color(0xFF000000),
         reason: 'pure black, for OLED');
-    expect(white.colorScheme.surface, isNot(light.colorScheme.surface),
-        reason: 'White exists precisely because the warmth drops out');
 
     expect(light.brightness, Brightness.light);
     expect(white.brightness, Brightness.light);
@@ -38,20 +38,27 @@ void main() {
     expect(black.brightness, Brightness.dark);
   });
 
-  testWidgets('the page lifts off the chrome on every ground', (tester) async {
-    // side < bg < paper, in every theme. The writing surface is always the
-    // brightest step — including on navy and black, where the order is kept
-    // rather than inverted so the eye lands in the same place.
-    for (final t in [
-      MarioTheme.light(),
-      MarioTheme.white(),
-      MarioTheme.night(),
-      MarioTheme.black(),
-    ]) {
-      final tok = t.extension<MarioTokens>()!;
-      expect(tok.side, isNot(tok.bg));
-      expect(tok.paper, isNot(tok.bg));
+  testWidgets('each ground sets the page against the chrome its own way',
+      (tester) async {
+    MarioTokens tok(ThemeData t) => t.extension<MarioTokens>()!;
+
+    // Light steps side < bg < paper, so the page lifts off the chrome.
+    final light = tok(MarioTheme.light());
+    expect(light.side, isNot(light.bg));
+    expect(light.paper, isNot(light.bg));
+
+    // White and Black are one flat ground; hairlines do the separating.
+    for (final t in [MarioTheme.white(), MarioTheme.black()]) {
+      final flat = tok(t);
+      expect(flat.side, flat.bg);
+      expect(flat.paper, flat.bg);
     }
+
+    // Calm night sinks the page below the chrome instead of lifting it.
+    final night = tok(MarioTheme.night());
+    expect(night.side, night.bg);
+    expect(
+        night.paper.computeLuminance(), lessThan(night.bg.computeLuminance()));
   });
 
   testWidgets('gold holds on every ground; the dark accents lift',

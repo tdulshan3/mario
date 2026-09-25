@@ -7,7 +7,7 @@ editor with first-class support for math, code, drawing, spreadsheets and voice 
 then syncs your work to the cloud and exports it to PDF or Markdown. It runs as a
 native Linux or Windows desktop app and in the browser.
 
-**Current release: 1.3.5** — see [What's new](#whats-new-in-135).
+**Current release: 1.3.6** — see [What's new](#whats-new-in-136).
 
 ---
 
@@ -40,6 +40,14 @@ native Linux or Windows desktop app and in the browser.
 > [docs/screenshots/README.md](docs/screenshots/README.md) says how to regenerate them.
 
 ---
+
+## What's new in 1.3.6
+
+**Retuned themes.** White is now one warm cream ground (`#FFF8E0`) for the
+sidebar, the chrome and the page. Calm night drops the navy for a neutral grey,
+with the page set a step darker than the chrome around it. Black is pure `#000`
+everywhere, with softer grey text that is easier on the eyes at night. Light is
+unchanged.
 
 ## What's new in 1.3.5
 
