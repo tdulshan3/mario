@@ -27,7 +27,7 @@ void main() {
         reason: 'the near-white ground');
     expect(white.colorScheme.surface, const Color(0xFFFFF8E0),
         reason: 'the cream ground');
-    expect(night.colorScheme.surface, const Color(0xFF2F2F2F),
+    expect(night.colorScheme.surface, const Color(0xFF1F1F1F),
         reason: 'the neutral grey');
     expect(black.colorScheme.surface, const Color(0xFF000000),
         reason: 'pure black, for OLED');
@@ -54,11 +54,12 @@ void main() {
       expect(flat.paper, flat.bg);
     }
 
-    // Calm night sinks the page below the chrome instead of lifting it.
+    // Calm night lifts the page and the sidebar, one grey, off a darker
+    // ground.
     final night = tok(MarioTheme.night());
-    expect(night.side, night.bg);
-    expect(
-        night.paper.computeLuminance(), lessThan(night.bg.computeLuminance()));
+    expect(night.side, night.paper);
+    expect(night.paper.computeLuminance(),
+        greaterThan(night.bg.computeLuminance()));
   });
 
   testWidgets('gold holds on every ground; the dark accents lift',

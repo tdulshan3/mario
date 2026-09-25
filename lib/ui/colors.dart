@@ -101,14 +101,14 @@ class MarioColors {
 
   // ── Simple roles — Calm night. Neutral grey, no blue in it. ─────────────
   //
-  // The page sits darker than the chrome around it, so the writing surface
-  // reads as a well rather than a sheet lifted off the ground.
+  // The page and the sidebar share one grey and lift off a darker ground,
+  // so the writing surface still reads as a sheet laid on the chrome.
   static const inkNight = Color(0xFFD0D0D0);
   static const secNight = Color(0xFFA0A0A0);
   static const mutNight = Color(0xFF767676);
-  static const bgNight = Color(0xFF2F2F2F);
+  static const bgNight = Color(0xFF1F1F1F);
   static const sideNight = Color(0xFF2F2F2F);
-  static const paperNight = Color(0xFF1F1F1F);
+  static const paperNight = Color(0xFF2F2F2F);
   static const bodyNight = Color(0xFFA0A0A0);
 
   // ── Simple roles — Black. Pure #000 everywhere, for OLED. ───────────────
