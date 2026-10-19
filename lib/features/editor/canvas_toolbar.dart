@@ -16,11 +16,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import 'blocks/drawing_block.dart';
 import '../../ui/organic.dart';
 import 'blocks/mario_image_block.dart';
 import 'blocks/math_block.dart';
 import 'blocks/spreadsheet_block.dart';
+import 'mac_format_bar.dart';
 import 'word_shortcuts.dart';
 
 const _fontSizes = [
@@ -87,7 +89,11 @@ class CanvasToolbar extends StatefulWidget {
   State<CanvasToolbar> createState() => _CanvasToolbarState();
 }
 
-class _CanvasToolbarState extends State<CanvasToolbar> {
+/// The state owns the editing commands; on the desktop builds it hands them
+/// to the macOS format bar as [CanvasFormatting] instead of drawing the
+/// Material ribbon, so both looks share the commands and the cached range.
+class _CanvasToolbarState extends State<CanvasToolbar>
+    implements CanvasFormatting {
   /// Cached so toolbar popups (which steal focus and collapse the live
   /// selection) can still apply formatting to the user's last visual range.
   afe.Selection? _lastEditableSelection;
@@ -306,8 +312,87 @@ class _CanvasToolbarState extends State<CanvasToolbar> {
     await _insertNode(afe.Node(type: 'divider'));
   }
 
+  // ── CanvasFormatting, for the macOS format bar ──────────────────────────
+  // Plain forwards to the commands above, so the two looks cannot drift.
+
+  @override
+  afe.EditorState get editorState => widget.editorState;
+
+  @override
+  afe.Selection? get blockSelection =>
+      widget.editorState.selection ?? _lastEditableSelection;
+
+  @override
+  bool get hasRange {
+    final selection = widget.editorState.selection;
+    return (selection != null && !selection.isCollapsed) ||
+        _lastEditableSelection != null;
+  }
+
+  @override
+  List<double> get fontSizes => _fontSizes;
+
+  @override
+  List<String> get fontFamilies => _fontFamilies;
+
+  @override
+  List<Color> get palette => _palette;
+
+  @override
+  bool isAttributeOn(String key) => _isAttributeOn(key);
+
+  @override
+  Future<void> toggleAttribute(String key) => _toggle(key);
+
+  @override
+  Future<void> formatColor(String key, Color? color) =>
+      _formatColor(key, color);
+
+  @override
+  Future<void> setFontSize(double size) => _setFontSize(size);
+
+  @override
+  Future<void> setFontFamily(String family) => _setFontFamily(family);
+
+  @override
+  Future<void> setHeading(int? level) => _setHeading(level);
+
+  @override
+  Future<void> setListType(String type) => _setListType(type);
+
+  @override
+  Future<void> setAlign(String align) => _setAlign(align);
+
+  @override
+  Future<void> insertNode(afe.Node node) => _insertNode(node);
+
+  @override
+  Future<void> pickAndInsertImage() => _pickAndInsertImage();
+
+  @override
+  Future<void> insertTable() => _insertTable();
+
+  @override
+  Future<void> autoFitTableColumns() => _autoFitTableColumns();
+
+  @override
+  Future<void> insertDivider() => _insertDivider();
+
   @override
   Widget build(BuildContext context) {
+    // The desktop builds draw the macOS format bar. Its Draw toggle lives
+    // with the page actions in [CanvasToolbar.trailing] — the same callback
+    // as the ribbon's Draw button — so the bar does not carry it twice.
+    if (useMacLook) {
+      return MacFormatBar(
+        formatting: this,
+        zoom: widget.zoom,
+        onZoomIn: widget.onZoomIn,
+        onZoomOut: widget.onZoomOut,
+        onZoomReset: widget.onZoomReset,
+        trailing: widget.trailing,
+      );
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final border = isDark ? MarioColors.borderDark : MarioColors.border;
     final selection = widget.editorState.selection;

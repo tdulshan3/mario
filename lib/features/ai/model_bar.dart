@@ -13,6 +13,7 @@
 /// is the difference between a confusing answer and an obvious one.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -21,9 +22,13 @@ import '../../core/services/ai/llm_provider_config.dart';
 import '../../core/services/ai/llm_service.dart';
 import '../../core/services/ai/llm_types.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'ai_progress.dart';
 import 'ai_state.dart';
+import 'mac_ai_common.dart';
+
+part 'mac_model_bar.dart';
 
 class ModelBar extends ConsumerWidget {
   const ModelBar({super.key, this.run});
@@ -53,6 +58,26 @@ class ModelBar extends ConsumerWidget {
     final active = backends.activeConfig;
     if (active == null) return const SizedBox.shrink();
 
+    Future<void> pick(LlmProviderConfig config) async {
+      await backends.setActive(config.id);
+      ref.invalidate(aiConfigsProvider);
+    }
+
+    Future<void> setEffort(LlmEffort effort) async {
+      await backends.setEffort(active.id, effort);
+      ref.invalidate(aiConfigsProvider);
+    }
+
+    if (useMacLook) {
+      return _MacModelBar(
+        configs: configs,
+        active: active,
+        run: run,
+        onPick: pick,
+        onEffort: setEffort,
+      );
+    }
+
     final scheme = Theme.of(context).colorScheme;
 
     return Container(
@@ -69,18 +94,12 @@ class ModelBar extends ConsumerWidget {
                 child: _ModelPicker(
                   configs: configs,
                   active: active,
-                  onPick: (config) async {
-                    await backends.setActive(config.id);
-                    ref.invalidate(aiConfigsProvider);
-                  },
+                  onPick: pick,
                 ),
               ),
               _EffortChip(
                 effort: active.effort,
-                onPick: (effort) async {
-                  await backends.setEffort(active.id, effort);
-                  ref.invalidate(aiConfigsProvider);
-                },
+                onPick: setEffort,
               ),
               const SizedBox(width: 6),
               if (run == null)
@@ -125,6 +144,7 @@ class ModelActivityLine extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (useMacLook) return _MacActivityLine(state: state);
     final scheme = Theme.of(context).colorScheme;
 
     if (state.status == AiRunStatus.failed) {

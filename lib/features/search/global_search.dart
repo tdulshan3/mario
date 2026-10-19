@@ -11,6 +11,10 @@
 /// opened ([AiPanelNotifier.open]) but has no API for handing it a question, so
 /// the row would drop the text the user just typed. It is omitted until there
 /// is something to hand the question to.
+///
+/// The desktop builds show the same search as a Spotlight-style panel
+/// (`mac_global_search.dart`). Both looks run on [GlobalSearchState], so what
+/// matches and what the keys do cannot drift apart between them.
 library;
 
 import 'package:flutter/material.dart';
@@ -19,27 +23,42 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/note_page.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../shell/shell_state.dart';
+import 'mac_global_search.dart';
 
-class _SearchHit {
+/// One page whose notebook, section or title matches the query.
+class GlobalSearchHit {
   final String notebookId;
   final String notebookName;
   final String sectionId;
   final String? sectionName;
   final NotePage page;
 
-  const _SearchHit({
+  const GlobalSearchHit({
     required this.notebookId,
     required this.notebookName,
     required this.sectionId,
     required this.sectionName,
     required this.page,
   });
+
+  /// Where the page lives — "Physics › Mechanics" — which is what the
+  /// palette shows in place of a content snippet (see the library comment).
+  String get breadcrumb =>
+      sectionName == null ? notebookName : '$notebookName › $sectionName';
 }
 
-void showGlobalSearch(BuildContext context) {
+/// Opens the palette. [initialQuery] arrives already typed — the desktop
+/// toolbar's search field hands over its text on Return — and the default
+/// opens it empty, as the shortcut does.
+void showGlobalSearch(BuildContext context, {String initialQuery = ''}) {
+  if (useMacLook) {
+    showMacGlobalSearch(context, initialQuery: initialQuery);
+    return;
+  }
   // The design dims the page behind the palette with its own neutral-900,
   // which is the mark's navy. That is right on three grounds and wrong on the
   // fourth: over Black's pure #000 a navy scrim is simply a blue wash, because
@@ -51,34 +70,32 @@ void showGlobalSearch(BuildContext context) {
     barrierColor: black
         ? Colors.black.withValues(alpha: 0.52)
         : MarioColors.navy.withValues(alpha: 0.16),
-    builder: (_) => const _GlobalSearchDialog(),
+    builder: (_) => _GlobalSearchDialog(initialQuery: initialQuery),
   );
 }
 
-class _GlobalSearchDialog extends ConsumerStatefulWidget {
-  const _GlobalSearchDialog();
+/// What the palette does, whichever look draws it: the query, the matches,
+/// the cursor over them (the hits, then the create action one past them),
+/// and what ↑ ↓ ↵ esc do.
+mixin GlobalSearchState<W extends ConsumerStatefulWidget> on ConsumerState<W> {
+  /// The query as typed, trimmed.
+  String query = '';
 
-  @override
-  ConsumerState<_GlobalSearchDialog> createState() =>
-      _GlobalSearchDialogState();
-}
+  /// The highlighted row: an index into [search], or [search]'s length for
+  /// the create action.
+  int cursor = 0;
 
-class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
-  final _focus = FocusNode();
-  String _query = '';
-  int _cursor = 0;
+  /// A new query starts the cursor over at the first row.
+  void setQuery(String text) => setState(() {
+        query = text.trim();
+        cursor = 0;
+      });
 
-  @override
-  void dispose() {
-    _focus.dispose();
-    super.dispose();
-  }
-
-  List<_SearchHit> _search() {
-    final lower = _query.toLowerCase();
+  List<GlobalSearchHit> search() {
+    final lower = query.toLowerCase();
     if (lower.isEmpty) return const [];
     final notebooks = ref.read(notebooksStreamProvider).valueOrNull ?? [];
-    final hits = <_SearchHit>[];
+    final hits = <GlobalSearchHit>[];
     for (final nb in notebooks) {
       final sections =
           ref.read(sectionsStreamProvider(nb.id)).valueOrNull ?? [];
@@ -89,7 +106,7 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
             [];
         for (final p in pages) {
           if ('${nb.name} ${s.name} ${p.title}'.toLowerCase().contains(lower)) {
-            hits.add(_SearchHit(
+            hits.add(GlobalSearchHit(
               notebookId: nb.id,
               notebookName: nb.name,
               sectionId: s.id,
@@ -106,31 +123,32 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
   /// A page can only be created into a section, so the action exists only when
   /// the shell has one open. Offering it otherwise would have nowhere to file
   /// the result.
-  bool get _canCreate {
+  bool get canCreate {
     final sel = ref.read(selectionProvider);
-    return _query.isNotEmpty && sel.notebookId != null && sel.sectionId != null;
+    return query.isNotEmpty && sel.notebookId != null && sel.sectionId != null;
   }
 
-  int get _rowCount => _search().length + (_canCreate ? 1 : 0);
+  int get rowCount => search().length + (canCreate ? 1 : 0);
 
-  void _move(int delta) {
-    final n = _rowCount;
+  void move(int delta) {
+    final n = rowCount;
     if (n == 0) return;
-    setState(() => _cursor = (_cursor + delta) % n < 0
-        ? (_cursor + delta) % n + n
-        : (_cursor + delta) % n);
+    setState(() => cursor = (cursor + delta) % n < 0
+        ? (cursor + delta) % n + n
+        : (cursor + delta) % n);
   }
 
-  void _activate() {
-    final hits = _search();
-    if (_cursor < hits.length) {
-      _open(hits[_cursor]);
-    } else if (_canCreate) {
-      _create();
+  /// ↵: opens the highlighted hit, or runs the create action.
+  void submit() {
+    final hits = search();
+    if (cursor < hits.length) {
+      open(hits[cursor]);
+    } else if (canCreate) {
+      create();
     }
   }
 
-  void _open(_SearchHit h) {
+  void open(GlobalSearchHit h) {
     final sel = ref.read(selectionProvider.notifier);
     sel.selectNotebook(h.notebookId);
     sel.selectSection(h.sectionId);
@@ -138,7 +156,7 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
     Navigator.of(context).pop();
   }
 
-  Future<void> _create() async {
+  Future<void> create() async {
     final sel = ref.read(selectionProvider);
     final nid = sel.notebookId;
     final sid = sel.sectionId;
@@ -152,7 +170,7 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
           id: '',
           sectionId: sid,
           notebookId: nid,
-          title: _query,
+          title: query,
           order: pages.length,
           createdAt: now,
           updatedAt: now,
@@ -162,20 +180,20 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
     Navigator.of(context).pop();
   }
 
-  KeyEventResult _onKey(FocusNode _, KeyEvent e) {
+  KeyEventResult onKey(FocusNode _, KeyEvent e) {
     if (e is! KeyDownEvent && e is! KeyRepeatEvent) {
       return KeyEventResult.ignored;
     }
     switch (e.logicalKey) {
       case LogicalKeyboardKey.arrowDown:
-        _move(1);
+        move(1);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.arrowUp:
-        _move(-1);
+        move(-1);
         return KeyEventResult.handled;
       case LogicalKeyboardKey.enter:
       case LogicalKeyboardKey.numpadEnter:
-        _activate();
+        submit();
         return KeyEventResult.handled;
       case LogicalKeyboardKey.escape:
         Navigator.of(context).pop();
@@ -183,12 +201,44 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
     }
     return KeyEventResult.ignored;
   }
+}
+
+class _GlobalSearchDialog extends ConsumerStatefulWidget {
+  const _GlobalSearchDialog({this.initialQuery = ''});
+
+  final String initialQuery;
+
+  @override
+  ConsumerState<_GlobalSearchDialog> createState() =>
+      _GlobalSearchDialogState();
+}
+
+class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog>
+    with GlobalSearchState<_GlobalSearchDialog> {
+  final _focus = FocusNode();
+  late final _field = TextEditingController.fromValue(TextEditingValue(
+    text: widget.initialQuery,
+    selection: TextSelection.collapsed(offset: widget.initialQuery.length),
+  ));
+
+  @override
+  void initState() {
+    super.initState();
+    query = widget.initialQuery.trim();
+  }
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    _field.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final t = marioTokens(context);
     final scheme = Theme.of(context).colorScheme;
-    final hits = _search();
+    final hits = search();
 
     return Align(
       alignment: Alignment.topCenter,
@@ -209,7 +259,7 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
               borderRadius: BorderRadius.circular(MarioRadius.lg),
               clipBehavior: Clip.antiAlias,
               child: Focus(
-                onKeyEvent: _onKey,
+                onKeyEvent: onKey,
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -227,6 +277,7 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
                           const SizedBox(width: 11),
                           Expanded(
                             child: TextField(
+                              controller: _field,
                               autofocus: true,
                               focusNode: _focus,
                               cursorColor: t.ink,
@@ -244,11 +295,8 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
                                 hintStyle: TextStyle(
                                     fontSize: 15, height: 1.2, color: t.mut),
                               ),
-                              onChanged: (v) => setState(() {
-                                _query = v.trim();
-                                _cursor = 0;
-                              }),
-                              onSubmitted: (_) => _activate(),
+                              onChanged: setQuery,
+                              onSubmitted: (_) => submit(),
                             ),
                           ),
                           const SizedBox(width: 11),
@@ -257,9 +305,9 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
                       ),
                     ),
                     Flexible(
-                      child: _query.isEmpty
+                      child: query.isEmpty
                           ? const _Hint('Type to search your pages by title.')
-                          : (hits.isEmpty && !_canCreate)
+                          : (hits.isEmpty && !canCreate)
                               ? const _Hint('No matches.')
                               : ListView(
                                   shrinkWrap: true,
@@ -271,17 +319,17 @@ class _GlobalSearchDialogState extends ConsumerState<_GlobalSearchDialog> {
                                       for (var i = 0; i < hits.length; i++)
                                         _HitRow(
                                           hit: hits[i],
-                                          selected: i == _cursor,
-                                          onTap: () => _open(hits[i]),
+                                          selected: i == cursor,
+                                          onTap: () => open(hits[i]),
                                         ),
                                     ],
-                                    if (_canCreate) ...[
+                                    if (canCreate) ...[
                                       const _GroupLabel('Actions'),
                                       _ActionRow(
                                         icon: Icons.note_add_outlined,
-                                        label: 'New page called “$_query”',
-                                        selected: _cursor == hits.length,
-                                        onTap: _create,
+                                        label: 'New page called “$query”',
+                                        selected: cursor == hits.length,
+                                        onTap: create,
                                       ),
                                     ],
                                   ],
@@ -338,7 +386,7 @@ class _HitRow extends StatelessWidget {
     required this.onTap,
   });
 
-  final _SearchHit hit;
+  final GlobalSearchHit hit;
   final bool selected;
   final VoidCallback onTap;
 
@@ -377,9 +425,7 @@ class _HitRow extends StatelessWidget {
                           ),
                         ),
                         Text(
-                          hit.sectionName == null
-                              ? hit.notebookName
-                              : '${hit.notebookName} › ${hit.sectionName}',
+                          hit.breadcrumb,
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(

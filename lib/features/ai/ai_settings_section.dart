@@ -11,8 +11,13 @@
 /// Testing also *learns*. Probing an unknown OpenAI-compatible endpoint is how
 /// Mario finds out whether it can do strict JSON schemas, which decides
 /// whether quiz generation gets constrained decoding or the repair path.
+///
+/// The desktop builds draw the same section in the macOS look
+/// (mac_ai_settings_section.dart, a part of this library so it shares the
+/// editor, test and save logic below instead of copying it).
 library;
 
+import 'package:apple_ui/apple_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -24,10 +29,15 @@ import '../../core/services/ai/llm_types.dart';
 import '../../core/services/ai/local_model_discovery.dart';
 import '../../core/services/ai/web_search_service.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import 'ai_state.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../../core/services/ai/openai_compatible_provider.dart';
+import '../settings/mac_settings_widgets.dart';
 import '../settings/settings_state.dart';
+import '../shell/dialogs/mac_dialogs.dart';
+
+part 'mac_ai_settings_section.dart';
 
 class AiSettingsSection extends ConsumerStatefulWidget {
   const AiSettingsSection({super.key});
@@ -39,6 +49,7 @@ class AiSettingsSection extends ConsumerStatefulWidget {
 class _AiSettingsSectionState extends ConsumerState<AiSettingsSection> {
   @override
   Widget build(BuildContext context) {
+    if (useMacLook) return const _MacAiSettings();
     final scheme = Theme.of(context).colorScheme;
     final async = ref.watch(aiConfigsProvider);
 
@@ -657,6 +668,29 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
     await _load();
   }
 
+  /// Runs one search with the typed key, or the saved one when nothing is
+  /// typed.
+  Future<void> _test() async {
+    final service = ref.read(webSearchProvider);
+    setState(() {
+      _testing = true;
+      _testResult = null;
+    });
+    // The typed key if there is one, so a key can be checked before it is
+    // saved. Testing deliberately does not store it — a key someone is only
+    // checking may not be theirs to keep.
+    final result = await service.testConnection(
+      apiKey: _key.text.trim().isEmpty ? null : _key.text,
+    );
+    if (!mounted) return;
+    setState(() {
+      _testing = false;
+      _testResult = result.ok && _key.text.trim().isNotEmpty
+          ? (ok: true, message: '${result.message} Press Save key to keep it.')
+          : result;
+    });
+  }
+
   @override
   void dispose() {
     _key.dispose();
@@ -743,33 +777,7 @@ class _WebSearchSettingsState extends ConsumerState<_WebSearchSettings> {
             ),
             const SizedBox(width: 6),
             TextButton.icon(
-              onPressed: _testing
-                  ? null
-                  : () async {
-                      setState(() {
-                        _testing = true;
-                        _testResult = null;
-                      });
-                      // The typed key if there is one, so a key can be checked
-                      // before it is saved. Testing deliberately does not
-                      // store it — a key someone is only checking may not be
-                      // theirs to keep.
-                      final result = await service.testConnection(
-                        apiKey: _key.text.trim().isEmpty ? null : _key.text,
-                      );
-                      if (!mounted) return;
-                      setState(() {
-                        _testing = false;
-                        _testResult = result.ok && _key.text.trim().isNotEmpty
-                            ? (
-                                ok: true,
-                                message:
-                                    '${result.message} Press Save key to keep '
-                                    'it.'
-                              )
-                            : result;
-                      });
-                    },
+              onPressed: _testing ? null : _test,
               icon: _testing
                   ? const SizedBox(
                       width: 12,
@@ -844,17 +852,7 @@ class _DetectedLocalModels extends ConsumerWidget {
         ),
       ),
       data: (endpoints) {
-        // Hide a model that is already configured at the same endpoint.
-        final rows = <({DiscoveredEndpoint endpoint, DiscoveredModel model})>[];
-        for (final e in endpoints) {
-          for (final m in e.models) {
-            final already = configured.any((c) =>
-                c.model == m.name &&
-                OpenAiCompatibleProvider.normalizeBaseUrl(c.baseUrl) ==
-                    OpenAiCompatibleProvider.normalizeBaseUrl(e.baseUrl));
-            if (!already) rows.add((endpoint: e, model: m));
-          }
-        }
+        final rows = _unconfigured(endpoints);
         if (rows.isEmpty) return const SizedBox.shrink();
 
         return Column(
@@ -896,6 +894,22 @@ class _DetectedLocalModels extends ConsumerWidget {
       },
       orElse: SizedBox.shrink.call,
     );
+  }
+
+  /// What was found, less any model already configured at the same endpoint.
+  List<({DiscoveredEndpoint endpoint, DiscoveredModel model})> _unconfigured(
+      List<DiscoveredEndpoint> endpoints) {
+    final rows = <({DiscoveredEndpoint endpoint, DiscoveredModel model})>[];
+    for (final e in endpoints) {
+      for (final m in e.models) {
+        final already = configured.any((c) =>
+            c.model == m.name &&
+            OpenAiCompatibleProvider.normalizeBaseUrl(c.baseUrl) ==
+                OpenAiCompatibleProvider.normalizeBaseUrl(e.baseUrl));
+        if (!already) rows.add((endpoint: e, model: m));
+      }
+    }
+    return rows;
   }
 
   Future<void> _add(

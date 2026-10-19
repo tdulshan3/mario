@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../../ui/colors.dart';
+import '../../../ui/mac/mac_look.dart';
+import 'mac_dialogs.dart';
 
 class NotebookDialogResult {
   final String name;
@@ -68,7 +70,8 @@ class _NotebookDialogState extends State<NotebookDialog> {
             ),
             const SizedBox(height: 20),
             Text('Color',
-                style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600)),
+                style: GoogleFonts.inter(
+                    fontSize: 12, fontWeight: FontWeight.w600)),
             const SizedBox(height: 8),
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -135,12 +138,20 @@ Future<NotebookDialogResult?> showNotebookDialog(
   required String title,
   required String submitLabel,
 }) =>
-    showDialog<NotebookDialogResult>(
-      context: context,
-      builder: (_) => NotebookDialog(
-        initialName: initialName,
-        initialColorIndex: initialColorIndex,
-        title: title,
-        submitLabel: submitLabel,
-      ),
-    );
+    useMacLook
+        ? showMacNotebookSheet(
+            context,
+            title: title,
+            submitLabel: submitLabel,
+            initialName: initialName,
+            initialColorIndex: initialColorIndex,
+          )
+        : showDialog<NotebookDialogResult>(
+            context: context,
+            builder: (_) => NotebookDialog(
+              initialName: initialName,
+              initialColorIndex: initialColorIndex,
+              title: title,
+              submitLabel: submitLabel,
+            ),
+          );

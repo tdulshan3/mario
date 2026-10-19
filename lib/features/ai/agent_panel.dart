@@ -14,6 +14,8 @@ library;
 
 import 'dart:async';
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:get_it/get_it.dart';
@@ -30,6 +32,7 @@ import '../../ui/organic.dart';
 import '../settings/settings_state.dart';
 import '../shell/dialogs/text_input_dialog.dart';
 import '../shell/shell_state.dart' as shell;
+import '../../ui/mac/mac_look.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../editor/html_preview.dart';
@@ -40,9 +43,12 @@ import 'ai_progress.dart';
 import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
+import 'mac_ai_common.dart';
 import 'mario_skills.dart';
 import 'mario_tools.dart';
 import 'note_images.dart';
+
+part 'mac_agent_panel.dart';
 
 class AgentPanel extends ConsumerStatefulWidget {
   const AgentPanel({super.key});
@@ -424,6 +430,22 @@ class _AgentPanelState extends ConsumerState<AgentPanel> {
     final session = ref.watch(agentSessionProvider);
     final run = session.run;
 
+    if (useMacLook) {
+      final notifier = ref.read(agentSessionProvider.notifier);
+      return _MacAgentView(
+        session: session,
+        canEdit: bridge != null,
+        onRunPreset: _runPreset,
+        onRunInstruction: _runInstruction,
+        onStop: notifier.stop,
+        onUndo: _undo,
+        onApprovePlan: _approvePlan,
+        onDiscardPlan: _discardPlan,
+        onApplyArtifact: _applyArtifactDraft,
+        onDiscardArtifact: notifier.discardArtifact,
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -755,6 +777,7 @@ class _Intro extends StatelessWidget {
 class _PagePreset {
   const _PagePreset({
     required this.icon,
+    required this.macIcon,
     required this.title,
     required this.description,
     required this.instruction,
@@ -762,6 +785,9 @@ class _PagePreset {
   });
 
   final IconData icon;
+
+  /// The same idea in the desktop's symbol set.
+  final IconData macIcon;
   final String title;
   final String description;
 
@@ -784,6 +810,7 @@ class _PagePreset {
 const _presets = <_PagePreset>[
   _PagePreset(
     icon: Icons.checklist,
+    macIcon: AppleIcons.listBullet,
     title: 'Pull out the to-dos',
     description: 'Every action in the page as a checklist',
     instruction: 'Read the whole page and collect every task, action or next '
@@ -794,6 +821,7 @@ const _presets = <_PagePreset>[
   ),
   _PagePreset(
     icon: Icons.table_chart,
+    macIcon: AppleIcons.squareGrid,
     title: 'Make a table',
     description: 'Turn the bullet list into rows and columns',
     instruction: 'Find the bullet list on this page and turn it into a table. '
@@ -805,6 +833,7 @@ const _presets = <_PagePreset>[
   ),
   _PagePreset(
     icon: Icons.translate,
+    macIcon: AppleIcons.globe,
     title: 'Translate',
     description: 'Keep the blocks, swap the language',
     // The language is asked for at the tap; see _AgentPanelState._runPreset.
@@ -817,6 +846,7 @@ const _presets = <_PagePreset>[
   ),
   _PagePreset(
     icon: Icons.content_cut,
+    macIcon: AppleIcons.pencil,
     title: 'Tighten the writing',
     description: 'Same meaning, fewer words',
     instruction: 'Tighten the writing on this page. For each paragraph or '

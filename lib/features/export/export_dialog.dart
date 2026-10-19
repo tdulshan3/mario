@@ -15,8 +15,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/models/note_page.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/theme.dart';
 import '../shell/shell_state.dart' as shell;
+import 'mac_export_sheet.dart';
 import 'pdf_exporter.dart';
 
 /// The two exporters the app has.
@@ -41,14 +43,54 @@ class ExportRequest {
 }
 
 /// Shows the dialog. Resolves to null when it is dismissed or cancelled.
+///
+/// The desktop builds ask the same question in a macOS sheet attached to the
+/// window, and get the same [ExportRequest] back.
 Future<ExportRequest?> showExportDialog(
   BuildContext context, {
   required NotePage page,
-}) =>
-    showDialog<ExportRequest>(
-      context: context,
-      builder: (_) => ExportDialog(page: page),
-    );
+}) {
+  if (useMacLook) return showMacExportSheet(context, page: page);
+  return showDialog<ExportRequest>(
+    context: context,
+    builder: (_) => ExportDialog(page: page),
+  );
+}
+
+/// The page's place in the tree: notebook, section, page — each name only
+/// once it has arrived from the live index.
+///
+/// A notebook or section whose name has not arrived — or that has gone away —
+/// drops its crumb instead of printing a stand-in, so the line is short
+/// rather than wrong.
+List<String> exportCrumbs(WidgetRef ref, NotePage page) {
+  String? nonEmpty(String? value) {
+    final trimmed = value?.trim();
+    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
+  }
+
+  String? notebookName;
+  if (page.notebookId.isNotEmpty) {
+    final notebooks = ref.watch(shell.notebooksStreamProvider).valueOrNull;
+    for (final n in notebooks ?? const []) {
+      if (n.id == page.notebookId) notebookName = nonEmpty(n.name);
+    }
+  }
+  String? sectionName;
+  if (page.notebookId.isNotEmpty && page.sectionId.isNotEmpty) {
+    final sections =
+        ref.watch(shell.sectionsStreamProvider(page.notebookId)).valueOrNull;
+    for (final s in sections ?? const []) {
+      if (s.id == page.sectionId) sectionName = nonEmpty(s.name);
+    }
+  }
+
+  return <String>[
+    if (notebookName != null) notebookName,
+    if (sectionName != null) sectionName,
+    if (nonEmpty(page.title) != null) page.title.trim(),
+  ];
+}
 
 class ExportDialog extends ConsumerStatefulWidget {
   const ExportDialog({super.key, required this.page});
@@ -181,46 +223,19 @@ class _ExportDialogState extends ConsumerState<ExportDialog> {
 
 /// The page's place in the tree, muted, under the title.
 ///
-/// Names come from the same live index the page header reads. A notebook or
-/// section whose name has not arrived — or that has gone away — drops its
-/// crumb instead of printing a stand-in, so the line is short rather than
-/// wrong.
+/// Names come from the same live index the page header reads, through
+/// [exportCrumbs].
 class _Breadcrumb extends ConsumerWidget {
   const _Breadcrumb({required this.page});
 
   final NotePage page;
-
-  static String? _nonEmpty(String? value) {
-    final trimmed = value?.trim();
-    return (trimmed == null || trimmed.isEmpty) ? null : trimmed;
-  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
     final textTheme = Theme.of(context).textTheme;
 
-    String? notebookName;
-    if (page.notebookId.isNotEmpty) {
-      final notebooks = ref.watch(shell.notebooksStreamProvider).valueOrNull;
-      for (final n in notebooks ?? const []) {
-        if (n.id == page.notebookId) notebookName = _nonEmpty(n.name);
-      }
-    }
-    String? sectionName;
-    if (page.notebookId.isNotEmpty && page.sectionId.isNotEmpty) {
-      final sections =
-          ref.watch(shell.sectionsStreamProvider(page.notebookId)).valueOrNull;
-      for (final s in sections ?? const []) {
-        if (s.id == page.sectionId) sectionName = _nonEmpty(s.name);
-      }
-    }
-
-    final crumbs = <String>[
-      if (notebookName != null) notebookName,
-      if (sectionName != null) sectionName,
-      if (_nonEmpty(page.title) != null) page.title.trim(),
-    ];
+    final crumbs = exportCrumbs(ref, page);
     if (crumbs.isEmpty) return const SizedBox.shrink();
 
     final muted = textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);

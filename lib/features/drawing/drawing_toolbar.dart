@@ -4,7 +4,9 @@ library;
 import 'package:flutter/material.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import 'drawing_canvas.dart';
+import 'mac_drawing_toolbar.dart';
 import 'stroke.dart';
 
 const drawingPalette = <Color>[
@@ -42,6 +44,16 @@ class DrawingToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The desktop builds draw the same controls in the macOS look.
+    if (useMacLook) {
+      return MacDrawingToolbar(
+        controller: controller,
+        onCollapse: onCollapse,
+        onExport: onExport,
+        onSave: onSave,
+        collapsed: collapsed,
+      );
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final divider = isDark ? MarioColors.borderDark : MarioColors.border;
 

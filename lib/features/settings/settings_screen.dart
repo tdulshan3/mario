@@ -9,23 +9,45 @@
 /// such a setting yet, so it is not here — a persisted toggle that changes
 /// nothing is worse than an honest omission. Wiring it means threading a flag
 /// through the panel and tray animations first.
+///
+/// The desktop builds draw a macOS System Settings window instead
+/// (mac_settings_screen.dart), a part of this library so both looks list the
+/// same panes from the one [_Pane] enum.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
 import '../ai/ai_settings_section.dart';
 import '../auth/auth_notifier.dart';
+import '../shell/mac/mac_window_frame.dart';
+import 'mac_settings_widgets.dart';
 import 'settings_state.dart';
+
+part 'mac_settings_screen.dart';
 
 /// Kept in step with `version:` in pubspec.yaml by hand — the app has no
 /// package_info dependency, so there is nothing to read it from at runtime.
 const _kVersion = '1.3.3+15';
+
+/// The dictation languages offered, as (name, locale code).
+const _kVoiceLocales = [
+  ('English (US)', 'en_US'),
+  ('English (UK)', 'en_GB'),
+  ('Spanish', 'es_ES'),
+  ('French', 'fr_FR'),
+  ('German', 'de_DE'),
+  ('Japanese', 'ja_JP'),
+];
 
 enum _Pane {
   appearance(
@@ -63,6 +85,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (useMacLook) return const MacSettingsScreen();
     final settings = ref.watch(settingsProvider).valueOrNull;
 
     final t = marioTokens(context);
@@ -378,14 +401,7 @@ class _PaneBody extends ConsumerWidget {
           child: DropdownButton<String>(
             value: settings.voiceLocale,
             underline: const SizedBox.shrink(),
-            items: const [
-              ('English (US)', 'en_US'),
-              ('English (UK)', 'en_GB'),
-              ('Spanish', 'es_ES'),
-              ('French', 'fr_FR'),
-              ('German', 'de_DE'),
-              ('Japanese', 'ja_JP'),
-            ]
+            items: _kVoiceLocales
                 .map((e) => DropdownMenuItem(value: e.$2, child: Text(e.$1)))
                 .toList(),
             onChanged: (v) => v == null

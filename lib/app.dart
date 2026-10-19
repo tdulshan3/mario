@@ -1,4 +1,5 @@
-/// MarioApp — root MaterialApp.router with theme, go_router, and auth-aware redirects.
+/// MarioApp — root MaterialApp.router with theme, go_router, and auth-aware
+/// redirects. The desktop builds add the macOS look on top (lib/ui/mac/).
 library;
 
 import 'package:flutter/material.dart';
@@ -10,6 +11,8 @@ import 'features/auth/login_screen.dart';
 import 'features/settings/settings_screen.dart';
 import 'features/settings/settings_state.dart';
 import 'features/shell/shell_screen.dart';
+import 'ui/mac/mac_look.dart';
+import 'ui/mac/mac_theme.dart';
 import 'ui/theme.dart';
 
 class MarioApp extends ConsumerWidget {
@@ -20,6 +23,22 @@ class MarioApp extends ConsumerWidget {
     final router = ref.watch(_routerProvider);
     final themeMode = ref.watch(settingsProvider).valueOrNull?.themeMode ??
         MarioThemeMode.system;
+
+    // The desktop builds draw macOS: Light, Dark or Auto, with the apple_ui
+    // theme under everything and a Material theme made from the same tokens
+    // for the editor and the rest of the Material widgets.
+    if (useMacLook) {
+      return MaterialApp.router(
+        title: 'Mario',
+        debugShowCheckedModeBanner: false,
+        themeMode: macThemeModeFor(themeMode),
+        theme: macMaterialTheme(Brightness.light),
+        darkTheme: macMaterialTheme(Brightness.dark),
+        routerConfig: router,
+        builder: (context, child) =>
+            MacLookScope(child: child ?? const SizedBox.shrink()),
+      );
+    }
     // Resolve our 4-mode enum to a concrete ThemeData. For system mode we
     // still defer to MaterialApp's themeMode + theme/darkTheme so the OS
     // signal flows through; for explicit modes we force one theme into both

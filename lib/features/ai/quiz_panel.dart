@@ -14,6 +14,8 @@
 /// would be a lie the student might believe.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -23,6 +25,7 @@ import '../../core/services/ai/ai_artifact_store.dart';
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../core/services/ai/llm_types.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../shell/shell_state.dart';
 import 'ai_history.dart';
 import 'ai_progress.dart';
@@ -34,6 +37,9 @@ import 'note_context.dart';
 import 'quiz_style.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'ai_markdown.dart';
+import 'mac_ai_common.dart';
+
+part 'mac_quiz_panel.dart';
 
 class QuizPanel extends ConsumerStatefulWidget {
   const QuizPanel({super.key});
@@ -283,7 +289,14 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
   @override
   Widget build(BuildContext context) {
     final bridge = ref.watch(aiEditorBridgeProvider);
-    if (bridge == null) return const _NoPage();
+    if (bridge == null) {
+      return useMacLook
+          ? const MacEmptyState(
+              title: 'No Page Open',
+              message: 'Open a page to build a quiz from it.',
+            )
+          : const _NoPage();
+    }
     final session = ref.watch(quizSessionProvider);
 
     return switch (session.phase) {
@@ -298,6 +311,14 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
   Widget _buildSetup(AiEditorBridge bridge, QuizSession session) {
     final scheme = Theme.of(context).colorScheme;
     final notifier = ref.read(quizSessionProvider.notifier);
+    if (useMacLook) {
+      return _MacQuizSetup(
+        pageTitle: bridge.pageTitle,
+        session: session,
+        notifier: notifier,
+        onGenerate: _generate,
+      );
+    }
     return ListView(
       padding: EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
       children: [
@@ -419,7 +440,9 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
     return ValueListenableBuilder<AiRunState>(
       valueListenable: run,
       builder: (context, state, _) => ListView(
-        padding: EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
+        padding: useMacLook
+            ? const EdgeInsets.all(12)
+            : EdgeInsets.fromLTRB(14, 14, 14, ComposerReserve.of(context)),
         children: [
           AiProgressView(
             state: state,
@@ -427,7 +450,13 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
           ),
           if (state.status == AiRunStatus.cancelled) ...[
             const SizedBox(height: 12),
-            TextButton(onPressed: _restart, child: const Text('Back')),
+            if (useMacLook)
+              Align(
+                alignment: AlignmentDirectional.centerStart,
+                child: MacButton(label: 'Back', onPressed: _restart),
+              )
+            else
+              TextButton(onPressed: _restart, child: const Text('Back')),
           ],
         ],
       ),
@@ -436,6 +465,16 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
 
   Widget _buildAnswering(QuizSession session) {
     final scheme = Theme.of(context).colorScheme;
+    if (useMacLook) {
+      final notifier = ref.read(quizSessionProvider.notifier);
+      return _MacQuizAnswering(
+        session: session,
+        essayController: _essayController,
+        onAnswer: notifier.answer,
+        onDiscard: _restart,
+        onSubmit: _submit,
+      );
+    }
     return Column(
       children: [
         Expanded(
@@ -496,6 +535,13 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
 
   Widget _buildMarking(QuizSession session) {
     final scheme = Theme.of(context).colorScheme;
+    if (useMacLook) {
+      return _MacQuizMarking(
+        done: session.markingDone,
+        total: session.items.length,
+        onStop: ref.read(quizSessionProvider.notifier).stopMarking,
+      );
+    }
     return MarioLoaderWithLabel(
       label: 'Marking ${session.markingDone} of ${session.items.length}',
       trailing: TextButton.icon(
@@ -513,6 +559,13 @@ class _QuizPanelState extends ConsumerState<QuizPanel> {
 
   Widget _buildResults(QuizSession session) {
     final scheme = Theme.of(context).colorScheme;
+    if (useMacLook) {
+      return _MacQuizResults(
+        session: session,
+        onOverride: _overrideMark,
+        onRestart: _restart,
+      );
+    }
 
     return Column(
       children: [

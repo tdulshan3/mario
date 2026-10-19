@@ -6,6 +6,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:apple_ui/apple_ui.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
@@ -19,6 +20,7 @@ import '../../core/models/section.dart';
 import '../../core/services/asset_sync_service.dart';
 import '../../core/services/page_content_repository.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/theme.dart';
 import '../drawing/drawing_canvas.dart';
 import '../drawing/drawing_toolbar.dart';
@@ -52,10 +54,14 @@ import 'canvas_drawing_layer.dart';
 import 'canvas_toolbar.dart';
 import 'image_asset_resolver.dart';
 import 'html_preview.dart';
+import 'mac_page_actions.dart';
 import 'page_content_provider.dart';
+import 'save_status.dart';
 import 'paste_html_bridge.dart';
 import 'word_shortcuts.dart';
 import '../../ui/widgets/mario_loader.dart';
+
+export 'save_status.dart';
 
 /// Single-page editor host — looks up the page by id, shows a loader while the
 /// content is fetched, then mounts the AppFlowyEditor.
@@ -88,7 +94,11 @@ class _EditorScreenState extends ConsumerState<EditorScreen> {
     final page = widget.page;
     final docAsync = ref.watch(pageContentProvider(_loadKey));
     return docAsync.when(
-      loading: () => const Center(child: MarioLoader(size: 30)),
+      // The desktop window waits with the system spinner, like the rest of
+      // its panes; the web keeps the app's own loader.
+      loading: () => Center(
+        child: useMacLook ? const MacSpinner() : const MarioLoader(size: 30),
+      ),
       error: (e, _) => _UnavailableContent(message: 'Could not load page: $e'),
       data: (rawJson) => _Editor(
         key: ValueKey(page.id),
@@ -106,6 +116,10 @@ class _UnavailableContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // An empty pane on macOS says what is missing in its own grey type.
+    if (useMacLook) {
+      return MacEmptyState(title: 'Page Unavailable', message: message);
+    }
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final muted =
         isDark ? MarioColors.onSurfaceMutedDark : MarioColors.onSurfaceMuted;
@@ -122,7 +136,6 @@ class _UnavailableContent extends StatelessWidget {
   }
 }
 
-enum SaveStatus { idle, dirty, saving, saved, error }
 
 /// The editor's horizontal inset.
 ///
@@ -925,11 +938,38 @@ class _EditorState extends ConsumerState<_Editor> {
     // pane paper, which reads as one continuous sheet — and on a wide display
     // that leaves nothing to tell you where the page you are writing on
     // begins. The column keeps `paper`; the pane around it is the ground.
-    final canvasBg = scheme.surface;
+    //
+    // The desktop builds follow macOS instead: a document there is drawn on
+    // the window background (TextEdit, Notes, MacEditor) — no card, no
+    // ground around it, no edges — so pane and paper are both the window
+    // background and the column is only a width.
+    final mac = useMacLook;
+    final macColors = mac ? context.macColors : null;
+    final canvasBg = macColors?.windowBg ?? scheme.surface;
 
     // Paper is the design's writing surface — surfaceContainerHigh on all
     // four grounds.
-    final paper = scheme.surfaceContainerHigh;
+    final paper = macColors?.windowBg ?? scheme.surfaceContainerHigh;
+
+    // macOS draws the caret in the text colour and the selection in the
+    // accent at the system's selection alpha — both come from the desktop
+    // theme's text-selection colours, so the editor matches every text field
+    // in the window. The web keeps the gold of its own palette.
+    final selectionTheme = TextSelectionTheme.of(context);
+    final Color cursorColor;
+    final Color selectionColor;
+    final Color ink;
+    if (macColors != null) {
+      cursorColor = selectionTheme.cursorColor ?? macColors.labelPrimary;
+      selectionColor = selectionTheme.selectionColor ??
+          context.accent.withValues(alpha: 0.3);
+      ink = macColors.labelPrimary;
+    } else {
+      cursorColor = isDark ? MarioColors.primary : MarioColors.primaryPressed;
+      selectionColor =
+          MarioColors.primary.withValues(alpha: isDark ? 0.25 : 0.35);
+      ink = isDark ? MarioColors.onSurfaceDark : MarioColors.onSurface;
+    }
 
     // AppFlowy applies editorStyle.padding to EVERY block (page_block_component
     // wraps each item in `Padding(padding: editorStyle.padding)`), so any
@@ -938,18 +978,14 @@ class _EditorState extends ConsumerState<_Editor> {
     // breathing room comes from the header and footer slots, and the line box
     // and block spacing are set in editor_typography.dart.
     final style = afe.EditorStyle.desktop(
-      cursorColor: isDark ? MarioColors.primary : MarioColors.primaryPressed,
-      selectionColor:
-          MarioColors.primary.withValues(alpha: isDark ? 0.25 : 0.35),
+      cursorColor: cursorColor,
+      selectionColor: selectionColor,
       // Horizontal inset lives HERE, not in a Padding around the editor:
       // getNodeInOffset resolves a tap to the NEAREST node, so margin inside
       // the editor still places the caret on the adjacent line. Wrapping the
       // editor instead shrinks its gesture box and those taps hit dead space.
       padding: const EdgeInsets.symmetric(horizontal: kEditorInset),
-      textStyleConfiguration: editorTextStyles(
-        context,
-        ink: isDark ? MarioColors.onSurfaceDark : MarioColors.onSurface,
-      ),
+      textStyleConfiguration: editorTextStyles(context, ink: ink),
       cursorWidth: 2.0,
     );
 
@@ -995,8 +1031,11 @@ class _EditorState extends ConsumerState<_Editor> {
           spreadsheetSelectionMenuItem,
           audioSelectionMenuItem,
         ],
-        style:
-            isDark ? afe.SelectionMenuStyle.dark : afe.SelectionMenuStyle.light,
+        style: macColors != null
+            ? _macSelectionMenuStyle(context, macColors)
+            : isDark
+                ? afe.SelectionMenuStyle.dark
+                : afe.SelectionMenuStyle.light,
       ),
     ];
 
@@ -1033,7 +1072,22 @@ class _EditorState extends ConsumerState<_Editor> {
               builder: (context, pendingImages, _) =>
                   ValueListenableBuilder<int>(
                 valueListenable: GetIt.I<SyncService>().pendingChanges,
-                builder: (context, pendingChanges, _) => _PageActions(
+                builder: (context, pendingChanges, _) => mac
+                    ? MacPageActions(
+                        pendingChanges: pendingChanges,
+                        dictate:
+                            VoiceDictationButton(editorState: _editorState),
+                        status: _status,
+                        lastSavedAt: _lastSavedAt,
+                        pendingImages: pendingImages,
+                        drawMode: _drawMode,
+                        previewMode: _previewMode,
+                        onExport: _export,
+                        onToggleDraw: _toggleDraw,
+                        onTogglePreview: _togglePreview,
+                        onSaveNow: _saveNow,
+                      )
+                    : _PageActions(
                   pendingChanges: pendingChanges,
                   dictate: IconButtonTheme(
                     data: IconButtonThemeData(
@@ -1097,19 +1151,33 @@ class _EditorState extends ConsumerState<_Editor> {
                     },
                     child: Container(
                       color: canvasBg,
+                      // The drop-zone highlight takes the accent: gold on
+                      // the web, the system accent on the desktop.
                       foregroundDecoration: _dragOver
                           ? BoxDecoration(
                               border: Border.all(
-                                  color: MarioColors.primary, width: 3),
-                              color:
-                                  MarioColors.primary.withValues(alpha: 0.08),
+                                  color: mac
+                                      ? context.accent
+                                      : MarioColors.primary,
+                                  width: 3),
+                              color: (mac
+                                      ? context.accent
+                                      : MarioColors.primary)
+                                  .withValues(alpha: 0.08),
                             )
                           : null,
                       child: LayoutBuilder(
                         builder: (context, constraints) {
-                          final cardWidth = _columnWidth;
-                          final scaledWidth = cardWidth * _zoom;
                           final viewportW = constraints.maxWidth;
+                          // The macOS look wraps the page to the window, as
+                          // TextEdit does: with the sidebar and the inspector
+                          // both open the pane is narrower than the column,
+                          // and the kit's windows never scroll sideways. The
+                          // readable width stays the most the column takes.
+                          final cardWidth = useMacLook
+                              ? math.min(_columnWidth, viewportW / _zoom)
+                              : _columnWidth;
+                          final scaledWidth = cardWidth * _zoom;
                           final viewportH = constraints.maxHeight;
                           final outerWidth =
                               math.max<double>(scaledWidth, viewportW);
@@ -1209,14 +1277,19 @@ class _EditorState extends ConsumerState<_Editor> {
                                                       // step apart and the
                                                       // edge is what
                                                       // actually carries it.
-                                                      border: Border(
-                                                        left: BorderSide(
-                                                            color: scheme
-                                                                .outlineVariant),
-                                                        right: BorderSide(
-                                                            color: scheme
-                                                                .outlineVariant),
-                                                      ),
+                                                      // macOS has no page
+                                                      // edge: the document
+                                                      // is the pane.
+                                                      border: mac
+                                                          ? null
+                                                          : Border(
+                                                              left: BorderSide(
+                                                                  color: scheme
+                                                                      .outlineVariant),
+                                                              right: BorderSide(
+                                                                  color: scheme
+                                                                      .outlineVariant),
+                                                            ),
                                                     ),
                                                     child: Material(
                                                       type: MaterialType
@@ -1250,9 +1323,15 @@ class _EditorState extends ConsumerState<_Editor> {
                                                         // artboard has it
                                                         // in the content
                                                         // anyway.
-                                                        header: _PageHeader(
-                                                          page: widget.page,
-                                                        ),
+                                                        header: mac
+                                                            ? _MacPageHeader(
+                                                                page: widget
+                                                                    .page,
+                                                              )
+                                                            : _PageHeader(
+                                                                page: widget
+                                                                    .page,
+                                                              ),
                                                         // Breathing room
                                                         // under the last
                                                         // block. The ask
@@ -1407,6 +1486,59 @@ class _PageHeader extends ConsumerWidget {
   }
 }
 
+/// The page's own heading on the desktop: the title alone, as MacEditor sets
+/// it — 22 px bold in the label colour, no breadcrumb.
+///
+/// The section and notebook it lives in are the window title bar's subtitle
+/// there, so printing them again over the title would say it twice. Same slot
+/// and the same horizontal inset as [_PageHeader], for the same reasons: it
+/// scrolls and scales with the page, and it shares the body's left edge.
+class _MacPageHeader extends StatelessWidget {
+  const _MacPageHeader({required this.page});
+
+  final NotePage page;
+
+  @override
+  Widget build(BuildContext context) {
+    final type = MacTypography.of(context);
+    final title = _nonEmpty(page.title);
+    return Padding(
+      // The window's 20 px content margin above; MacEditor's 8 px between the
+      // title and the text.
+      padding: const EdgeInsets.fromLTRB(kEditorInset, 20, kEditorInset, 8),
+      child: Text(
+        // An untitled page shows the placeholder MacEditor would, in the
+        // tertiary label colour, rather than nothing at all.
+        title ?? 'Untitled',
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: type.emphasized(MacTextSpecs.title1).copyWith(
+              color: title == null ? context.macColors.labelTertiary : null,
+            ),
+      ),
+    );
+  }
+}
+
+/// The slash menu in the colours of a macOS menu: the opaque end of the
+/// menu material, label-coloured rows and the accent highlight with white
+/// text — the same panel the desktop theme gives Material's own menus.
+afe.SelectionMenuStyle _macSelectionMenuStyle(
+  BuildContext context,
+  MacColors c,
+) {
+  final accent = context.accent;
+  return afe.SelectionMenuStyle(
+    selectionMenuBackgroundColor:
+        Color.alphaBlend(c.materialUltrathickFill, c.windowBg),
+    selectionMenuItemTextColor: c.labelPrimary,
+    selectionMenuItemIconColor: c.labelSecondary,
+    selectionMenuItemSelectedTextColor: c.glyphOnAccent,
+    selectionMenuItemSelectedIconColor: c.glyphOnAccent,
+    selectionMenuItemSelectedColor: accent,
+  );
+}
+
 /// The page-level actions, at the right end of the format row.
 ///
 /// The artboard draws "Saved", a share glyph and an overflow glyph there.
@@ -1455,24 +1587,12 @@ class _PageActions extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = marioTokens(context);
 
-    // The real save state, not a promise. `idle` means nothing has been typed
-    // since the page was loaded from Drive, so there is genuinely nothing
-    // outstanding either way.
-    var saveLabel = switch (status) {
-      SaveStatus.idle => lastSavedAt == null ? 'No changes' : 'Saved',
-      SaveStatus.dirty => 'Unsaved',
-      SaveStatus.saving => 'Saving…',
-      SaveStatus.saved => 'Saved',
-      SaveStatus.error => 'Save failed',
-    };
-    if (pendingImages > 0 && status != SaveStatus.error) {
-      saveLabel = '$saveLabel · $pendingImages '
-          'image${pendingImages == 1 ? '' : 's'} not synced';
-    }
-    if (pendingChanges > 0) {
-      saveLabel = '$saveLabel · $pendingChanges '
-          'change${pendingChanges == 1 ? '' : 's'} waiting to sync';
-    }
+    final saveLabel = saveStatusLabel(
+      status: status,
+      lastSavedAt: lastSavedAt,
+      pendingImages: pendingImages,
+      pendingChanges: pendingChanges,
+    );
 
     return Row(
       mainAxisSize: MainAxisSize.min,

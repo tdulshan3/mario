@@ -1,0 +1,36 @@
+name: apple_ui
+description: >-
+  Apple's iOS/iPadOS 27 and macOS 27 design as Flutter widgets with the classic blur materials (no Liquid Glass), built from Apple's Figma kits.
+  Part of the apple-ui-ux skill. Runs on iOS, iPadOS, Android, macOS, Windows, Linux and the web.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.8.0
+  flutter: ">=3.32.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Apple-style icon font (SF Symbols cannot ship outside Apple platforms).
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  # Inter: the closest open font to SF Pro, used where SF Pro may not be used (Android, Windows, Linux, web).
+  # On iOS and macOS the system font (SF Pro) is used instead.
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: fonts/Inter-Regular.ttf
+          weight: 400
+        - asset: fonts/Inter-Medium.ttf
+          weight: 500
+        - asset: fonts/Inter-SemiBold.ttf
+          weight: 600
+        - asset: fonts/Inter-Bold.ttf
+          weight: 700

@@ -10,18 +10,23 @@
 /// local-first store the rest of the AI layer uses, so it works offline.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../shell/dialogs/text_input_dialog.dart';
 import 'ai_markdown.dart';
 import 'html_artifact.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
+import 'mac_ai_common.dart';
 import '../../ui/widgets/mario_loader.dart';
+
+part 'mac_ai_history.dart';
 
 /// The notebook's saved artifacts, or empty when no page is open.
 final aiHistoryProvider = FutureProvider<NotebookAiData>((ref) async {
@@ -43,6 +48,17 @@ class AskHistoryList extends ConsumerWidget {
     final bridge = ref.watch(aiEditorBridgeProvider);
     final history = ref.watch(aiHistoryProvider);
 
+    if (useMacLook) {
+      return _MacAskHistory(
+        bridge: bridge,
+        history: history,
+        onReplay: onReplay,
+        onPreview: (html) => _previewArtifact(ref, html),
+        onDelete: (entry) => deleteSavedChat(context, ref,
+            notebookId: bridge!.notebookId, id: entry.id),
+      );
+    }
+
     if (bridge == null) {
       return const _Empty(
         icon: Icons.auto_awesome_outlined,
@@ -63,16 +79,7 @@ class AskHistoryList extends ConsumerWidget {
         // about the page you are looking at is the one you want back — and
         // newest first within each. (Reversing the two groups as one list
         // used to put the rest of the notebook on top.)
-        final entries = [
-          ...data.asks
-              .where((a) => a.pageId == bridge.pageId)
-              .toList()
-              .reversed,
-          ...data.asks
-              .where((a) => a.pageId != bridge.pageId)
-              .toList()
-              .reversed,
-        ];
+        final entries = _askOrder(data, bridge.pageId);
 
         if (entries.isEmpty) {
           return const _Empty(
@@ -109,22 +116,35 @@ class AskHistoryList extends ConsumerWidget {
               onReplay: () => onReplay(entry),
               onDelete: () => deleteSavedChat(context, ref,
                   notebookId: bridge.notebookId, id: entry.id),
-              onPreview: html == null
-                  ? null
-                  : () {
-                      ref
-                          .read(agentSessionProvider.notifier)
-                          .previewArtifact(html);
-                      ref
-                          .read(aiPanelProvider.notifier)
-                          .showTab(AiPanelTab.agent);
-                    },
+              onPreview:
+                  html == null ? null : () => _previewArtifact(ref, html),
             );
           },
         );
       },
     );
   }
+}
+
+/// This page first, then the rest of the notebook — a question asked about
+/// the page you are looking at is the one you want back — and newest first
+/// within each. (Reversing the two groups as one list used to put the rest
+/// of the notebook on top.)
+List<AskEntry> _askOrder(NotebookAiData data, String pageId) => [
+      ...data.asks.where((a) => a.pageId == pageId).toList().reversed,
+      ...data.asks.where((a) => a.pageId != pageId).toList().reversed,
+    ];
+
+/// The Do runs in the same order as [_askOrder], capped at 30.
+List<DoEntry> _doOrder(NotebookAiData data, String pageId) => [
+      ...data.dos.where((d) => d.pageId == pageId).toList().reversed,
+      ...data.dos.where((d) => d.pageId != pageId).toList().reversed,
+    ].take(30).toList();
+
+/// Opens a saved answer's HTML in the Do tab's sandboxed preview.
+void _previewArtifact(WidgetRef ref, String html) {
+  ref.read(agentSessionProvider.notifier).previewArtifact(html);
+  ref.read(aiPanelProvider.notifier).showTab(AiPanelTab.agent);
 }
 
 /// Deletes one saved chat, after asking.
@@ -305,10 +325,17 @@ class DoHistoryList extends ConsumerWidget {
         if (data.dos.isEmpty) return const SizedBox.shrink();
         // This page first, then the rest of the notebook, newest first within
         // each — same order as the Ask history, for the same reason.
-        final entries = [
-          ...data.dos.where((d) => d.pageId == bridge.pageId).toList().reversed,
-          ...data.dos.where((d) => d.pageId != bridge.pageId).toList().reversed,
-        ].take(30).toList();
+        final entries = _doOrder(data, bridge.pageId);
+
+        if (useMacLook) {
+          return _MacDoHistory(
+            entries: entries,
+            pageId: bridge.pageId,
+            onReplay: onReplay,
+            onDelete: (entry) => deleteSavedChat(context, ref,
+                notebookId: bridge.notebookId, id: entry.id),
+          );
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -499,6 +526,17 @@ class QuizHistoryList extends ConsumerWidget {
       data: (data) {
         if (data.quizzes.isEmpty) return const SizedBox.shrink();
         final quizzes = data.quizzes.reversed.take(10).toList();
+
+        if (useMacLook) {
+          return _MacQuizHistory(
+            quizzes: quizzes,
+            attempts: data.attempts,
+            onReview: (quiz, attempt) =>
+                ref.read(quizSessionProvider.notifier).review(quiz, attempt),
+            onRetake: (quiz) =>
+                ref.read(quizSessionProvider.notifier).retake(quiz),
+          );
+        }
 
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,

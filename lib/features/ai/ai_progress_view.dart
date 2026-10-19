@@ -9,8 +9,10 @@ library;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../ui/mac/mac_look.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'ai_progress.dart';
+import 'mac_ai_common.dart';
 
 class AiProgressView extends StatelessWidget {
   const AiProgressView({
@@ -24,6 +26,9 @@ class AiProgressView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The desktop inspector draws the same list with apple_ui's spinner and
+    // buttons; the rules for what each step says are the same in both.
+    if (useMacLook) return MacAiStepList(state: state, onCancel: onCancel);
     if (state.steps.isEmpty) return const SizedBox.shrink();
     final scheme = Theme.of(context).colorScheme;
 

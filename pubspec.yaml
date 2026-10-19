@@ -11,6 +11,12 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.8
 
+  # The desktop look: Apple's macOS 27 kit as Flutter widgets (the apple-ui-ux
+  # skill's package, vendored). Linux, Windows and macOS build their window
+  # from it; the web keeps the Material UI for now. See lib/ui/mac/.
+  apple_ui:
+    path: packages/apple_ui
+
   # State / DI / routing
   flutter_riverpod: ^2.5.1
   go_router: ^14.0.0

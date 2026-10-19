@@ -10,11 +10,29 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../core/models/note_page.dart';
 import '../../core/models/notebook.dart';
 import '../../core/models/section.dart';
+import '../../ui/mac/mac_look.dart';
 import '../auth/auth_notifier.dart';
 import '../search/global_search.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
+import 'mac_shortcuts_help.dart';
 import 'shell_state.dart';
+
+/// What the help (Ctrl+/) lists, in its order: the keys, then what they do.
+/// One list for both looks, so the Material dialog and the macOS sheet
+/// cannot disagree about the shortcuts.
+const List<({String keys, String label})> kShortcutHelp = [
+  (keys: 'Ctrl+N', label: 'New notebook'),
+  (keys: 'Ctrl+Shift+N', label: 'New quick note'),
+  (keys: 'Ctrl+T', label: 'New section'),
+  (keys: 'Ctrl+Alt+N', label: 'New page'),
+  (keys: 'Ctrl+F', label: 'Find in page'),
+  (keys: 'Ctrl+Shift+F', label: 'Global search'),
+  (keys: 'Ctrl+S', label: 'Save now'),
+  (keys: 'Ctrl+,', label: 'Settings'),
+  (keys: 'Ctrl+\\', label: 'Collapse / expand the sidebar'),
+  (keys: 'Ctrl+/', label: 'Show this dialog'),
+];
 
 class GlobalShortcuts extends ConsumerWidget {
   const GlobalShortcuts({super.key, required this.child});
@@ -197,6 +215,10 @@ class GlobalShortcuts extends ConsumerWidget {
   }
 
   void _showHelp(BuildContext context) {
+    if (useMacLook) {
+      showMacShortcutsHelp(context);
+      return;
+    }
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -208,17 +230,8 @@ class GlobalShortcuts extends ConsumerWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
-              children: const [
-                _ShortcutRow('Ctrl+N', 'New notebook'),
-                _ShortcutRow('Ctrl+Shift+N', 'New quick note'),
-                _ShortcutRow('Ctrl+T', 'New section'),
-                _ShortcutRow('Ctrl+Alt+N', 'New page'),
-                _ShortcutRow('Ctrl+F', 'Find in page'),
-                _ShortcutRow('Ctrl+Shift+F', 'Global search'),
-                _ShortcutRow('Ctrl+S', 'Save now'),
-                _ShortcutRow('Ctrl+,', 'Settings'),
-                _ShortcutRow('Ctrl+\\', 'Collapse / expand the sidebar'),
-                _ShortcutRow('Ctrl+/', 'Show this dialog'),
+              children: [
+                for (final s in kShortcutHelp) _ShortcutRow(s.keys, s.label),
               ],
             ),
           ),

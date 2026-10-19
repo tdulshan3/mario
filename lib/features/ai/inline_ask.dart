@@ -26,12 +26,15 @@
 /// where the question history is.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import 'ai_markdown.dart';
@@ -40,6 +43,9 @@ import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
 import 'html_artifact.dart';
+import 'mac_ai_common.dart';
+
+part 'mac_inline_ask.dart';
 
 class InlineAsk extends ConsumerStatefulWidget {
   const InlineAsk({super.key, this.inset = 0});
@@ -214,8 +220,8 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
           ValueListenableBuilder<AiRunState>(
             valueListenable: run,
             builder: (context, state, _) => Padding(
-              padding: const EdgeInsets.only(top: 26),
-              child: _Answer(
+              padding: EdgeInsets.only(top: useMacLook ? 4 : 26),
+              child: (useMacLook ? _MacAnswer.new : _Answer.new)(
                 state: state,
                 question: session.lastQuestion,
                 quoted: session.quoted != null,
@@ -236,7 +242,7 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
         if (prompt.open)
           Padding(
             padding: EdgeInsets.only(top: run == null ? 0 : 12),
-            child: _Composer(
+            child: (useMacLook ? _MacInlineComposer.new : _Composer.new)(
               controller: _controller,
               focus: _focus,
               onSubmit: _submit,
@@ -255,7 +261,20 @@ class _InlineAskState extends ConsumerState<InlineAsk> {
         // Floating over the page, so it needs a ground of its own — text
         // showing through a composer is unreadable, and the border alone does
         // not separate it from the paragraph behind it.
-        final surface = Container(
+        //
+        // On the desktop that ground is the macOS popover material: it floats
+        // over content, which is exactly what the blur materials are for.
+        final surface = useMacLook
+            ? MacGlass(
+                style: MacGlassStyle.panel,
+                radius: 20,
+                padding: const EdgeInsets.all(14),
+                child: MacControlSizeScope(
+                  size: MacControlSize.small,
+                  child: content,
+                ),
+              )
+            : Container(
           decoration: BoxDecoration(
             color: t.paper,
             borderRadius: BorderRadius.circular(MarioRadius.lg),

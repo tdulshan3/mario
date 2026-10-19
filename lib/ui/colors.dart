@@ -211,7 +211,12 @@ enum MarioAccent {
   gold(Color(0xFFF2C14E), Color(0xFF8F6717), Color(0xFFF2C14E)),
   blue(Color(0xFF2F5FB5), Color(0xFF234891), Color(0xFF7FA3E3)),
   slate(Color(0xFF565D64), Color(0xFF333E51), Color(0xFFA8B0C0)),
-  coral(Color(0xFFF05A47), Color(0xFFB23A2C), Color(0xFFF58B7C));
+  coral(Color(0xFFF05A47), Color(0xFFB23A2C), Color(0xFFF58B7C)),
+
+  /// The macOS system blue (kit "Accents/Blue", link blue for text), which
+  /// the desktop builds use. Not offered as a choice: the macOS look takes
+  /// the system accent, not one of the four above.
+  macBlue(Color(0xFF0088FF), Color(0xFF0068DA), Color(0xFF0091FF));
 
   const MarioAccent(this.base, this.text, this.lifted);
 
@@ -233,7 +238,9 @@ enum MarioAccent {
   /// to move — gold and coral already separate from navy and from black.
   Color baseOn({required bool dark}) {
     if (!dark) return base;
-    return this == MarioAccent.blue || this == MarioAccent.slate
+    return this == MarioAccent.blue ||
+            this == MarioAccent.slate ||
+            this == MarioAccent.macBlue
         ? lifted
         : base;
   }

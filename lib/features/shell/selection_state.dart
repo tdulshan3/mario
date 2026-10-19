@@ -50,8 +50,10 @@ class SelectionNotifier extends Notifier<Selection> {
   void selectNotebook(String id) =>
       state = Selection(notebookId: id, home: false);
 
-  void selectSection(String id) =>
-      state = state.copyWith(sectionId: id, home: false, clearPage: true);
+  /// [notebookId] moves the notebook along with it, for a section picked from
+  /// a tree that shows every notebook at once (the desktop sidebar).
+  void selectSection(String id, {String? notebookId}) => state = state.copyWith(
+      sectionId: id, notebookId: notebookId, home: false, clearPage: true);
 
   /// Selecting a page also aligns its owning section (and notebook) so the
   /// editor — which looks the page up within `sectionId`'s page stream — can

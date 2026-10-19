@@ -16,14 +16,23 @@
 /// nothing itself — it hands the question to the Ask tab by the same route
 /// `/ask` and `/summary` take, so there stays exactly one ask pathway, with one
 /// history and one saved artifact per answer.
+///
+/// The desktop builds draw the same panel as the window's macOS inspector
+/// (`mac_ai_side_panel.dart`): the tabs as a segmented control, the composer
+/// docked under a separator, apple_ui controls throughout. The state, the
+/// hand-offs and the composer's drafts below are shared by both looks; only
+/// the widgets they are drawn with differ.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/ai/local_model_discovery.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/mario_loader.dart';
@@ -36,8 +45,17 @@ import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ask_panel.dart';
 import 'model_bar.dart';
+import 'mac_ai_common.dart';
 import 'quiz_panel.dart';
 import 'writing_panel.dart';
+
+part 'mac_ai_side_panel.dart';
+
+/// The panel's width range. 400 is the width the design states; it stays the
+/// *initial* width rather than a fixed one (see [AiSidePanel.build]).
+const double _kPanelWidth = 400;
+const double _kPanelMinWidth = 280;
+const double _kPanelMaxWidth = 560;
 
 /// The panel plus its collapsed strip. Renders nothing when closed except a
 /// hairline rail, so the editor keeps its full width.
@@ -68,14 +86,19 @@ class AiSidePanel extends ConsumerWidget {
 
     if (!panel.isOpen) return const SizedBox.shrink();
 
+    // The desktop window's inspector: same body, macOS frame.
+    if (useMacLook) {
+      return _MacInspectorFrame(child: _PanelBody(tab: panel.tab));
+    }
+
     // 400 is the width the design states. It stays the *initial* width rather
     // than a fixed one: the drag handle was already here, and someone who has
     // widened the panel to read a long answer should keep that.
     return ResizablePanel(
       edge: PanelEdge.left,
-      initialWidth: 400,
-      minWidth: 280,
-      maxWidth: 560,
+      initialWidth: _kPanelWidth,
+      minWidth: _kPanelMinWidth,
+      maxWidth: _kPanelMaxWidth,
       child: _PanelBody(tab: panel.tab),
     );
   }
@@ -128,6 +151,14 @@ class _PanelBodyState extends ConsumerState<_PanelBody> {
     ref.read(aiPanelProvider.notifier).runInstruction(instruction);
   }
 
+  /// The open tab's content, once the backends are known.
+  Widget _tabFor(AiPanelTab tab) => switch (tab) {
+        AiPanelTab.ask => AskPanel(key: ValueKey(_askEpoch)),
+        AiPanelTab.quiz => const QuizPanel(),
+        AiPanelTab.writing => const WritingPanel(),
+        AiPanelTab.agent => AgentPanel(key: ValueKey(_agentEpoch)),
+      };
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -138,6 +169,31 @@ class _PanelBodyState extends ConsumerState<_PanelBody> {
     // showing _NeedsSetup, AskPanel is not mounted to collect a pending
     // question, and a composer there would be a control that does nothing.
     final ready = backends.valueOrNull?.isNotEmpty ?? false;
+
+    if (useMacLook) {
+      return _MacPanelLayout(
+        tab: widget.tab,
+        onTab: notifier.showTab,
+        onClose: notifier.close,
+        modelBar: _ActiveModelBar(tab: widget.tab),
+        body: backends.when(
+          loading: () => const Center(child: MacSpinner(large: true)),
+          error: (e, _) =>
+              _NeedsSetup(message: 'Could not load AI settings: $e'),
+          data: (configs) =>
+              configs.isEmpty ? const _NeedsSetup() : _tabFor(widget.tab),
+        ),
+        composer: ready
+            ? _Composer(
+                tab: widget.tab,
+                onSubmit: widget.tab == AiPanelTab.agent
+                    ? _handOffToAgent
+                    : _handOffToAsk,
+                onSummarise: () => _handOffToAsk(kSummaryRequest),
+              )
+            : null,
+      );
+    }
 
     return Material(
       color: scheme.surfaceContainerHighest,
@@ -171,14 +227,7 @@ class _PanelBodyState extends ConsumerState<_PanelBody> {
                             message: 'Could not load AI settings: $e'),
                         data: (configs) => configs.isEmpty
                             ? const _NeedsSetup()
-                            : switch (widget.tab) {
-                                AiPanelTab.ask =>
-                                  AskPanel(key: ValueKey(_askEpoch)),
-                                AiPanelTab.quiz => const QuizPanel(),
-                                AiPanelTab.writing => const WritingPanel(),
-                                AiPanelTab.agent =>
-                                  AgentPanel(key: ValueKey(_agentEpoch)),
-                              },
+                            : _tabFor(widget.tab),
                       ),
                     ),
                   ),
@@ -437,6 +486,23 @@ class _ComposerState extends ConsumerState<_Composer> {
     super.dispose();
   }
 
+  /// Sets this tab's web preference to exactly [value].
+  ///
+  /// The sessions expose the preference as a three-way cycle — that is what
+  /// the Material chip does on a tap — while the desktop composer picks a
+  /// value from a pop-up. Stepping the cycle to the chosen value keeps one
+  /// writer for the preference instead of adding a second.
+  void _setWeb(bool? value) {
+    bool? current() => _isAgent
+        ? ref.read(agentSessionProvider).useWeb
+        : ref.read(askSessionProvider).useWeb;
+    for (var i = 0; i < 3 && current() != value; i++) {
+      _isAgent
+          ? ref.read(agentSessionProvider.notifier).cycleWeb()
+          : ref.read(askSessionProvider.notifier).cycleWeb();
+    }
+  }
+
   void _submit() {
     final text = _controller.text.trim();
     if (text.isEmpty) return;
@@ -467,6 +533,31 @@ class _ComposerState extends ConsumerState<_Composer> {
         ref.watch(agentSessionProvider
             .select((s) => s.run?.value.status == AiRunStatus.running));
     final enabled = hasPage && !agentBusy;
+    final hint = switch ((hasPage, _isAgent, agentBusy)) {
+      (false, true, _) => 'Open a page to edit it',
+      (false, false, _) => 'Open a page to ask about it',
+      (_, true, true) => 'Working on the page…',
+      (_, true, false) => 'Change this page…',
+      _ => 'Ask about this page…',
+    };
+
+    if (useMacLook) {
+      return _MacComposerView(
+        controller: _controller,
+        focusNode: _focus,
+        isAgent: _isAgent,
+        enabled: enabled,
+        hint: hint,
+        useWeb: useWeb,
+        onWeb: _setWeb,
+        onChanged: _setDraft,
+        onSubmit: _submit,
+        onSummarise: _isAgent || !hasPage ? null : widget.onSummarise,
+        summariseTip: hasPage
+            ? 'Summarise the notes above the cursor'
+            : 'Open a page to summarise it',
+      );
+    }
 
     return Padding(
       padding: const EdgeInsets.all(MarioSpace.x2),
@@ -566,13 +657,7 @@ class _ComposerState extends ConsumerState<_Composer> {
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 4, vertical: 8),
                       hintMaxLines: 1,
-                      hintText: switch ((hasPage, _isAgent, agentBusy)) {
-                        (false, true, _) => 'Open a page to edit it',
-                        (false, false, _) => 'Open a page to ask about it',
-                        (_, true, true) => 'Working on the page…',
-                        (_, true, false) => 'Change this page…',
-                        _ => 'Ask about this page…',
-                      },
+                      hintText: hint,
                       hintStyle: text.bodySmall
                           ?.copyWith(color: scheme.onSurfaceVariant),
                     ),
@@ -788,6 +873,10 @@ class _NeedsSetup extends ConsumerWidget {
   const _NeedsSetup({this.message});
   final String? message;
 
+  void _openSettings(BuildContext context) => Navigator.of(context).push(
+        MaterialPageRoute<void>(builder: (_) => const SettingsScreen()),
+      );
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final scheme = Theme.of(context).colorScheme;
@@ -799,6 +888,16 @@ class _NeedsSetup extends ConsumerWidget {
       orElse: () => const <DiscoveredEndpoint>[],
     );
     final best = detected.isEmpty ? null : detected.first;
+
+    if (useMacLook) {
+      return _MacNeedsSetup(
+        message: message,
+        searching: found.isLoading,
+        best: best,
+        onUse: (model) => _use(ref, best!, model),
+        onSettings: () => _openSettings(context),
+      );
+    }
 
     return Center(
       child: SingleChildScrollView(
@@ -866,11 +965,7 @@ class _NeedsSetup extends ConsumerWidget {
             ],
             const SizedBox(height: MarioSpace.x3),
             FilledButton.icon(
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => const SettingsScreen(),
-                ),
-              ),
+              onPressed: () => _openSettings(context),
               icon: const Icon(Icons.tune, size: 15),
               label: Text(best == null ? 'Set up a model' : 'More options'),
               style: FilledButton.styleFrom(

@@ -4,6 +4,9 @@ library;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+import '../../../ui/mac/mac_look.dart';
+import 'mac_dialogs.dart';
+
 class TextInputDialog extends StatefulWidget {
   const TextInputDialog({
     super.key,
@@ -72,15 +75,23 @@ Future<String?> showTextInputDialog(
   required String submitLabel,
   String initialValue = '',
 }) =>
-    showDialog<String>(
-      context: context,
-      builder: (_) => TextInputDialog(
-        title: title,
-        label: label,
-        submitLabel: submitLabel,
-        initialValue: initialValue,
-      ),
-    );
+    useMacLook
+        ? showMacTextInputSheet(
+            context,
+            title: title,
+            label: label,
+            submitLabel: submitLabel,
+            initialValue: initialValue,
+          )
+        : showDialog<String>(
+            context: context,
+            builder: (_) => TextInputDialog(
+              title: title,
+              label: label,
+              submitLabel: submitLabel,
+              initialValue: initialValue,
+            ),
+          );
 
 Future<bool> showConfirmDialog(
   BuildContext context, {
@@ -89,6 +100,15 @@ Future<bool> showConfirmDialog(
   String confirmLabel = 'Delete',
   bool destructive = true,
 }) async {
+  if (useMacLook) {
+    return showMacConfirmAlert(
+      context,
+      title: title,
+      message: message,
+      confirmLabel: confirmLabel,
+      destructive: destructive,
+    );
+  }
   final result = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(

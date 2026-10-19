@@ -14,17 +14,23 @@
 /// line 4" is not something anyone can act on without scrolling to look.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import 'ai_progress.dart';
 import 'ai_progress_view.dart';
 import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'grammar_check.dart';
 import 'ai_markdown.dart';
+import 'mac_ai_common.dart';
+
+part 'mac_writing_panel.dart';
 
 class WritingPanel extends ConsumerStatefulWidget {
   const WritingPanel({super.key});
@@ -73,6 +79,18 @@ class _WritingPanelState extends ConsumerState<WritingPanel> {
     final bridge = ref.watch(aiEditorBridgeProvider);
     final session = ref.watch(writingSessionProvider);
     final run = session.run;
+
+    if (useMacLook) {
+      final notifier = ref.read(writingSessionProvider.notifier);
+      return _MacWritingView(
+        hasPage: bridge != null,
+        session: session,
+        onCheck: _check,
+        onStop: notifier.stop,
+        onAccept: _accept,
+        onIgnore: (i) => notifier.resolve(i, SuggestionOutcome.ignored),
+      );
+    }
 
     if (bridge == null) {
       return Center(

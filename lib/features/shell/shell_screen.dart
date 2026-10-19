@@ -15,6 +15,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/models/note_page.dart';
 import '../../core/models/notebook.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/organic.dart';
 import '../../ui/theme.dart';
 import '../../ui/widgets/resizable_panel.dart';
@@ -24,6 +25,7 @@ import '../editor/editor_screen.dart';
 import 'dialogs/notebook_dialog.dart';
 import 'dialogs/text_input_dialog.dart';
 import 'keyboard_shortcuts.dart';
+import 'mac/mac_shell.dart';
 import 'nav_tree.dart';
 import 'notebook_tabs.dart';
 import 'shell_state.dart';
@@ -50,6 +52,9 @@ class ShellScreen extends ConsumerStatefulWidget {
 class _ShellScreenState extends ConsumerState<ShellScreen> {
   @override
   Widget build(BuildContext context) {
+    // The desktop builds draw the macOS window instead (mac/mac_shell.dart).
+    if (useMacLook) return const MacShellScreen();
+
     final onHome = ref.watch(selectionProvider).home;
     final treeCollapsed = ref.watch(sidebarCollapsedProvider);
 

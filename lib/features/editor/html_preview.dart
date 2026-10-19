@@ -9,11 +9,13 @@ library;
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:apple_ui/apple_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:webview_cef/webview_cef.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/widgets/mario_loader.dart';
 
 Future<void>? _cefInit;
@@ -136,7 +138,9 @@ class _HtmlPreviewPaneState extends State<HtmlPreviewPane> {
     try {
       await _ensureCef().timeout(const Duration(seconds: 15));
       final controller = WebviewManager().createWebView(
-        loading: const Center(child: MarioLoader(size: 18)),
+        loading: Center(
+          child: useMacLook ? const MacSpinner() : const MarioLoader(size: 18),
+        ),
       );
       final url = await _writeTempFile();
       await controller.initialize(url);
@@ -196,8 +200,86 @@ class _HtmlPreviewPaneState extends State<HtmlPreviewPane> {
     }
   }
 
+  /// The rendered page, or what stands in for it while there is none.
+  Widget _webview(WebViewController controller) => ValueListenableBuilder<bool>(
+        valueListenable: controller,
+        builder: (context, ready, _) => SizedBox.expand(
+          child: ready ? controller.webviewWidget : controller.loadingWidget,
+        ),
+      );
+
+  /// The desktop pane: a header in the window's own type and buttons over
+  /// the page, on the window background with the separator for its edges —
+  /// the same chrome as the format bar beside it.
+  Widget _buildMac(BuildContext context) {
+    final c = context.macColors;
+    final type = MacTypography.of(context);
+    final controller = _controller;
+    final Widget body;
+    if (_error != null) {
+      body = MacEmptyState(
+        title: 'Preview Unavailable',
+        message: '$_error\n\nUse “Open in Browser” above instead.',
+      );
+    } else if (controller == null) {
+      body = const Center(child: MacSpinner());
+    } else {
+      body = _webview(controller);
+    }
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: c.windowBg,
+        border: Border(left: BorderSide(color: c.separator)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          DecoratedBox(
+            decoration: BoxDecoration(
+              border: Border(bottom: BorderSide(color: c.separator)),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              child: MacControlSizeScope(
+                size: MacControlSize.small,
+                child: Row(
+                  spacing: 8,
+                  children: [
+                    Expanded(
+                      child: Text(
+                        widget.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: type
+                            .emphasized(MacTextSpecs.subheadline)
+                            .copyWith(color: c.labelSecondary),
+                      ),
+                    ),
+                    if (widget.onPrimaryAction != null &&
+                        widget.primaryActionLabel != null)
+                      MacButton(
+                        label: widget.primaryActionLabel!,
+                        onPressed: widget.onPrimaryAction,
+                      ),
+                    MacButton(
+                      label: 'Open in Browser',
+                      icon: AppleIcons.globe,
+                      onPressed: _openInBrowser,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          Expanded(child: body),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (useMacLook) return _buildMac(context);
     final bg =
         widget.isDark ? const Color(0xFF1F1F1F) : const Color(0xFFF7F7F7);
     final muted = widget.isDark
@@ -271,14 +353,7 @@ class _HtmlPreviewPaneState extends State<HtmlPreviewPane> {
                   )
                 : controller == null
                     ? const Center(child: MarioLoader(size: 18))
-                    : ValueListenableBuilder<bool>(
-                        valueListenable: controller,
-                        builder: (context, ready, _) => SizedBox.expand(
-                          child: ready
-                              ? controller.webviewWidget
-                              : controller.loadingWidget,
-                        ),
-                      ),
+                    : _webview(controller),
           ),
         ],
       ),

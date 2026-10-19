@@ -11,6 +11,7 @@
 /// tappable links, since a cited source is only a citation if you can follow it.
 library;
 
+import 'package:apple_ui/apple_ui.dart' show MacColors;
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -19,6 +20,7 @@ import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/theme.dart';
 import 'ai_markdown_blocks.dart';
 
@@ -84,7 +86,7 @@ class _Rendering {
 /// a thirty-field object on every rebuild — and while an answer streams, that
 /// is every frame. MarkdownStyleSheet implements ==, so a cached instance also
 /// lets the widget comparison upstream short-circuit.
-final _renderings = <(ColorScheme, double, bool), _Rendering>{};
+final _renderings = <(ColorScheme, double, bool, bool), _Rendering>{};
 
 /// VS Code's preview, in the panel's size.
 ///
@@ -98,7 +100,10 @@ final _renderings = <(ColorScheme, double, bool), _Rendering>{};
 /// separates list items — the one place the preview has none — so a list
 /// is set almost as tight as a paragraph rather than a line apart.
 _Rendering _renderingFor(ColorScheme scheme, double f, bool selectable) {
-  final cached = _renderings[(scheme, f, selectable)];
+  // The look is part of the key: the same scheme renders links differently
+  // on the desktop.
+  final mac = useMacLook;
+  final cached = _renderings[(scheme, f, selectable, mac)];
   if (cached != null) return cached;
 
   // Bounded, so switching theme repeatedly does not pin every ColorScheme the
@@ -108,10 +113,19 @@ _Rendering _renderingFor(ColorScheme scheme, double f, bool selectable) {
   final ink = scheme.onSurface;
   final rule = markdownRuleColor(scheme);
   final body = GoogleFonts.inter(fontSize: f, height: 1.5, color: ink);
+  // The desktop's links are the system accent, not Mario's gold — the macOS
+  // theme puts that accent in `primary`. Its code blocks sit on the kit's
+  // tertiary fill rather than the sidebar grey `surfaceContainerHighest`
+  // carries there.
+  final linkColor = mac ? scheme.primary : MarioColors.primaryPressed;
+  final macColors =
+      scheme.brightness == Brightness.dark ? MacColors.dark : MacColors.light;
+  final codeFill =
+      mac ? macColors.fillTertiary : scheme.surfaceContainerHighest;
   final link = body.copyWith(
-    color: MarioColors.primaryPressed,
+    color: linkColor,
     decoration: TextDecoration.underline,
-    decorationColor: MarioColors.primaryPressed.withValues(alpha: 0.4),
+    decorationColor: linkColor.withValues(alpha: 0.4),
   );
   // Inline code: the code block's face, a step smaller than the prose, on a
   // quiet fill.
@@ -155,7 +169,7 @@ _Rendering _renderingFor(ColorScheme scheme, double f, bool selectable) {
     h6Padding: headingPadding,
     code: code,
     codeblockDecoration: BoxDecoration(
-      color: scheme.surfaceContainerHighest,
+      color: codeFill,
       borderRadius: BorderRadius.circular(3),
     ),
     codeblockPadding: EdgeInsets.all(f * 0.9),
@@ -187,12 +201,13 @@ _Rendering _renderingFor(ColorScheme scheme, double f, bool selectable) {
       padding: headingPadding,
       ruleColor: rule,
       codeStyle: code,
-      linkColor: MarioColors.primaryPressed,
+      linkColor: linkColor,
       selectable: selectable,
     ),
   };
 
-  return _renderings[(scheme, f, selectable)] = _Rendering(sheet, builders);
+  return _renderings[(scheme, f, selectable, mac)] =
+      _Rendering(sheet, builders);
 }
 
 /// A level-1 heading with the preview's rule under it.
@@ -552,7 +567,10 @@ class AiInlineMarkdown extends StatelessWidget {
     }
     if (attrs['href'] is String) {
       s = s.copyWith(
-        color: theme.colorScheme.secondary,
+        // The accent on the desktop, like the answer's own links.
+        color: useMacLook
+            ? theme.colorScheme.primary
+            : theme.colorScheme.secondary,
         decoration: TextDecoration.underline,
       );
     }

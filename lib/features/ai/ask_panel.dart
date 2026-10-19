@@ -10,6 +10,7 @@
 /// right, and only then commit it to their own notes.
 library;
 
+import 'package:apple_ui/apple_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -18,6 +19,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/services/ai/ai_artifacts.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'ai_history.dart';
 import 'ai_markdown.dart';
@@ -27,6 +29,9 @@ import 'ai_session_state.dart';
 import 'ai_state.dart';
 import 'ai_tasks.dart';
 import 'html_artifact.dart';
+import 'mac_ai_common.dart';
+
+part 'mac_ask_panel.dart';
 
 /// Sentinel the `/summary` command puts in the pending-question slot, to mean
 /// "summarise the note above the cursor" rather than a literal question.
@@ -250,6 +255,25 @@ class _AskPanelState extends ConsumerState<AskPanel> {
       _controller.value = TextEditingValue(
         text: session.draft,
         selection: TextSelection.collapsed(offset: session.draft.length),
+      );
+    }
+
+    if (useMacLook) {
+      final notifier = ref.read(askSessionProvider.notifier);
+      return _MacAskView(
+        session: session,
+        scroll: _scroll,
+        canInsert: bridge != null,
+        inserted: run != null && notifier.alreadyInserted(run),
+        onReplay: (entry) {
+          _controller.text = entry.question;
+          _submit();
+        },
+        onCancel: notifier.stop,
+        onInsert: _insert,
+        onPreview: _previewAction,
+        onHistory: notifier.clear,
+        onClearQuote: notifier.clearQuote,
       );
     }
 

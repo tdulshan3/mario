@@ -8,14 +8,19 @@
 /// local-only auth path — [AuthService] exposes Google sign-in and sign-out
 /// and nothing else — so that button is deliberately not here. A control that
 /// does nothing would be worse than an honest omission.
+///
+/// The desktop builds draw a macOS window instead (`mac_login_screen.dart`)
+/// over the same sign-in paths.
 library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 import '../../ui/widgets/mario_loader.dart';
 import 'auth_notifier.dart';
+import 'mac_login_screen.dart';
 
 class LoginScreen extends ConsumerWidget {
   const LoginScreen({super.key});
@@ -26,6 +31,7 @@ class LoginScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    if (useMacLook) return const MacLoginScreen();
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.surface,
       body: LayoutBuilder(

@@ -4,11 +4,14 @@ library;
 import 'dart:async';
 
 import 'package:appflowy_editor/appflowy_editor.dart' as afe;
+import 'package:apple_ui/apple_ui.dart';
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 
 import '../../core/services/voice_service.dart';
 import '../../ui/colors.dart';
+import '../../ui/mac/mac_look.dart';
 
 class VoiceDictationButton extends StatefulWidget {
   const VoiceDictationButton({super.key, required this.editorState});
@@ -114,6 +117,20 @@ class _VoiceDictationButtonState extends State<VoiceDictationButton> {
 
   @override
   Widget build(BuildContext context) {
+    // Desktop: a macOS toggle button — the accent wash says it is listening,
+    // as the gold dot does on the web. Its size comes from the bar it is in.
+    if (useMacLook) {
+      final label = _active ? 'Stop transcription' : 'Voice dictation';
+      return MacTooltip(
+        message: label,
+        child: MacButton(
+          icon: _active ? CupertinoIcons.mic_fill : CupertinoIcons.mic,
+          semanticLabel: label,
+          isOn: _active,
+          onPressed: _active ? () => _stop() : _start,
+        ),
+      );
+    }
     return IconButton(
       tooltip: _active ? 'Stop transcription' : 'Voice dictation',
       onPressed: _active ? () => _stop() : _start,

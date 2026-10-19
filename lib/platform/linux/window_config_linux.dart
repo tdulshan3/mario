@@ -13,7 +13,9 @@ Future<void> configureLinuxWindow() async {
     minimumSize: Size(800, 600),
     center: true,
     title: 'Mario',
-    titleBarStyle: TitleBarStyle.hidden,
+    // The system's own title bar and window buttons. The macOS look draws
+    // everything below it, but on Linux and Windows the frame stays native.
+    titleBarStyle: TitleBarStyle.normal,
   );
   await windowManager.waitUntilReadyToShow(opts, () async {
     await windowManager.show();

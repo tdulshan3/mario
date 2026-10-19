@@ -40,6 +40,13 @@ packages:
       relative: true
     source: path
     version: "3.3.0"
+  apple_ui:
+    dependency: "direct main"
+    description:
+      path: "packages/apple_ui"
+      relative: true
+    source: path
+    version: "1.0.0"
   archive:
     dependency: transitive
     description:
