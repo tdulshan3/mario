@@ -626,6 +626,36 @@ export function App() {
             setSigningIn(false);
           }
         }}
+        onSignInOffline={async () => {
+          setSigningIn(true);
+          setAuthError(null);
+          try {
+            const signedIn = await window.mario.auth.signInOffline();
+            setUser(signedIn);
+            const snap = await window.mario.tree.getSnapshot();
+            if (snap.notebooks.length === 0) {
+              const nb = await window.mario.tree.createNotebook('My Notebook', 0);
+              const sec = await window.mario.tree.createSection(nb.id, 'General Notes', 0);
+              const pg = await window.mario.tree.createPage(
+                nb.id,
+                sec.id,
+                'Welcome to Mario',
+                emptyPageContent('Welcome to Mario'),
+              );
+              const updatedSnap = await window.mario.tree.getSnapshot();
+              setTree(updatedSnap);
+              setSelectedNotebookId(nb.id);
+              setSelectedSectionId(sec.id);
+              setSelectedPageId(pg.id);
+            } else {
+              applyTreeSelection(snap, false);
+            }
+          } catch (err) {
+            setAuthError(err instanceof Error ? err.message : String(err));
+          } finally {
+            setSigningIn(false);
+          }
+        }}
       />
     );
   }
@@ -817,52 +847,6 @@ export function App() {
               />
             }
           >
-            <ToolbarGroup>
-              <ToolbarButton
-                icon="square-and-pencil"
-                label="New Page (Ctrl+N)"
-                onClick={() => {
-                  const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
-                  const secId =
-                    selectedSectionId ??
-                    (nbId ? tree.sectionsByNotebook[nbId]?.[0]?.id : undefined);
-                  if (nbId && secId) {
-                    handleCreatePage(nbId, secId);
-                  } else if (nbId) {
-                    setSecDialog({
-                      mode: 'create',
-                      notebookId: nbId,
-                      name: '',
-                      colorIndex: 0,
-                    });
-                  } else {
-                    setNbDialog({
-                      mode: 'create',
-                      name: '',
-                      colorIndex: 0,
-                    });
-                  }
-                }}
-              />
-              <ToolbarButton
-                icon="folder"
-                label="New Section"
-                onClick={() => {
-                  const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
-                  if (nbId) {
-                    setSecDialog({
-                      mode: 'create',
-                      notebookId: nbId,
-                      name: '',
-                      colorIndex:
-                        (tree.sectionsByNotebook[nbId]?.length ?? 0) %
-                        NOTEBOOK_COLORS.length,
-                    });
-                  }
-                }}
-              />
-            </ToolbarGroup>
-
             <ToolbarButton
               icon="magnifyingglass"
               label="Go to Page (Ctrl+K)"

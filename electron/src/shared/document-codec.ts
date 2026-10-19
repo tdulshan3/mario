@@ -371,6 +371,15 @@ export function documentToMarkdown(docOrWrapper: AppFlowyDocument | PageContent)
         lines.push('');
         break;
       }
+      case 'html':
+      case 'html_preview': {
+        const raw = String(node.data?.html ?? '');
+        lines.push('```html');
+        lines.push(raw);
+        lines.push('```');
+        lines.push('');
+        break;
+      }
       default: {
         const fallback = deltaToMarkdown(node.data?.delta);
         if (fallback) lines.push(fallback);
@@ -915,6 +924,16 @@ export function makeSpreadsheetNode(workbook: WorkbookData): AppFlowyNode {
     id: nanoid6(),
     type: 'spreadsheet',
     data: { workbook },
+  };
+}
+
+export function makeHtmlNode(
+  html = '<div style="padding:16px;background:#f6f8fa;border-radius:8px;font-family:sans-serif;">\n  <h3 style="margin-top:0">Interactive HTML</h3>\n  <p>Render custom HTML, charts, embeds, or formatted widgets.</p>\n</div>',
+): AppFlowyNode {
+  return {
+    id: nanoid6(),
+    type: 'html',
+    data: { html },
   };
 }
 

@@ -32,12 +32,14 @@ import {
   makeDividerNode,
   makeDrawingNode,
   makeHeadingNode,
+  makeHtmlNode,
   makeListNode,
   makeMathNode,
   makeParagraphNode,
   makeQuoteNode,
   makeSpreadsheetNode,
   makeTableNode,
+  markdownToNodes,
   normalizeLatexFormula,
   normalizeWorkbook,
   parseInlineMarkdownToDelta,
@@ -167,6 +169,12 @@ const SLASH_ITEMS: Array<{
     icon: 'photo',
   },
   {
+    kind: 'html',
+    label: 'HTML Render Block',
+    keywords: 'html iframe embed web markup render',
+    icon: 'globe',
+  },
+  {
     kind: 'divider',
     label: 'Horizontal Divider',
     keywords: 'divider hr line',
@@ -178,15 +186,19 @@ function ImageBlockView({
   node,
   onUpdate,
   onDelete,
+  onInsertAfterMarkdown,
 }: {
   node: AppFlowyNode;
   onUpdate: (next: AppFlowyNode) => void;
   onDelete: () => void;
+  onInsertAfterMarkdown?: (md: string) => void;
 }) {
   const url = String(node.data?.url ?? '');
   const driveId = String(node.data?.drive_id ?? '');
   const width = Number(node.data?.width ?? 520);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
+  const [ocrRunning, setOcrRunning] = useState(false);
+  const [ocrMessage, setOcrMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -203,11 +215,52 @@ function ImageBlockView({
     };
   }, [url, driveId]);
 
+  const handleRunOcr = async () => {
+    const target = resolvedSrc || url;
+    if (!target) return;
+    setOcrRunning(true);
+    setOcrMessage(null);
+    try {
+      const res = await window.mario.ocr.runMinerU(target);
+      if (res.success && res.markdown) {
+        setOcrMessage('Extracted text with MinerU!');
+        if (onInsertAfterMarkdown) {
+          onInsertAfterMarkdown(res.markdown);
+        }
+      } else {
+        setOcrMessage(res.error || 'No text recognized by MinerU');
+      }
+    } catch (err) {
+      setOcrMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOcrRunning(false);
+    }
+  };
+
   return (
     <div className="mario-rich-card">
       <div className="mario-rich-card__header">
-        <span>Image</span>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>Image</span>
+          {ocrMessage && (
+            <span
+              className="mac-caption mac-label-secondary"
+              style={{ fontSize: 11 }}
+            >
+              {ocrMessage}
+            </span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Button
+            size="small"
+            variant="tinted"
+            icon="bolt"
+            disabled={ocrRunning || !resolvedSrc}
+            onClick={handleRunOcr}
+          >
+            {ocrRunning ? 'MinerU OCR…' : 'OCR (MinerU)'}
+          </Button>
           <Button
             size="small"
             variant="borderless"
@@ -264,6 +317,92 @@ function ImageBlockView({
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+function HtmlBlockView({
+  node,
+  onUpdate,
+  onDelete,
+}: {
+  node: AppFlowyNode;
+  onUpdate: (next: AppFlowyNode) => void;
+  onDelete: () => void;
+}) {
+  const [viewMode, setViewMode] = useState<'preview' | 'code'>('preview');
+  const rawHtml = String(node.data?.html ?? '');
+
+  return (
+    <div className="mario-rich-card">
+      <div className="mario-rich-card__header">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span>HTML Render</span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Button
+            size="small"
+            variant={viewMode === 'preview' ? 'bordered' : 'tinted'}
+            onClick={() =>
+              setViewMode(viewMode === 'preview' ? 'code' : 'preview')
+            }
+          >
+            {viewMode === 'preview' ? 'Edit HTML' : 'Live Preview'}
+          </Button>
+          <Button
+            size="small"
+            variant="borderless"
+            icon="trash"
+            label="Remove HTML Block"
+            onClick={onDelete}
+          />
+        </div>
+      </div>
+      {viewMode === 'code' ? (
+        <div style={{ padding: 12 }}>
+          <textarea
+            rows={6}
+            style={{
+              width: '100%',
+              fontFamily: 'monospace',
+              fontSize: 13,
+              background: 'var(--mac-field-bg)',
+              color: 'var(--mac-text-primary)',
+              border: '1px solid var(--mac-separator)',
+              borderRadius: 6,
+              padding: 8,
+              resize: 'vertical',
+              boxSizing: 'border-box',
+            }}
+            value={rawHtml}
+            onChange={(e) =>
+              onUpdate({
+                ...node,
+                data: { ...node.data, html: e.target.value },
+              })
+            }
+            placeholder="Write or paste <div>HTML code</div> here…"
+          />
+        </div>
+      ) : (
+        <div style={{ padding: 12 }}>
+          <iframe
+            title="HTML Render"
+            srcDoc={
+              rawHtml ||
+              '<div style="font-family:sans-serif;color:#888;padding:12px;">Empty HTML block. Click Edit HTML to add markup.</div>'
+            }
+            sandbox="allow-scripts allow-forms allow-popups"
+            style={{
+              width: '100%',
+              minHeight: 120,
+              border: '1px solid var(--mac-separator)',
+              borderRadius: 6,
+              background: '#ffffff',
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -753,6 +892,8 @@ export function BlockEditor({
         };
       case 'divider':
         return makeDividerNode();
+      case 'html':
+        return makeHtmlNode();
       case 'image': {
         const picked = await window.mario.asset.pickImage();
         if (!picked) return null;
@@ -1088,6 +1229,22 @@ export function BlockEditor({
         onExportMarkdown={onExportMarkdown}
         onExportPdf={onExportPdf}
         onOpenShare={onOpenShare}
+        onOcrMinerU={async () => {
+          try {
+            const res = await window.mario.ocr.pickAndRunMinerU();
+            if (res && res.success && res.markdown) {
+              const parsed = markdownToNodes(res.markdown);
+              if (parsed.length > 0) {
+                const nextNodes = [...nodes, ...parsed];
+                commitNodes(nextNodes);
+              }
+            } else if (res && !res.success) {
+              alert(`MinerU OCR failed: ${res.error || 'Unknown error'}`);
+            }
+          } catch (err) {
+            alert(`MinerU OCR error: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }}
       />
 
       <div className="mario-editor-split">
@@ -1144,7 +1301,18 @@ export function BlockEditor({
               )}
             </div>
 
-            <div className="mario-blocks">
+            <div
+              className="mario-blocks"
+              onClick={(e) => {
+                if (e.target === e.currentTarget && nodes.length > 0) {
+                  const last = nodes[nodes.length - 1];
+                  if (last?.id) {
+                    setFocusedBlockId(last.id);
+                    inputRefs.current[last.id]?.focus();
+                  }
+                }
+              }}
+            >
               {nodes.map((node, index) => {
                 const nodeId = node.id ?? `blk_${index}`;
                 if (node.type === 'numbered_list') {
@@ -1515,6 +1683,26 @@ export function BlockEditor({
                       node={node}
                       onUpdate={(next) => updateNode(nodeId, () => next)}
                       onDelete={() => deleteNode(nodeId)}
+                      onInsertAfterMarkdown={(md) => {
+                        const parsed = markdownToNodes(md);
+                        if (parsed.length > 0) {
+                          const nextNodes = [...nodes];
+                          nextNodes.splice(index + 1, 0, ...parsed);
+                          commitNodes(nextNodes);
+                        }
+                      }}
+                    />
+                  );
+                }
+
+                // 8b. HTML Render block
+                if (node.type === 'html' || node.type === 'html_preview') {
+                  return (
+                    <HtmlBlockView
+                      key={nodeId}
+                      node={node}
+                      onUpdate={(next) => updateNode(nodeId, () => next)}
+                      onDelete={() => deleteNode(nodeId)}
                     />
                   );
                 }
@@ -1640,7 +1828,7 @@ export function BlockEditor({
                 };
 
                 const handleKeyDown = (
-                  e: React.KeyboardEvent<HTMLInputElement>,
+                  e: React.KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>,
                 ) => {
                   if (slashState && slashState.blockId === nodeId) {
                     if (e.key === 'Escape') {
@@ -1859,18 +2047,113 @@ export function BlockEditor({
                   }
                 };
 
+                const handlePaste = (
+                  e: React.ClipboardEvent<HTMLTextAreaElement>,
+                ) => {
+                  const items = e.clipboardData?.items;
+                  if (items) {
+                    for (let i = 0; i < items.length; i++) {
+                      const item = items[i];
+                      if (item.type.indexOf('image') !== -1) {
+                        const file = item.getAsFile();
+                        if (file) {
+                          e.preventDefault();
+                          const reader = new FileReader();
+                          reader.onload = async () => {
+                            const dataUrl = reader.result as string;
+                            try {
+                              const saved =
+                                await window.mario.asset.savePastedImage(
+                                  dataUrl,
+                                );
+                              const imgNode: AppFlowyNode = {
+                                id: nanoid6(),
+                                type: 'image',
+                                data: {
+                                  url: saved.assetPath,
+                                  width: 520,
+                                  align: 'center',
+                                },
+                              };
+                              insertAfter(nodeId, imgNode);
+                            } catch (err) {
+                              console.error('Failed to save pasted image', err);
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                          return;
+                        }
+                      }
+                    }
+                  }
+
+                  const text = e.clipboardData?.getData('text/plain') ?? '';
+                  if (
+                    text.includes('\n') ||
+                    /^(\#{1,6}\s|```|\||\*\s|-\s|\d+\.\s|\$\$|>)/m.test(text)
+                  ) {
+                    e.preventDefault();
+                    const parsed = markdownToNodes(text);
+                    if (parsed.length > 0) {
+                      const currentNode = nodes[index];
+                      const currentText = deltaToMarkdown(
+                        currentNode?.data?.delta,
+                      );
+                      if (!currentText.trim()) {
+                        const nextNodes = [...nodes];
+                        nextNodes.splice(index, 1, ...parsed);
+                        commitNodes(nextNodes);
+                        const last = parsed[parsed.length - 1];
+                        const lastId = last?.id;
+                        if (lastId) {
+                          setFocusedBlockId(lastId);
+                          setTimeout(
+                            () => inputRefs.current[lastId]?.focus(),
+                            15,
+                          );
+                        }
+                      } else {
+                        const nextNodes = [...nodes];
+                        nextNodes.splice(index + 1, 0, ...parsed);
+                        commitNodes(nextNodes);
+                        const last = parsed[parsed.length - 1];
+                        const lastId = last?.id;
+                        if (lastId) {
+                          setFocusedBlockId(lastId);
+                          setTimeout(
+                            () => inputRefs.current[lastId]?.focus(),
+                            15,
+                          );
+                        }
+                      }
+                    }
+                  }
+                };
+
                 const textInput = (
-                  <input
+                  <textarea
                     ref={(el) => {
                       inputRefs.current[nodeId] = el;
+                      if (el) {
+                        el.style.height = 'auto';
+                        el.style.height = `${Math.max(26, el.scrollHeight)}px`;
+                      }
                     }}
+                    rows={1}
                     className={`mario-editable ${headingClass}`}
                     style={{
                       width: '100%',
                       border: 'none',
+                      outline: 'none',
                       background: 'transparent',
                       color: 'inherit',
                       font: 'inherit',
+                      resize: 'none',
+                      overflow: 'hidden',
+                      lineHeight: 1.5,
+                      padding: 0,
+                      margin: 0,
+                      display: 'block',
                       textAlign: align,
                       textDecoration:
                         node.type === 'todo_list' && node.data?.checked
@@ -1889,8 +2172,14 @@ export function BlockEditor({
                     }
                     spellCheck={spellcheck}
                     onFocus={() => setFocusedBlockId(nodeId)}
-                    onChange={(e) => handleTextChange(e.target.value)}
+                    onChange={(e) => {
+                      const el = e.target;
+                      el.style.height = 'auto';
+                      el.style.height = `${Math.max(26, el.scrollHeight)}px`;
+                      handleTextChange(el.value);
+                    }}
                     onKeyDown={handleKeyDown}
+                    onPaste={handlePaste}
                   />
                 );
 
@@ -1905,19 +2194,6 @@ export function BlockEditor({
                       setTimeout(() => inputRefs.current[nodeId]?.focus(), 0);
                     }}
                   >
-                    <div className="mario-block-gutter">
-                      <button
-                        type="button"
-                        className="mario-block-gutter__btn"
-                        title="Insert block below"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          insertAfter(nodeId, makeParagraphNode(''));
-                        }}
-                      >
-                        +
-                      </button>
-                    </div>
 
                     <div
                       className={`mario-block-body ${

@@ -92,13 +92,16 @@ export function MacSidebarNav({
   onReorderPages,
   onOpenSettings,
 }: MacSidebarNavProps) {
-  const [expandedNotebooks, setExpandedNotebooks] = useState<
-    Record<string, boolean>
-  >(() => {
-    const init: Record<string, boolean> = {};
-    for (const nb of notebooks) init[nb.id] = true;
-    return init;
-  });
+  const [openNotebookId, setOpenNotebookId] = useState<string | null>(
+    () => selectedNotebookId ?? notebooks[0]?.id ?? null,
+  );
+
+  React.useEffect(() => {
+    if (selectedNotebookId) {
+      setOpenNotebookId(selectedNotebookId);
+    }
+  }, [selectedNotebookId]);
+
   const [expandedSections, setExpandedSections] = useState<
     Record<string, boolean>
   >({});
@@ -109,10 +112,7 @@ export function MacSidebarNav({
   const q = searchQuery.trim().toLowerCase();
 
   const toggleNotebook = (nbId: string) => {
-    setExpandedNotebooks((prev) => ({
-      ...prev,
-      [nbId]: !(prev[nbId] ?? true),
-    }));
+    setOpenNotebookId((prev) => (prev === nbId ? null : nbId));
   };
 
   const toggleSection = (secId: string) => {
@@ -149,7 +149,7 @@ export function MacSidebarNav({
       <SidebarSection title="Notebooks">
         {notebooks.map((nb) => {
           const sections = sectionsByNotebook[nb.id] ?? [];
-          const nbOpen = (expandedNotebooks[nb.id] ?? true) || q.length > 0;
+          const nbOpen = openNotebookId === nb.id || q.length > 0;
 
           const visibleSections = sections.filter((sec) => {
             if (!q) return true;
@@ -226,10 +226,10 @@ export function MacSidebarNav({
                       selectedNotebookId === nb.id
                     }
                     onClick={() => {
-                      if (selectedNotebookId === nb.id) {
+                      if (openNotebookId === nb.id) {
                         toggleNotebook(nb.id);
                       } else {
-                        setExpandedNotebooks((p) => ({ ...p, [nb.id]: true }));
+                        setOpenNotebookId(nb.id);
                         onSelectNotebook(nb.id);
                       }
                     }}
@@ -333,7 +333,7 @@ export function MacSidebarNav({
                           </ContextMenu>
                         </div>
 
-                        {secOpen && pages.length > 0 && (
+                        {secOpen && (
                           <div className="mario-sidebar-sublist">
                             {pages.map((page) => (
                               <div
@@ -422,11 +422,31 @@ export function MacSidebarNav({
                                 </ContextMenu>
                               </div>
                             ))}
+                            <div className="mario-sidebar-add-row">
+                              <button
+                                type="button"
+                                className="mario-sidebar-add-btn mario-sidebar-add-btn--page"
+                                onClick={() => onNewPage(nb.id, sec.id)}
+                              >
+                                <Icon name="plus" />
+                                <span>New Page</span>
+                              </button>
+                            </div>
                           </div>
                         )}
                       </React.Fragment>
                     );
                   })}
+                  <div className="mario-sidebar-add-row">
+                    <button
+                      type="button"
+                      className="mario-sidebar-add-btn"
+                      onClick={() => onNewSection(nb.id)}
+                    >
+                      <Icon name="plus" />
+                      <span>New Section</span>
+                    </button>
+                  </div>
                 </div>
               )}
             </React.Fragment>
@@ -443,13 +463,6 @@ export function MacSidebarNav({
         >
           New Notebook
         </Button>
-        <Button
-          variant="borderless"
-          size="small"
-          icon="gear"
-          label="Settings"
-          onClick={onOpenSettings}
-        />
       </div>
     </Sidebar>
   );

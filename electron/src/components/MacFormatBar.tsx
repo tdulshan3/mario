@@ -21,6 +21,7 @@ export type InsertBlockKind =
   | 'quote'
   | 'code'
   | 'math_equation'
+  | 'html'
   | 'table'
   | 'spreadsheet'
   | 'drawing'
@@ -83,6 +84,7 @@ export interface MacFormatBarProps {
   onExportMarkdown: () => void;
   onExportPdf: () => void;
   onOpenShare: () => void;
+  onOcrMinerU?: () => void;
 }
 
 export function MacFormatBar({
@@ -98,6 +100,7 @@ export function MacFormatBar({
   activeAlign,
   onAlignChange,
   onInsertBlock,
+  onOcrMinerU,
   zoom,
   onZoomChange,
   canUndo = false,
@@ -352,6 +355,14 @@ export function MacFormatBar({
         <MenuHeader>Rich Media & Data</MenuHeader>
         <MenuItem icon="photo" onSelect={() => onInsertBlock('image')}>
           Image…
+        </MenuItem>
+        {onOcrMinerU && (
+          <MenuItem icon="bolt" onSelect={onOcrMinerU}>
+            OCR Document (MinerU)…
+          </MenuItem>
+        )}
+        <MenuItem icon="globe" onSelect={() => onInsertBlock('html')}>
+          HTML Render Block
         </MenuItem>
         <MenuItem icon="square-grid" onSelect={() => onInsertBlock('table')}>
           Table (3×3)

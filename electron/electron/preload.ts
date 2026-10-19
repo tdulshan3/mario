@@ -19,6 +19,7 @@ export interface MarioElectronApi {
   auth: {
     restore: () => Promise<AuthUser | null>;
     signIn: () => Promise<AuthUser>;
+    signInOffline: () => Promise<AuthUser>;
     signOut: () => Promise<void>;
   };
   tree: {
@@ -74,7 +75,20 @@ export interface MarioElectronApi {
       driveId: string;
       dataUrl: string;
     } | null>;
+    savePastedImage: (
+      dataUrl: string,
+    ) => Promise<{ assetPath: string; driveId: string }>;
     resolveImage: (url?: string, driveId?: string) => Promise<string | null>;
+  };
+  ocr: {
+    runMinerU: (
+      target: string,
+    ) => Promise<{ success: boolean; markdown: string; error?: string }>;
+    pickAndRunMinerU: () => Promise<{
+      success: boolean;
+      markdown: string;
+      error?: string;
+    } | null>;
   };
   settings: {
     load: () => Promise<SettingsState>;
@@ -157,6 +171,7 @@ const api: MarioElectronApi = {
   auth: {
     restore: () => ipcRenderer.invoke('auth:restore'),
     signIn: () => ipcRenderer.invoke('auth:signIn'),
+    signInOffline: () => ipcRenderer.invoke('auth:signInOffline'),
     signOut: () => ipcRenderer.invoke('auth:signOut'),
   },
   tree: {
@@ -202,8 +217,14 @@ const api: MarioElectronApi = {
   },
   asset: {
     pickImage: () => ipcRenderer.invoke('asset:pickImage'),
+    savePastedImage: (dataUrl) =>
+      ipcRenderer.invoke('asset:savePastedImage', dataUrl),
     resolveImage: (url, driveId) =>
       ipcRenderer.invoke('asset:resolveImage', url, driveId),
+  },
+  ocr: {
+    runMinerU: (target) => ipcRenderer.invoke('ocr:runMinerU', target),
+    pickAndRunMinerU: () => ipcRenderer.invoke('ocr:pickAndRunMinerU'),
   },
   settings: {
     load: () => ipcRenderer.invoke('settings:load'),

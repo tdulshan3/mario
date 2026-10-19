@@ -982,14 +982,6 @@ export function AiInspectorPanel({
                 Configure AI Provider…
               </Button>
             )}
-            <Spacer />
-            <Button
-              size="small"
-              variant="borderless"
-              icon="gear"
-              label="AI Settings"
-              onClick={onOpenAiSettings}
-            />
           </Row>
 
           <SegmentedControl

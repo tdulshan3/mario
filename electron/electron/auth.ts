@@ -98,6 +98,20 @@ export class AuthServiceMain {
     return null;
   }
 
+  signInOffline(): AuthUser {
+    let fallback = this.loadOfflineFallbackUser();
+    if (!fallback) {
+      fallback = {
+        uid: 'offline-local-user',
+        email: 'offline@local.dev',
+        displayName: 'Offline User',
+      };
+    }
+    this.user = fallback;
+    this.saveCachedUser(fallback);
+    return fallback;
+  }
+
   async restoreSession(): Promise<AuthUser | null> {
     if (this.demoMode) {
       this.user = DEMO_USER;

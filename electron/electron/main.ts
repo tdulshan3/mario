@@ -1,5 +1,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, Tray, nativeImage } from 'electron';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   AiArtifactData,
@@ -45,6 +47,79 @@ const auth = new AuthServiceMain(keyring, isDemo);
 const firestore = new FirestoreRestClient(auth);
 const drive = new DriveRestClient(auth);
 const aiService = new AiServiceMain(prefs, keyring);
+
+function getMinerUBinary(): string {
+  const custom = process.env.MARIO_MINERU_PATH;
+  if (custom && fs.existsSync(custom)) return custom;
+  const homeVenv = path.join(
+    os.homedir(),
+    '.local',
+    'share',
+    'com.marionote.app.mario',
+    'mineru',
+    'venv',
+    'bin',
+    'mineru',
+  );
+  if (fs.existsSync(homeVenv)) return homeVenv;
+  return 'mineru';
+}
+
+function ensureMinerUServerRunning(bin: string): Promise<void> {
+  return new Promise((resolve) => {
+    execFile(bin, ['server', 'start'], { timeout: 10000 }, () => {
+      resolve();
+    });
+  });
+}
+
+function runMinerUOnFile(
+  filePath: string,
+): Promise<{ success: boolean; markdown: string; error?: string }> {
+  const bin = getMinerUBinary();
+  return new Promise((resolve) => {
+    ensureMinerUServerRunning(bin).finally(() => {
+      execFile(
+        bin,
+        ['parse', filePath, '-f', 'markdown', '--tier', 'flash'],
+        { maxBuffer: 10 * 1024 * 1024, timeout: 60000 },
+        (err, stdout, stderr) => {
+          if (err) {
+            execFile(
+              bin,
+              ['parse', filePath, '-f', 'markdown'],
+              { maxBuffer: 10 * 1024 * 1024, timeout: 60000 },
+              (err2, stdout2, stderr2) => {
+                if (err2) {
+                  resolve({
+                    success: false,
+                    markdown: '',
+                    error: (
+                      stderr2 ||
+                      stderr ||
+                      err2.message ||
+                      'MinerU parse failed'
+                    ).trim(),
+                  });
+                } else {
+                  resolve({
+                    success: true,
+                    markdown: stdout2.trim(),
+                  });
+                }
+              },
+            );
+          } else {
+            resolve({
+              success: true,
+              markdown: stdout.trim(),
+            });
+          }
+        },
+      );
+    });
+  });
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -155,6 +230,12 @@ function registerIpcHandlers(): void {
     const user = await auth.signInInteractive((url) => shell.openExternal(url));
     await syncEngine.refreshFromServer();
     void syncEngine.flushOutbox();
+    return user;
+  });
+
+  ipcMain.handle('auth:signInOffline', async () => {
+    const user = auth.signInOffline();
+    await syncEngine.refreshFromServer();
     return user;
   });
 
@@ -343,6 +424,84 @@ function registerIpcHandlers(): void {
       return null;
     },
   );
+
+  ipcMain.handle('asset:savePastedImage', async (_, dataUrl: string) => {
+    const match = /^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/.exec(dataUrl);
+    if (!match) throw new Error('Invalid image data URL');
+    const mime = match[1];
+    const buffer = Buffer.from(match[2], 'base64');
+    const ext =
+      mime === 'image/jpeg' || mime === 'image/jpg'
+        ? '.jpg'
+        : mime === 'image/gif'
+          ? '.gif'
+          : mime === 'image/webp'
+            ? '.webp'
+            : '.png';
+    const tmpName = `pasted-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const tmpPath = path.join(os.tmpdir(), tmpName);
+    fs.writeFileSync(tmpPath, buffer);
+    const { localPath } = assetCache.copyIntoImagesDir(tmpPath);
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+    return { assetPath: localPath, driveId: '' };
+  });
+
+  // Local MinerU OCR handlers
+  ipcMain.handle('ocr:runMinerU', async (_, target: string) => {
+    let targetPath = target;
+    let isTemp = false;
+
+    if (target.startsWith('data:image/')) {
+      const match = /^data:(image\/[a-zA-Z0-9+.-]+);base64,(.+)$/.exec(target);
+      if (!match) throw new Error('Invalid image data URL');
+      const ext = match[1].includes('jpeg')
+        ? '.jpg'
+        : match[1].includes('png')
+          ? '.png'
+          : '.webp';
+      targetPath = path.join(os.tmpdir(), `mario-ocr-${Date.now()}${ext}`);
+      fs.writeFileSync(targetPath, Buffer.from(match[2], 'base64'));
+      isTemp = true;
+    } else if (!fs.existsSync(targetPath)) {
+      const assetPath = path.join(assetCache.dir, path.basename(target));
+      if (fs.existsSync(assetPath)) {
+        targetPath = assetPath;
+      }
+    }
+
+    try {
+      return await runMinerUOnFile(targetPath);
+    } finally {
+      if (isTemp) {
+        try {
+          fs.unlinkSync(targetPath);
+        } catch {
+          // ignore
+        }
+      }
+    }
+  });
+
+  ipcMain.handle('ocr:pickAndRunMinerU', async () => {
+    if (!mainWindow) return null;
+    const res = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Document or Image to OCR with MinerU',
+      properties: ['openFile'],
+      filters: [
+        {
+          name: 'Documents & Images',
+          extensions: ['pdf', 'png', 'jpg', 'jpeg', 'webp', 'bmp', 'tiff'],
+        },
+      ],
+    });
+    if (res.canceled || res.filePaths.length === 0) return null;
+    const filePath = res.filePaths[0];
+    return await runMinerUOnFile(filePath);
+  });
 
   // Settings
   ipcMain.handle('settings:load', () => prefs.loadSettings());

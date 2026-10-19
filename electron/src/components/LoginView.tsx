@@ -13,6 +13,7 @@ export interface LoginViewProps {
   signingIn: boolean;
   error: string | null;
   onSignIn: () => void;
+  onSignInOffline: () => void;
 }
 
 export function LoginView({
@@ -20,6 +21,7 @@ export function LoginView({
   signingIn,
   error,
   onSignIn,
+  onSignInOffline,
 }: LoginViewProps) {
   return (
     <Window style={{ width: '100vw', height: '100vh', borderRadius: 0 }}>
@@ -76,8 +78,18 @@ export function LoginView({
                     size="large"
                     disabled={signingIn}
                     onClick={onSignIn}
+                    style={{ width: '100%', minWidth: 220 }}
                   >
                     {signingIn ? 'Signing in…' : 'Continue with Google'}
+                  </Button>
+                  <Button
+                    variant="bordered"
+                    size="large"
+                    disabled={signingIn}
+                    onClick={onSignInOffline}
+                    style={{ width: '100%', minWidth: 220 }}
+                  >
+                    Continue Offline
                   </Button>
                   {error && (
                     <p
