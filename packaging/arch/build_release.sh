@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
-# Build a Mario .pkg.tar.zst for Arch Linux.
+# Build a Mario .pkg.tar.zst for Arch Linux (Electron v2).
 #
 # Steps:
-#   1. flutter build linux --release (with OAuth dart-defines, like install.sh)
-#   2. pack build/linux/x64/release/bundle/ → mario-<version>-x86_64.tar.gz
-#   3. makepkg to produce mario-<version>-1-x86_64.pkg.tar.zst
-#
-# Run from anywhere — paths are resolved relative to this script.
-#
-# OAuth creds: same convention as scripts/install.sh
-#   - env vars MARIO_DESKTOP_CLIENT_ID / MARIO_DESKTOP_CLIENT_SECRET, or
-#   - a .env at the repo root.
+#   1. npm run build in electron/ (with OAuth credentials baked into dist-electron/main.cjs)
+#   2. pack dist/, dist-electron/, public/, package.json → mario-<version>-x86_64.tar.gz
+#   3. makepkg to produce mario-<version>-<pkgrel>-x86_64.pkg.tar.zst
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+ELECTRON_DIR="$REPO_ROOT/electron"
 
-# pkgver is sourced from the PKGBUILD so the two stay in sync — bump there.
 PKGVER="$(awk -F= '/^pkgver=/ { print $2 }' "$SCRIPT_DIR/PKGBUILD")"
 PKGREL="$(awk -F= '/^pkgrel=/ { print $2 }' "$SCRIPT_DIR/PKGBUILD")"
 
@@ -62,46 +56,44 @@ PY
 )"
 fi
 
-# ── 2. Build ─────────────────────────────────────────────────────────────
-BUNDLE="$REPO_ROOT/build/linux/x64/release/bundle"
-if [ ! -d "$BUNDLE" ] || [ "${SKIP_BUILD:-0}" != "1" ]; then
-  log "flutter pub get"
-  ( cd "$REPO_ROOT" && flutter pub get >/dev/null )
-  log "flutter build linux --release (v$PKGVER)"
-  ( cd "$REPO_ROOT" && flutter build linux --release \
-      --dart-define=MARIO_DESKTOP_CLIENT_ID="$MARIO_DESKTOP_CLIENT_ID" \
-      --dart-define=MARIO_DESKTOP_CLIENT_SECRET="$MARIO_DESKTOP_CLIENT_SECRET" )
-fi
-[ -d "$BUNDLE" ] || die "Release bundle missing at $BUNDLE"
+# ── 2. Build Electron Main & Renderer ────────────────────────────────────
+log "Building Electron app in $ELECTRON_DIR (v$PKGVER)"
+(
+  cd "$ELECTRON_DIR"
+  npm run build
+)
 
-# ── 3. Tar the bundle so PKGBUILD has something to point at ──────────────
+# ── 3. Stage & Tar the bundle ────────────────────────────────────────────
+STAGE_DIR="$(mktemp -d)"
+trap 'rm -rf "$STAGE_DIR"' EXIT
+BUNDLE_DIR="$STAGE_DIR/bundle"
+mkdir -p "$BUNDLE_DIR"
+
+cp -a "$ELECTRON_DIR/package.json" "$BUNDLE_DIR/"
+cp -a "$ELECTRON_DIR/dist" "$BUNDLE_DIR/"
+cp -a "$ELECTRON_DIR/dist-electron" "$BUNDLE_DIR/"
+cp -a "$ELECTRON_DIR/public" "$BUNDLE_DIR/"
+
 TARBALL="$SCRIPT_DIR/mario-${PKGVER}-x86_64.tar.gz"
 log "Packing $TARBALL"
-# Use a stable inner directory name ('bundle/') so PKGBUILD doesn't care
-# about the host's flutter output path.
-tar -C "$(dirname "$BUNDLE")" -czf "$TARBALL" "$(basename "$BUNDLE")"
+tar -C "$STAGE_DIR" -czf "$TARBALL" bundle
 
-# ── 4. Generate a placeholder icon if ImageMagick is available ───────────
-if command -v magick >/dev/null 2>&1; then
-  log "Generating placeholder icon"
-  magick -size 256x256 xc:none \
-    -fill '#F2C94C' -draw 'roundrectangle 0,0 255,255 56,56' \
-    -gravity center -fill white \
-    -font DejaVu-Sans-Bold -pointsize 180 -annotate -2-8 'M' \
-    "$SCRIPT_DIR/mario.png"
+# ── 4. Icon ──────────────────────────────────────────────────────────────
+if [ -f "$REPO_ROOT/assets/logo/mario_mark.png" ]; then
+  cp -f "$REPO_ROOT/assets/logo/mario_mark.png" "$SCRIPT_DIR/mario.png"
 fi
 
 # ── 5. makepkg ───────────────────────────────────────────────────────────
 log "Running makepkg in $SCRIPT_DIR"
 cd "$SCRIPT_DIR"
-makepkg -f --noconfirm
+makepkg -Cf --noconfirm
 
 PKG="mario-${PKGVER}-${PKGREL}-x86_64.pkg.tar.zst"
 if [ -f "$PKG" ]; then
   log "Done."
   echo
   echo "  Package: $SCRIPT_DIR/$PKG"
-  echo "  Install: sudo pacman -U $SCRIPT_DIR/$PKG"
+  echo "  Install: pkexec pacman -U --noconfirm $SCRIPT_DIR/$PKG"
 else
   die "makepkg finished but $PKG was not produced. Check the output above."
 fi

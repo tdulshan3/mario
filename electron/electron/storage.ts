@@ -213,6 +213,9 @@ export class KeyringStore {
 
 // ── Desktop OAuth Secrets Loader (.env + Environment Variables) ─────────────
 
+declare const __BUNDLED_CLIENT_ID__: string | undefined;
+declare const __BUNDLED_CLIENT_SECRET__: string | undefined;
+
 export interface OAuthSecrets {
   desktopClientId: string;
   desktopClientSecret: string;
@@ -223,11 +226,13 @@ export function loadOAuthSecrets(): OAuthSecrets {
     process.env.MARIO_DESKTOP_CLIENT_ID ||
     process.env.GOOGLE_CLIENT_ID ||
     process.env.DESKTOPCLIENTID ||
+    (typeof __BUNDLED_CLIENT_ID__ !== 'undefined' ? __BUNDLED_CLIENT_ID__ : '') ||
     '';
   let secret =
     process.env.MARIO_DESKTOP_CLIENT_SECRET ||
     process.env.GOOGLE_CLIENT_SECRET ||
     process.env.DESKTOPCLIENTSECRET ||
+    (typeof __BUNDLED_CLIENT_SECRET__ !== 'undefined' ? __BUNDLED_CLIENT_SECRET__ : '') ||
     '';
 
   if (id && secret) return { desktopClientId: id, desktopClientSecret: secret };

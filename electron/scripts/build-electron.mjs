@@ -5,6 +5,11 @@ import path from 'node:path';
 const root = process.cwd();
 fs.mkdirSync(path.join(root, 'dist-electron'), { recursive: true });
 
+const define = {
+  __BUNDLED_CLIENT_ID__: JSON.stringify(process.env.MARIO_DESKTOP_CLIENT_ID || ''),
+  __BUNDLED_CLIENT_SECRET__: JSON.stringify(process.env.MARIO_DESKTOP_CLIENT_SECRET || ''),
+};
+
 await esbuild.build({
   entryPoints: ['electron/main.ts'],
   bundle: true,
@@ -14,6 +19,7 @@ await esbuild.build({
   external: ['electron'],
   outfile: 'dist-electron/main.cjs',
   sourcemap: true,
+  define,
 });
 
 await esbuild.build({
@@ -28,3 +34,4 @@ await esbuild.build({
 });
 
 console.log('Built dist-electron/main.cjs and dist-electron/preload.cjs');
+
