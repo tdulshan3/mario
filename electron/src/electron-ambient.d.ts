@@ -27,6 +27,8 @@ declare module 'electron' {
     whenReady(): Promise<void>;
     on(event: string, listener: (...args: unknown[]) => void): void;
     quit(): void;
+    setName(name: string): void;
+    setDesktopName?(desktopName: string): void;
   };
 
   export const ipcMain: {

@@ -32,6 +32,9 @@ const isDemo =
   process.env.MARIO_DEMO === '1' ||
   process.argv.includes('--demo');
 
+app.setName('mario');
+app.setDesktopName?.('mario.desktop');
+
 // Services
 const prefs = new SharedPreferencesStore();
 const keyring = new KeyringStore();

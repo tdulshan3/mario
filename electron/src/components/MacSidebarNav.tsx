@@ -150,9 +150,6 @@ export function MacSidebarNav({
         {notebooks.map((nb) => {
           const sections = sectionsByNotebook[nb.id] ?? [];
           const nbOpen = (expandedNotebooks[nb.id] ?? true) || q.length > 0;
-          const nbColor =
-            NOTEBOOK_COLORS[nb.colorIndex % NOTEBOOK_COLORS.length] ??
-            NOTEBOOK_COLORS[0];
 
           const visibleSections = sections.filter((sec) => {
             if (!q) return true;
@@ -224,12 +221,6 @@ export function MacSidebarNav({
                   <SidebarItem
                     icon={nbOpen ? 'disclosure-down' : 'disclosure-right'}
                     label={nb.name}
-                    detail={
-                      <span
-                        className="mario-nb-dot"
-                        style={{ background: nbColor }}
-                      />
-                    }
                     selected={
                       activePlace === 'notebook' &&
                       selectedNotebookId === nb.id

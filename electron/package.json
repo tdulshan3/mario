@@ -1,5 +1,5 @@
 {
-  "name": "mario-electron",
+  "name": "mario",
   "version": "2.0.0",
   "description": "Mario — your notes, your world (Electron + macOS 27 UI)",
   "main": "dist-electron/main.cjs",
