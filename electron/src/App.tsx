@@ -6,6 +6,9 @@ import {
   Button,
   Column,
   FieldGrid,
+  MenuHeader,
+  MenuItem,
+  MenuSeparator,
   PopUpButton,
   Row,
   Sheet,
@@ -386,30 +389,185 @@ export function App() {
     [],
   );
 
-  // Global keyboard shortcuts
+  const handleExportMarkdown = useCallback(
+    async (targetPage?: NotePage) => {
+      const pg = targetPage ?? selectedPage;
+      if (!pg) return;
+      const loaded =
+        pg.id === selectedPage?.id
+          ? pageContent
+          : await window.mario.page.loadContent(
+              pg.id,
+              pg.driveFileId,
+              pg.title,
+            );
+      const md = `# ${pg.title || 'Untitled Page'}\n\n${documentToMarkdown(
+        loaded.document,
+      )}\n`;
+      await window.mario.exportFile.markdown(pg.title || 'note', md);
+    },
+    [selectedPage, pageContent],
+  );
+
+  const handleExportPdf = useCallback(
+    async (targetPage?: NotePage) => {
+      const pg = targetPage ?? selectedPage;
+      if (!pg) return;
+      const loaded =
+        pg.id === selectedPage?.id
+          ? pageContent
+          : await window.mario.page.loadContent(
+              pg.id,
+              pg.driveFileId,
+              pg.title,
+            );
+      const md = documentToMarkdown(loaded.document);
+      const html = buildPrintableHtml(pg.title || 'Untitled Page', md);
+      await window.mario.exportFile.pdf(pg.title || 'note', html);
+    },
+    [selectedPage, pageContent],
+  );
+
+  const handleImmediateSaveAndSync = useCallback(async () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (selectedPage) {
+      setSaveStatus('saving');
+      await window.mario.page.saveContent(
+        selectedPage.id,
+        selectedPage.driveFileId,
+        pageContent,
+      );
+      await window.mario.tree.updatePage({
+        ...selectedPage,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+    const snap = await window.mario.tree.syncNow();
+    setTree(snap);
+    setSaveStatus('saved');
+  }, [selectedPage, pageContent]);
+
+  // Global keyboard shortcuts + Ctrl+Wheel zoom
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       const cmd = e.metaKey || e.ctrlKey;
       if (!cmd) return;
       const k = e.key.toLowerCase();
-      if (k === 'k') {
+
+      // Zoom In: Ctrl + = / Ctrl + + / Ctrl + NumpadAdd
+      if (
+        e.key === '=' ||
+        e.key === '+' ||
+        e.code === 'Equal' ||
+        e.code === 'NumpadAdd'
+      ) {
+        e.preventDefault();
+        setZoom((z) => Math.min(2, Math.round((z + 0.1) * 100) / 100));
+        return;
+      }
+
+      // Zoom Out: Ctrl + - / Ctrl + _ / Ctrl + NumpadSubtract
+      if (
+        e.key === '-' ||
+        e.key === '_' ||
+        e.code === 'Minus' ||
+        e.code === 'NumpadSubtract'
+      ) {
+        e.preventDefault();
+        setZoom((z) => Math.max(0.5, Math.round((z - 0.1) * 100) / 100));
+        return;
+      }
+
+      // Reset Zoom (Actual Size 100%): Ctrl + 0 (when Alt is not held, since Ctrl+Alt+0 is Body style)
+      if ((e.key === '0' || e.code === 'Digit0' || e.code === 'Numpad0') && !e.altKey) {
+        e.preventDefault();
+        setZoom(1);
+        return;
+      }
+
+      // Search / Go to Page: Ctrl + K or Ctrl + F
+      if ((k === 'k' || k === 'f') && !e.shiftKey && !e.altKey) {
         e.preventDefault();
         setSearchSheetOpen((v) => !v);
-      } else if (k === ',') {
+        return;
+      }
+
+      // Settings: Ctrl + ,
+      if (k === ',') {
         e.preventDefault();
         setSettingsInitialPane('appearance');
         setSettingsOpen(true);
-      } else if (k === '\\') {
+        return;
+      }
+
+      // Toggle AI Assistant Inspector: Ctrl + \ or Ctrl + J
+      if (k === '\\' || (k === 'j' && !e.shiftKey && !e.altKey)) {
         e.preventDefault();
         setInspectorOpen((v) => !v);
-      } else if (k === 'n' && e.altKey) {
+        return;
+      }
+
+      // Toggle Left Sidebar: Ctrl + Shift + B
+      if (k === 'b' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        setSidebarOpen((v) => !v);
+        return;
+      }
+
+      // Immediate Save & Sync: Ctrl + S
+      if (k === 's' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        handleImmediateSaveAndSync();
+        return;
+      }
+
+      // Export Markdown: Ctrl + Shift + M
+      if (k === 'm' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        handleExportMarkdown();
+        return;
+      }
+
+      // Export PDF: Ctrl + P
+      if (k === 'p' && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        handleExportPdf();
+        return;
+      }
+
+      // New Notebook: Ctrl + Alt + N
+      if (k === 'n' && e.altKey) {
         e.preventDefault();
         setNbDialog({
           mode: 'create',
           name: '',
           colorIndex: tree.notebooks.length % NOTEBOOK_COLORS.length,
         });
-      } else if (k === 'n' && !e.altKey && !e.shiftKey) {
+        return;
+      }
+
+      // New Section: Ctrl + Shift + N
+      if (k === 'n' && e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
+        if (nbId) {
+          setSecDialog({
+            mode: 'create',
+            notebookId: nbId,
+            name: '',
+            colorIndex:
+              (tree.sectionsByNotebook[nbId]?.length ?? 0) %
+              NOTEBOOK_COLORS.length,
+          });
+        }
+        return;
+      }
+
+      // New Page: Ctrl + N
+      if (k === 'n' && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
         const secId =
@@ -420,48 +578,32 @@ export function App() {
         }
       }
     };
+
+    const onWheel = (e: WheelEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.preventDefault();
+      const step = e.deltaY < 0 ? 0.05 : -0.05;
+      setZoom((z) =>
+        Math.min(2, Math.max(0.5, Math.round((z + step) * 100) / 100)),
+      );
+    };
+
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('wheel', onWheel);
+    };
   }, [
     selectedNotebookId,
     selectedSectionId,
     tree.notebooks,
     tree.sectionsByNotebook,
     handleCreatePage,
+    handleImmediateSaveAndSync,
+    handleExportMarkdown,
+    handleExportPdf,
   ]);
-
-  const handleExportMarkdown = async (targetPage?: NotePage) => {
-    const pg = targetPage ?? selectedPage;
-    if (!pg) return;
-    const loaded =
-      pg.id === selectedPage?.id
-        ? pageContent
-        : await window.mario.page.loadContent(
-            pg.id,
-            pg.driveFileId,
-            pg.title,
-          );
-    const md = `# ${pg.title || 'Untitled Page'}\n\n${documentToMarkdown(
-      loaded.document,
-    )}\n`;
-    await window.mario.exportFile.markdown(pg.title || 'note', md);
-  };
-
-  const handleExportPdf = async (targetPage?: NotePage) => {
-    const pg = targetPage ?? selectedPage;
-    if (!pg) return;
-    const loaded =
-      pg.id === selectedPage?.id
-        ? pageContent
-        : await window.mario.page.loadContent(
-            pg.id,
-            pg.driveFileId,
-            pg.title,
-          );
-    const md = documentToMarkdown(loaded.document);
-    const html = buildPrintableHtml(pg.title || 'Untitled Page', md);
-    await window.mario.exportFile.pdf(pg.title || 'note', html);
-  };
 
   // Sign-In screen when not authenticated
   if (!user) {
@@ -741,6 +883,144 @@ export function App() {
             />
 
             <ToolbarButton
+              icon="ellipsis-circle"
+              label="View & Actions"
+              menu={
+                <>
+                  <MenuHeader>Create</MenuHeader>
+                  <MenuItem
+                    icon="square-and-pencil"
+                    shortcut="⌃N"
+                    onSelect={() => {
+                      const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
+                      const secId =
+                        selectedSectionId ??
+                        (nbId
+                          ? tree.sectionsByNotebook[nbId]?.[0]?.id
+                          : undefined);
+                      if (nbId && secId) handleCreatePage(nbId, secId);
+                    }}
+                  >
+                    New Page
+                  </MenuItem>
+                  <MenuItem
+                    icon="folder"
+                    shortcut="⇧⌃N"
+                    onSelect={() => {
+                      const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
+                      if (nbId) {
+                        setSecDialog({
+                          mode: 'create',
+                          notebookId: nbId,
+                          name: '',
+                          colorIndex:
+                            (tree.sectionsByNotebook[nbId]?.length ?? 0) %
+                            NOTEBOOK_COLORS.length,
+                        });
+                      }
+                    }}
+                  >
+                    New Section…
+                  </MenuItem>
+                  <MenuItem
+                    icon="book"
+                    shortcut="⌃⌥N"
+                    onSelect={() =>
+                      setNbDialog({
+                        mode: 'create',
+                        name: '',
+                        colorIndex:
+                          tree.notebooks.length % NOTEBOOK_COLORS.length,
+                      })
+                    }
+                  >
+                    New Notebook…
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuHeader>View & Zoom</MenuHeader>
+                  <MenuItem
+                    icon="plus-circle"
+                    shortcut="⌃+"
+                    onSelect={() =>
+                      setZoom((z) =>
+                        Math.min(2, Math.round((z + 0.1) * 100) / 100),
+                      )
+                    }
+                  >
+                    Zoom In
+                  </MenuItem>
+                  <MenuItem
+                    icon="minus-circle"
+                    shortcut="⌃-"
+                    onSelect={() =>
+                      setZoom((z) =>
+                        Math.max(0.5, Math.round((z - 0.1) * 100) / 100),
+                      )
+                    }
+                  >
+                    Zoom Out
+                  </MenuItem>
+                  <MenuItem
+                    icon="magnifyingglass"
+                    shortcut="⌃0"
+                    onSelect={() => setZoom(1)}
+                  >
+                    Actual Size ({Math.round(zoom * 100)}%)
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuItem
+                    checked={sidebarOpen}
+                    shortcut="⇧⌃B"
+                    onSelect={() => setSidebarOpen((v) => !v)}
+                  >
+                    Show Sidebar
+                  </MenuItem>
+                  <MenuItem
+                    checked={inspectorOpen}
+                    shortcut="⌃\"
+                    onSelect={() => setInspectorOpen((v) => !v)}
+                  >
+                    Show AI Assistant
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuHeader>Page & Sync</MenuHeader>
+                  <MenuItem
+                    icon="arrow-clockwise"
+                    shortcut="⌃S"
+                    onSelect={() => handleImmediateSaveAndSync()}
+                  >
+                    Save & Sync Now
+                  </MenuItem>
+                  <MenuItem
+                    icon="doc-text"
+                    shortcut="⇧⌃M"
+                    onSelect={() => handleExportMarkdown()}
+                  >
+                    Export as Markdown (.md)…
+                  </MenuItem>
+                  <MenuItem
+                    icon="printer"
+                    shortcut="⌃P"
+                    onSelect={() => handleExportPdf()}
+                  >
+                    Export as PDF (.pdf)…
+                  </MenuItem>
+                  <MenuSeparator />
+                  <MenuItem
+                    icon="gear"
+                    shortcut="⌃,"
+                    onSelect={() => {
+                      setSettingsInitialPane('appearance');
+                      setSettingsOpen(true);
+                    }}
+                  >
+                    Settings…
+                  </MenuItem>
+                </>
+              }
+            />
+
+            <ToolbarButton
               icon="gear"
               label="Settings (Ctrl+,)"
               onClick={() => {
@@ -760,6 +1040,7 @@ export function App() {
           <WindowBody>
             {activePlace === 'page' && selectedPage ? (
               <BlockEditor
+                key={selectedPage.id}
                 pageTitle={selectedPage.title}
                 onTitleChange={handleTitleChange}
                 content={pageContent}

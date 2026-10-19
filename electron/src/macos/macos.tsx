@@ -19,6 +19,7 @@
  *   - Docs: references/frameworks/react.md. Templates: assets/react/templates/.
  */
 import {
+  Fragment,
   createContext,
   useCallback,
   useContext,
@@ -36,7 +37,6 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   type RefObject,
-  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
 } from 'react';
 
@@ -856,7 +856,17 @@ export function Checkbox({ indeterminate, ...props }: CheckboxProps) {
   );
 }
 
-export type Option = string | { value: string; label?: string; disabled?: boolean };
+export type Option =
+  | string
+  | {
+      value: string;
+      label?: string;
+      disabled?: boolean;
+      icon?: IconName;
+      shortcut?: string;
+      separatorAbove?: boolean;
+      headerAbove?: string;
+    };
 const optValue = (o: Option) => (typeof o === 'string' ? o : o.value);
 const optLabel = (o: Option): string => (typeof o === 'string' ? o : o.label ?? o.value);
 const optDisabled = (o: Option) => (typeof o === 'string' ? false : !!o.disabled);
@@ -901,7 +911,7 @@ export function RadioGroup({ options, value, defaultValue = '', onChange, label,
 // Pop-up button, segmented control (pop-up-buttons.md, segmented-controls.md)
 // ---------------------------------------------------------------------------------------------------
 
-export interface PopUpButtonProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'onChange' | 'value' | 'defaultValue' | 'size'> {
+export interface PopUpButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'value' | 'defaultValue' | 'children'> {
   options: Option[];
   value?: string;
   defaultValue?: string;
@@ -912,14 +922,48 @@ export interface PopUpButtonProps extends Omit<SelectHTMLAttributes<HTMLSelectEl
 export function PopUpButton({ options, value, defaultValue, onChange, size, className, id, ...rest }: PopUpButtonProps) {
   const [current, setCurrent] = useControllable(value, defaultValue ?? (options[0] != null ? optValue(options[0]) : ''), onChange);
   const fieldId = useFieldId(id);
+  const popup = usePopup('menu');
+  const selectedOpt = options.find(o => optValue(o) === current) ?? options[0];
+  const currentLabel = selectedOpt != null ? optLabel(selectedOpt) : String(current ?? '');
   return (
-    <select id={fieldId} className={cx('mac-popup', sizeClass(size), className)} value={current} onChange={e => setCurrent(e.target.value)} {...rest}>
-      {options.map(o => (
-        <option key={optValue(o)} value={optValue(o)} disabled={optDisabled(o)}>
-          {optLabel(o)}
-        </option>
-      ))}
-    </select>
+    <>
+      <button
+        ref={popup.triggerRef}
+        id={fieldId}
+        type="button"
+        className={cx('mac-popup', sizeClass(size), className)}
+        {...popup.triggerProps}
+        {...rest}
+      >
+        {currentLabel}
+      </button>
+      <MenuPanel popup={popup}>
+        {options.map(o => {
+          const val = optValue(o);
+          const lbl = optLabel(o);
+          const dis = optDisabled(o);
+          const icn = typeof o === 'object' ? o.icon : undefined;
+          const sc = typeof o === 'object' ? o.shortcut : undefined;
+          const sep = typeof o === 'object' ? o.separatorAbove : false;
+          const hdr = typeof o === 'object' ? o.headerAbove : undefined;
+          return (
+            <Fragment key={val}>
+              {sep && <MenuSeparator />}
+              {hdr && <MenuHeader>{hdr}</MenuHeader>}
+              <MenuItem
+                checked={val === current}
+                disabled={dis}
+                icon={icn}
+                shortcut={sc}
+                onSelect={() => setCurrent(val)}
+              >
+                {lbl}
+              </MenuItem>
+            </Fragment>
+          );
+        })}
+      </MenuPanel>
+    </>
   );
 }
 

@@ -4,9 +4,11 @@ import hljs from 'highlight.js';
 import {
   Button,
   Checkbox,
+  MenuHeader,
   MenuItem,
   PopUpButton,
   Spacer,
+  type IconName,
 } from '../macos/macos';
 import type {
   AppFlowyNode,
@@ -68,38 +70,108 @@ const SLASH_ITEMS: Array<{
   kind: InsertBlockKind;
   label: string;
   keywords: string;
+  icon: IconName;
+  shortcut?: string;
 }> = [
-  { kind: 'heading1', label: 'Heading 1', keywords: 'h1 title heading1' },
-  { kind: 'heading2', label: 'Heading 2', keywords: 'h2 subtitle heading2' },
-  { kind: 'heading3', label: 'Heading 3', keywords: 'h3 subheading heading3' },
-  { kind: 'bulleted_list', label: 'Bulleted List', keywords: 'bullet ul list' },
-  { kind: 'numbered_list', label: 'Numbered List', keywords: 'number ol list' },
-  { kind: 'todo_list', label: 'Checklist / To-Do', keywords: 'todo check task' },
-  { kind: 'quote', label: 'Quote Block', keywords: 'quote blockquote' },
-  { kind: 'code', label: 'Code Block', keywords: 'code snippet pre' },
+  {
+    kind: 'heading1',
+    label: 'Heading 1',
+    keywords: 'h1 title heading1',
+    icon: 'book',
+    shortcut: '⌃⌥1',
+  },
+  {
+    kind: 'heading2',
+    label: 'Heading 2',
+    keywords: 'h2 subtitle heading2',
+    icon: 'book',
+    shortcut: '⌃⌥2',
+  },
+  {
+    kind: 'heading3',
+    label: 'Heading 3',
+    keywords: 'h3 subheading heading3',
+    icon: 'book',
+    shortcut: '⌃⌥3',
+  },
+  {
+    kind: 'bulleted_list',
+    label: 'Bulleted List',
+    keywords: 'bullet ul list',
+    icon: 'list-bullet',
+    shortcut: '⇧⌃8',
+  },
+  {
+    kind: 'numbered_list',
+    label: 'Numbered List',
+    keywords: 'number ol list',
+    icon: 'line-3-horizontal',
+    shortcut: '⇧⌃7',
+  },
+  {
+    kind: 'todo_list',
+    label: 'Checklist / To-Do',
+    keywords: 'todo check task',
+    icon: 'checkmark-circle-fill',
+    shortcut: '⇧⌃9',
+  },
+  {
+    kind: 'quote',
+    label: 'Quote Block',
+    keywords: 'quote blockquote',
+    icon: 'bubble-left',
+    shortcut: '⇧⌃Q',
+  },
+  {
+    kind: 'code',
+    label: 'Code Block',
+    keywords: 'code snippet pre',
+    icon: 'cpu',
+    shortcut: '⌃⌥C',
+  },
   {
     kind: 'math_equation',
     label: 'Math Equation (LaTeX)',
     keywords: 'math latex katex formula equation',
+    icon: 'command',
+    shortcut: '⌃⌥M',
   },
-  { kind: 'table', label: 'Table (3×3)', keywords: 'table grid' },
+  {
+    kind: 'table',
+    label: 'Table (3×3)',
+    keywords: 'table grid',
+    icon: 'square-grid',
+  },
   {
     kind: 'spreadsheet',
     label: 'Spreadsheet (Formulas)',
     keywords: 'sheet excel spreadsheet formula sum',
+    icon: 'chart-bar',
   },
   {
     kind: 'drawing',
     label: 'Drawing Canvas',
     keywords: 'draw sketch ink canvas pen',
+    icon: 'pencil-tip-circle',
   },
   {
     kind: 'audio_clip',
     label: 'Audio Voice Clip',
     keywords: 'audio voice mic record',
+    icon: 'mic',
   },
-  { kind: 'image', label: 'Image…', keywords: 'image photo picture' },
-  { kind: 'divider', label: 'Horizontal Divider', keywords: 'divider hr line' },
+  {
+    kind: 'image',
+    label: 'Image…',
+    keywords: 'image photo picture',
+    icon: 'photo',
+  },
+  {
+    kind: 'divider',
+    label: 'Horizontal Divider',
+    keywords: 'divider hr line',
+    icon: 'minus',
+  },
 ];
 
 function ImageBlockView({
@@ -503,6 +575,9 @@ export function BlockEditor({
   const inputRefs = useRef<
     Record<string, HTMLTextAreaElement | HTMLInputElement | null>
   >({});
+  const undoStackRef = useRef<PageContent[]>([]);
+  const redoStackRef = useRef<PageContent[]>([]);
+  const [, setHistoryTick] = useState(0);
 
   useEffect(() => {
     if (rawHtmlOverride) {
@@ -526,16 +601,55 @@ export function BlockEditor({
   const activeAlign: BlockAlign =
     (focusedNode?.data?.align as BlockAlign) ?? 'left';
 
+  const commitContent = (nextContent: PageContent) => {
+    const prevStack = undoStackRef.current;
+    if (prevStack.length >= 60) prevStack.shift();
+    prevStack.push(content);
+    redoStackRef.current = [];
+    setHistoryTick((t) => t + 1);
+    onContentChange(nextContent);
+  };
+
+  const handleUndo = () => {
+    const prev = undoStackRef.current.pop();
+    if (!prev) return;
+    redoStackRef.current.push(content);
+    setHistoryTick((t) => t + 1);
+    onContentChange(prev);
+  };
+
+  const handleRedo = () => {
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+    undoStackRef.current.push(content);
+    setHistoryTick((t) => t + 1);
+    onContentChange(next);
+  };
+
   const commitNodes = (nextNodes: AppFlowyNode[]) => {
     const safeNodes =
       nextNodes.length > 0 ? nextNodes : [makeParagraphNode('')];
-    onContentChange({
+    commitContent({
       ...content,
       document: {
         type: 'page',
         children: safeNodes,
       },
     });
+  };
+
+  const moveBlock = (id: string | undefined, delta: -1 | 1) => {
+    if (!id) return;
+    const idx = nodes.findIndex((n) => n.id === id);
+    const targetIdx = idx + delta;
+    if (idx < 0 || targetIdx < 0 || targetIdx >= nodes.length) return;
+    const next = [...nodes];
+    const [moved] = next.splice(idx, 1);
+    if (!moved) return;
+    next.splice(targetIdx, 0, moved);
+    commitNodes(next);
+    setFocusedBlockId(id);
+    setTimeout(() => inputRefs.current[id]?.focus(), 10);
   };
 
   const updateNode = (
@@ -924,7 +1038,28 @@ export function BlockEditor({
   let numberedIndex = 0;
 
   return (
-    <div className="mario-editor-shell">
+    <div
+      className="mario-editor-shell"
+      onKeyDown={(e) => {
+        const cmd = e.metaKey || e.ctrlKey;
+        if (!cmd) return;
+        const k = e.key.toLowerCase();
+        if (k === 'z' && !e.shiftKey && !e.altKey) {
+          if (undoStackRef.current.length > 0) {
+            e.preventDefault();
+            handleUndo();
+          }
+        } else if (
+          (k === 'z' && e.shiftKey && !e.altKey) ||
+          (k === 'y' && !e.shiftKey && !e.altKey)
+        ) {
+          if (redoStackRef.current.length > 0) {
+            e.preventDefault();
+            handleRedo();
+          }
+        }
+      }}
+    >
       <MacFormatBar
         activeBlockStyle={activeBlockStyle}
         onBlockStyleChange={handleBlockStyleChange}
@@ -940,6 +1075,10 @@ export function BlockEditor({
         onInsertBlock={(kind) => handleInsertBlock(kind)}
         zoom={zoom}
         onZoomChange={onZoomChange}
+        canUndo={undoStackRef.current.length > 0}
+        canRedo={redoStackRef.current.length > 0}
+        onUndo={handleUndo}
+        onRedo={handleRedo}
         drawMode={drawMode}
         onToggleDrawMode={() => setDrawMode((d) => !d)}
         htmlPreviewOpen={htmlPreviewOpen}
@@ -1524,19 +1663,137 @@ export function BlockEditor({
                   }
 
                   const cmd = e.metaKey || e.ctrlKey;
-                  if (cmd && e.key.toLowerCase() === 'b') {
+                  const k = e.key.toLowerCase();
+
+                  if (cmd && !e.altKey && !e.shiftKey && k === 'b') {
                     e.preventDefault();
                     applyInlineSelectionMark('bold');
                     return;
                   }
-                  if (cmd && e.key.toLowerCase() === 'i') {
+                  if (cmd && !e.altKey && !e.shiftKey && k === 'i') {
                     e.preventDefault();
                     applyInlineSelectionMark('italic');
                     return;
                   }
-                  if (cmd && e.key.toLowerCase() === 'u') {
+                  if (cmd && !e.altKey && !e.shiftKey && k === 'u') {
                     e.preventDefault();
                     applyInlineSelectionMark('underline');
+                    return;
+                  }
+                  if (cmd && !e.altKey && e.shiftKey && k === 'x') {
+                    e.preventDefault();
+                    applyInlineSelectionMark('strikethrough');
+                    return;
+                  }
+                  if (cmd && !e.altKey && !e.shiftKey && k === 'e') {
+                    e.preventDefault();
+                    applyInlineSelectionMark('code');
+                    return;
+                  }
+
+                  // Block style shortcuts (Ctrl+Alt+0/1/2/3/C/M, Ctrl+Shift+7/8/9/Q)
+                  if (cmd && e.altKey && !e.shiftKey) {
+                    if (k === '0') {
+                      e.preventDefault();
+                      handleBlockStyleChange('paragraph');
+                      return;
+                    }
+                    if (k === '1') {
+                      e.preventDefault();
+                      handleBlockStyleChange('heading-1');
+                      return;
+                    }
+                    if (k === '2') {
+                      e.preventDefault();
+                      handleBlockStyleChange('heading-2');
+                      return;
+                    }
+                    if (k === '3') {
+                      e.preventDefault();
+                      handleBlockStyleChange('heading-3');
+                      return;
+                    }
+                    if (k === 'c') {
+                      e.preventDefault();
+                      handleBlockStyleChange('code');
+                      return;
+                    }
+                    if (k === 'm') {
+                      e.preventDefault();
+                      handleInsertBlock('math_equation');
+                      return;
+                    }
+                  }
+
+                  if (cmd && e.shiftKey && !e.altKey) {
+                    if (e.code === 'Digit8' || k === '8' || k === '*') {
+                      e.preventDefault();
+                      handleBlockStyleChange('bulleted_list');
+                      return;
+                    }
+                    if (e.code === 'Digit7' || k === '7' || k === '&') {
+                      e.preventDefault();
+                      handleBlockStyleChange('numbered_list');
+                      return;
+                    }
+                    if (e.code === 'Digit9' || k === '9' || k === '(') {
+                      e.preventDefault();
+                      handleBlockStyleChange('todo_list');
+                      return;
+                    }
+                    if (k === 'q') {
+                      e.preventDefault();
+                      handleBlockStyleChange('quote');
+                      return;
+                    }
+                    if (k === 'l') {
+                      e.preventDefault();
+                      handleAlignChange('left');
+                      return;
+                    }
+                    if (k === 'e') {
+                      e.preventDefault();
+                      handleAlignChange('center');
+                      return;
+                    }
+                    if (k === 'r') {
+                      e.preventDefault();
+                      handleAlignChange('right');
+                      return;
+                    }
+                    if (k === 'j') {
+                      e.preventDefault();
+                      handleAlignChange('justify');
+                      return;
+                    }
+                  }
+
+                  // Ctrl+Enter toggles checklist item
+                  if (cmd && e.key === 'Enter') {
+                    e.preventDefault();
+                    if (node.type === 'todo_list') {
+                      updateNode(nodeId, (prev) => ({
+                        ...prev,
+                        data: {
+                          ...prev.data,
+                          checked: !Boolean(prev.data?.checked),
+                        },
+                      }));
+                    } else {
+                      insertAfter(nodeId, makeParagraphNode(''));
+                    }
+                    return;
+                  }
+
+                  // Alt+ArrowUp / Alt+ArrowDown moves the focused block up or down
+                  if (e.altKey && !cmd && e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    moveBlock(nodeId, -1);
+                    return;
+                  }
+                  if (e.altKey && !cmd && e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    moveBlock(nodeId, 1);
                     return;
                   }
 
@@ -1771,6 +2028,7 @@ export function BlockEditor({
           style={{ left: slashState.x, top: slashState.y }}
           role="menu"
         >
+          <MenuHeader>Insert Block</MenuHeader>
           {SLASH_ITEMS.filter(
             (item) =>
               !slashState.query ||
@@ -1779,6 +2037,8 @@ export function BlockEditor({
           ).map((item) => (
             <MenuItem
               key={item.kind}
+              icon={item.icon}
+              shortcut={item.shortcut}
               onSelect={() => handleInsertBlock(item.kind, slashState.blockId)}
             >
               {item.label}
