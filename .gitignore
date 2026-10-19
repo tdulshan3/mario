@@ -61,3 +61,10 @@ third_party/webview_cef/third/cef/
 
 # Written by Dart DevTools when it is opened; not project configuration.
 devtools_options.yaml
+
+# Electron v2 build & dependencies
+electron/node_modules/
+electron/dist/
+electron/dist-electron/
+electron/release/
+
