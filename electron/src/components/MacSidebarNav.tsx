@@ -3,12 +3,14 @@ import {
   Button,
   ContextMenu,
   Icon,
+  MenuHeader,
   MenuItem,
   MenuSeparator,
+  PullDownButton,
   SearchField,
-  Sidebar,
   SidebarItem,
   SidebarSection,
+  type IconName,
 } from '../macos/macos';
 import type { Notebook, NotePage, Section } from '../shared/types';
 
@@ -37,6 +39,9 @@ export interface MacSidebarNavProps {
   selectedPageId: string | null;
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
+  /** Changes waiting to be uploaded, shown next to Sync Now. */
+  syncPending: number;
+  onSyncNow: () => void;
   onSelectRecents: () => void;
   onSelectNotebook: (notebookId: string) => void;
   onSelectSection: (notebookId: string, sectionId: string) => void;
@@ -52,16 +57,57 @@ export interface MacSidebarNavProps {
   onDeletePage: (page: NotePage) => void;
   onExportPageMarkdown: (page: NotePage) => void;
   onExportPagePdf: (page: NotePage) => void;
-  onReorderNotebooks?: (ordered: Notebook[]) => void;
   onReorderSections?: (notebookId: string, ordered: Section[]) => void;
-  onReorderPages?: (
-    notebookId: string,
-    sectionId: string,
-    ordered: NotePage[],
-  ) => void;
-  onOpenSettings: () => void;
+  onReorderPages?: (notebookId: string, sectionId: string, ordered: NotePage[]) => void;
 }
 
+interface RowProps {
+  icon: IconName;
+  label: string;
+  detail?: number;
+  selected: boolean;
+  onClick: () => void;
+  menu: React.ReactNode;
+  drag?: React.LiHTMLAttributes<HTMLLIElement>;
+}
+
+/** A kit sidebar row (`mac-sidebar__item`) that can also be dragged and right-clicked. */
+function Row({ icon, label, detail, selected, onClick, menu, drag }: RowProps) {
+  return (
+    <li {...drag}>
+      <ContextMenu menu={menu}>
+        <button
+          type="button"
+          className="mac-sidebar__item"
+          aria-current={selected ? 'page' : undefined}
+          onClick={onClick}
+        >
+          <Icon name={icon} />
+          <span className="mac-sidebar__label">{label}</span>
+          {detail != null && detail > 0 && <span className="mac-sidebar__detail">{detail}</span>}
+        </button>
+      </ContextMenu>
+    </li>
+  );
+}
+
+/** Moves `fromId` to where `toId` is and renumbers `order`. */
+function reorder<T extends { id: string; order: number }>(items: T[], fromId: string, toId: string): T[] | null {
+  const next = [...items];
+  const from = next.findIndex((x) => x.id === fromId);
+  const to = next.findIndex((x) => x.id === toId);
+  if (from < 0 || to < 0 || from === to) return null;
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next.map((item, idx) => ({ ...item, order: idx }));
+}
+
+/**
+ * The sidebar shows one notebook at a time, as OneNote does: its sections, and
+ * the pages of the open section one level in. Switching notebooks and the
+ * notebook commands people use less (new, settings, sync, delete) live in the
+ * notebook pull-down at the top.
+ */
 export function MacSidebarNav({
   notebooks,
   sectionsByNotebook,
@@ -72,6 +118,8 @@ export function MacSidebarNav({
   selectedPageId,
   searchQuery,
   onSearchQueryChange,
+  syncPending,
+  onSyncNow,
   onSelectRecents,
   onSelectNotebook,
   onSelectSection,
@@ -87,383 +135,196 @@ export function MacSidebarNav({
   onDeletePage,
   onExportPageMarkdown,
   onExportPagePdf,
-  onReorderNotebooks,
   onReorderSections,
   onReorderPages,
-  onOpenSettings,
 }: MacSidebarNavProps) {
-  const [openNotebookId, setOpenNotebookId] = useState<string | null>(
-    () => selectedNotebookId ?? notebooks[0]?.id ?? null,
-  );
-
-  React.useEffect(() => {
-    if (selectedNotebookId) {
-      setOpenNotebookId(selectedNotebookId);
-    }
-  }, [selectedNotebookId]);
-
-  const [expandedSections, setExpandedSections] = useState<
-    Record<string, boolean>
-  >({});
-  const [dragNbId, setDragNbId] = useState<string | null>(null);
   const [dragSecId, setDragSecId] = useState<string | null>(null);
   const [dragPageId, setDragPageId] = useState<string | null>(null);
 
+  const notebook = notebooks.find((n) => n.id === selectedNotebookId) ?? notebooks[0] ?? null;
+  const sections = notebook ? (sectionsByNotebook[notebook.id] ?? []) : [];
+  const pagesOf = (nbId: string, secId: string) => pagesByKey[`${nbId}/${secId}`] ?? [];
   const q = searchQuery.trim().toLowerCase();
 
-  const toggleNotebook = (nbId: string) => {
-    setOpenNotebookId((prev) => (prev === nbId ? null : nbId));
+  /** Opening a section opens its first page, as OneNote does. */
+  const openSection = (nbId: string, sec: Section) => {
+    const first = pagesOf(nbId, sec.id)[0];
+    if (first) onSelectPage(nbId, sec.id, first.id);
+    else onSelectSection(nbId, sec.id);
   };
 
-  const toggleSection = (secId: string) => {
-    setExpandedSections((prev) => ({
-      ...prev,
-      [secId]: !(prev[secId] ?? true),
-    }));
+  const openNotebook = (nb: Notebook) => {
+    const secs = sectionsByNotebook[nb.id] ?? [];
+    const sec = secs.find((s) => pagesOf(nb.id, s.id).length > 0) ?? secs[0];
+    if (sec) openSection(nb.id, sec);
+    else onSelectNotebook(nb.id);
   };
+
+  const sectionInView = sections.some((s) => s.id === selectedSectionId);
+  const newPageSection = sections.find((s) => s.id === selectedSectionId) ?? sections[0];
 
   return (
-    <Sidebar
-      width={248}
-      label="Notebooks"
-      style={{ display: 'flex', flexDirection: 'column' }}
-    >
-      <div style={{ padding: '10px 10px 4px' }}>
-        <SearchField
-          value={searchQuery}
-          onChange={onSearchQueryChange}
-          placeholder="Filter pages…"
-          label="Filter pages"
-        />
-      </div>
-
-      <SidebarSection>
-        <SidebarItem
-          icon="clock"
-          label="Recents"
-          selected={activePlace === 'recents'}
-          onClick={onSelectRecents}
-        />
-      </SidebarSection>
-
-      <SidebarSection title="Notebooks">
-        {notebooks.map((nb) => {
-          const sections = sectionsByNotebook[nb.id] ?? [];
-          const nbOpen = openNotebookId === nb.id || q.length > 0;
-
-          const visibleSections = sections.filter((sec) => {
-            if (!q) return true;
-            if (
-              nb.name.toLowerCase().includes(q) ||
-              sec.name.toLowerCase().includes(q)
-            ) {
-              return true;
+    // The kit sidebar's own markup, with a footer under the scrolling body.
+    <nav className="mac-sidebar mario-sidebar" aria-label="Notebook">
+      <div className="mac-sidebar__body mac-scroll">
+        <div className="mario-notebook-picker">
+          <PullDownButton
+            aria-label="Notebook"
+            className="mario-notebook-picker__button"
+            label={
+              <>
+                <Icon name="book" /> {notebook?.name ?? 'No Notebook'}
+              </>
             }
-            const pages = pagesByKey[`${nb.id}/${sec.id}`] ?? [];
-            return pages.some((p) => p.title.toLowerCase().includes(q));
-          });
+          >
+            {notebooks.length > 0 && <MenuHeader>Notebooks</MenuHeader>}
+            {notebooks.map((nb) => (
+              <MenuItem key={nb.id} checked={nb.id === notebook?.id} onSelect={() => openNotebook(nb)}>
+                {nb.name}
+              </MenuItem>
+            ))}
+            {notebooks.length > 0 && <MenuSeparator />}
+            <MenuItem icon="plus" shortcut="⌃⌥N" onSelect={onNewNotebook}>
+              New Notebook…
+            </MenuItem>
+            {notebook && (
+              <>
+                <MenuItem icon="pencil" onSelect={() => onEditNotebook(notebook)}>
+                  Notebook Settings…
+                </MenuItem>
+                <MenuItem icon="arrow-clockwise" shortcut="⌃S" onSelect={onSyncNow}>
+                  {syncPending > 0 ? `Sync Now (${syncPending} waiting)` : 'Sync Now'}
+                </MenuItem>
+                <MenuSeparator />
+                <MenuItem icon="trash" onSelect={() => onDeleteNotebook(notebook)}>
+                  Delete Notebook…
+                </MenuItem>
+              </>
+            )}
+          </PullDownButton>
+        </div>
 
-          if (
-            q &&
-            !nb.name.toLowerCase().includes(q) &&
-            visibleSections.length === 0
-          ) {
-            return null;
-          }
+        <div className="mario-sidebar-filter">
+          <SearchField
+            value={searchQuery}
+            onChange={onSearchQueryChange}
+            placeholder="Filter pages"
+            label="Filter pages in this notebook"
+          />
+        </div>
 
-          return (
-            <React.Fragment key={nb.id}>
-              <div
-                draggable
-                onDragStart={() => setDragNbId(nb.id)}
-                onDragOver={(e) => e.preventDefault()}
-                onDrop={() => {
-                  if (!dragNbId || dragNbId === nb.id || !onReorderNotebooks)
-                    return;
-                  const next = [...notebooks];
-                  const fromIdx = next.findIndex((x) => x.id === dragNbId);
-                  const toIdx = next.findIndex((x) => x.id === nb.id);
-                  if (fromIdx >= 0 && toIdx >= 0) {
-                    const [moved] = next.splice(fromIdx, 1);
-                    next.splice(toIdx, 0, moved);
-                    onReorderNotebooks(
-                      next.map((item, idx) => ({ ...item, order: idx })),
-                    );
-                  }
-                  setDragNbId(null);
-                }}
-              >
-                <ContextMenu
-                  menu={
-                    <>
-                      <MenuItem
-                        icon="plus"
-                        onSelect={() => onNewSection(nb.id)}
-                      >
-                        New Section…
-                      </MenuItem>
-                      <MenuItem
-                        icon="pencil"
-                        onSelect={() => onEditNotebook(nb)}
-                      >
-                        Edit Notebook…
-                      </MenuItem>
-                      <MenuSeparator />
-                      <MenuItem
-                        icon="trash"
-                        onSelect={() => onDeleteNotebook(nb)}
-                      >
-                        Delete Notebook…
-                      </MenuItem>
-                    </>
-                  }
-                >
-                  <SidebarItem
-                    icon={nbOpen ? 'disclosure-down' : 'disclosure-right'}
-                    label={nb.name}
-                    selected={
-                      activePlace === 'notebook' &&
-                      selectedNotebookId === nb.id
-                    }
-                    onClick={() => {
-                      if (openNotebookId === nb.id) {
-                        toggleNotebook(nb.id);
-                      } else {
-                        setOpenNotebookId(nb.id);
-                        onSelectNotebook(nb.id);
-                      }
+        <SidebarSection>
+          <SidebarItem icon="clock" label="Recents" selected={activePlace === 'recents'} onClick={onSelectRecents} />
+        </SidebarSection>
+
+        {notebook && (
+          <SidebarSection title="Sections">
+            {sections.map((sec) => {
+              const pages = pagesOf(notebook.id, sec.id);
+              const shownPages = q
+                ? pages.filter((p) => (p.title || 'Untitled Page').toLowerCase().includes(q))
+                : pages;
+              if (q && shownPages.length === 0 && !sec.name.toLowerCase().includes(q)) return null;
+              // The open section shows its pages; while filtering, every section with a match does.
+              const open = q ? shownPages.length > 0 : sec.id === selectedSectionId || (!sectionInView && sec === sections[0]);
+              return (
+                <React.Fragment key={sec.id}>
+                  <Row
+                    icon="folder"
+                    label={sec.name}
+                    detail={pages.length}
+                    selected={activePlace === 'section' && selectedSectionId === sec.id}
+                    onClick={() => openSection(notebook.id, sec)}
+                    drag={{
+                      draggable: true,
+                      onDragStart: () => setDragSecId(sec.id),
+                      onDragOver: (e) => dragSecId && e.preventDefault(),
+                      onDrop: () => {
+                        const next = dragSecId ? reorder(sections, dragSecId, sec.id) : null;
+                        if (next) onReorderSections?.(notebook.id, next);
+                        setDragSecId(null);
+                      },
                     }}
+                    menu={
+                      <>
+                        <MenuItem icon="plus" onSelect={() => onNewPage(notebook.id, sec.id)}>
+                          New Page
+                        </MenuItem>
+                        <MenuItem icon="pencil" onSelect={() => onEditSection(sec)}>
+                          Section Settings…
+                        </MenuItem>
+                        <MenuSeparator />
+                        <MenuItem icon="trash" onSelect={() => onDeleteSection(sec)}>
+                          Delete Section…
+                        </MenuItem>
+                      </>
+                    }
                   />
-                </ContextMenu>
-              </div>
-
-              {nbOpen && (
-                <div className="mario-sidebar-sublist">
-                  {visibleSections.map((sec) => {
-                    const key = `${nb.id}/${sec.id}`;
-                    const pages = (pagesByKey[key] ?? []).filter(
-                      (p) =>
-                        !q ||
-                        p.title.toLowerCase().includes(q) ||
-                        sec.name.toLowerCase().includes(q) ||
-                        nb.name.toLowerCase().includes(q),
-                    );
-                    const secOpen =
-                      (expandedSections[sec.id] ?? true) || q.length > 0;
-
-                    return (
-                      <React.Fragment key={sec.id}>
-                        <div
-                          draggable
-                          onDragStart={() => setDragSecId(sec.id)}
-                          onDragOver={(e) => e.preventDefault()}
-                          onDrop={() => {
-                            if (
-                              !dragSecId ||
-                              dragSecId === sec.id ||
-                              !onReorderSections
-                            )
-                              return;
-                            const next = [...sections];
-                            const fromIdx = next.findIndex(
-                              (x) => x.id === dragSecId,
-                            );
-                            const toIdx = next.findIndex(
-                              (x) => x.id === sec.id,
-                            );
-                            if (fromIdx >= 0 && toIdx >= 0) {
-                              const [moved] = next.splice(fromIdx, 1);
-                              next.splice(toIdx, 0, moved);
-                              onReorderSections(
-                                nb.id,
-                                next.map((item, idx) => ({
-                                  ...item,
-                                  order: idx,
-                                })),
-                              );
-                            }
-                            setDragSecId(null);
-                          }}
-                        >
-                          <ContextMenu
+                  {open && shownPages.length > 0 && (
+                    <li>
+                      <ul className="mac-sidebar__list" style={{ '--mac-sidebar-level': '12px' } as React.CSSProperties}>
+                        {shownPages.map((page) => (
+                          <Row
+                            key={page.id}
+                            icon="doc-text"
+                            label={page.title || 'Untitled Page'}
+                            selected={activePlace === 'page' && selectedPageId === page.id}
+                            onClick={() => onSelectPage(notebook.id, sec.id, page.id)}
+                            drag={{
+                              draggable: true,
+                              onDragStart: () => setDragPageId(page.id),
+                              onDragOver: (e) => dragPageId && e.preventDefault(),
+                              onDrop: () => {
+                                const next = dragPageId ? reorder(pages, dragPageId, page.id) : null;
+                                if (next) onReorderPages?.(notebook.id, sec.id, next);
+                                setDragPageId(null);
+                              },
+                            }}
                             menu={
                               <>
-                                <MenuItem
-                                  icon="plus"
-                                  onSelect={() => onNewPage(nb.id, sec.id)}
-                                >
-                                  New Page
+                                <MenuItem icon="pencil" onSelect={() => onRenamePage(page)}>
+                                  Rename…
                                 </MenuItem>
-                                <MenuItem
-                                  icon="pencil"
-                                  onSelect={() => onEditSection(sec)}
-                                >
-                                  Edit Section…
+                                <MenuItem icon="square-and-arrow-up" onSelect={() => onExportPageMarkdown(page)}>
+                                  Export as Markdown…
+                                </MenuItem>
+                                <MenuItem icon="printer" onSelect={() => onExportPagePdf(page)}>
+                                  Export as PDF…
                                 </MenuItem>
                                 <MenuSeparator />
-                                <MenuItem
-                                  icon="trash"
-                                  onSelect={() => onDeleteSection(sec)}
-                                >
-                                  Delete Section…
+                                <MenuItem icon="trash" onSelect={() => onDeletePage(page)}>
+                                  Delete Page…
                                 </MenuItem>
                               </>
                             }
-                          >
-                            <SidebarItem
-                              icon="folder"
-                              label={sec.name}
-                              detail={pages.length > 0 ? pages.length : undefined}
-                              selected={
-                                activePlace === 'section' &&
-                                selectedSectionId === sec.id
-                              }
-                              onClick={() => {
-                                if (selectedSectionId === sec.id) {
-                                  toggleSection(sec.id);
-                                } else {
-                                  setExpandedSections((p) => ({
-                                    ...p,
-                                    [sec.id]: true,
-                                  }));
-                                  onSelectSection(nb.id, sec.id);
-                                }
-                              }}
-                            />
-                          </ContextMenu>
-                        </div>
-
-                        {secOpen && (
-                          <div className="mario-sidebar-sublist">
-                            {pages.map((page) => (
-                              <div
-                                key={page.id}
-                                draggable
-                                onDragStart={() => setDragPageId(page.id)}
-                                onDragOver={(e) => e.preventDefault()}
-                                onDrop={() => {
-                                  if (
-                                    !dragPageId ||
-                                    dragPageId === page.id ||
-                                    !onReorderPages
-                                  )
-                                    return;
-                                  const allPages = [
-                                    ...(pagesByKey[key] ?? []),
-                                  ];
-                                  const fromIdx = allPages.findIndex(
-                                    (x) => x.id === dragPageId,
-                                  );
-                                  const toIdx = allPages.findIndex(
-                                    (x) => x.id === page.id,
-                                  );
-                                  if (fromIdx >= 0 && toIdx >= 0) {
-                                    const [moved] = allPages.splice(
-                                      fromIdx,
-                                      1,
-                                    );
-                                    allPages.splice(toIdx, 0, moved);
-                                    onReorderPages(
-                                      nb.id,
-                                      sec.id,
-                                      allPages.map((item, idx) => ({
-                                        ...item,
-                                        order: idx,
-                                      })),
-                                    );
-                                  }
-                                  setDragPageId(null);
-                                }}
-                              >
-                                <ContextMenu
-                                  menu={
-                                    <>
-                                      <MenuItem
-                                        icon="pencil"
-                                        onSelect={() => onRenamePage(page)}
-                                      >
-                                        Rename…
-                                      </MenuItem>
-                                      <MenuItem
-                                        icon="square-and-arrow-up"
-                                        onSelect={() =>
-                                          onExportPageMarkdown(page)
-                                        }
-                                      >
-                                        Export as Markdown…
-                                      </MenuItem>
-                                      <MenuItem
-                                        icon="printer"
-                                        onSelect={() => onExportPagePdf(page)}
-                                      >
-                                        Export as PDF…
-                                      </MenuItem>
-                                      <MenuSeparator />
-                                      <MenuItem
-                                        icon="trash"
-                                        onSelect={() => onDeletePage(page)}
-                                      >
-                                        Delete Page…
-                                      </MenuItem>
-                                    </>
-                                  }
-                                >
-                                  <SidebarItem
-                                    icon="doc-text"
-                                    label={page.title || 'Untitled Page'}
-                                    selected={
-                                      activePlace === 'page' &&
-                                      selectedPageId === page.id
-                                    }
-                                    onClick={() =>
-                                      onSelectPage(nb.id, sec.id, page.id)
-                                    }
-                                  />
-                                </ContextMenu>
-                              </div>
-                            ))}
-                            <div className="mario-sidebar-add-row">
-                              <button
-                                type="button"
-                                className="mario-sidebar-add-btn mario-sidebar-add-btn--page"
-                                onClick={() => onNewPage(nb.id, sec.id)}
-                              >
-                                <Icon name="plus" />
-                                <span>New Page</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-                      </React.Fragment>
-                    );
-                  })}
-                  <div className="mario-sidebar-add-row">
-                    <button
-                      type="button"
-                      className="mario-sidebar-add-btn"
-                      onClick={() => onNewSection(nb.id)}
-                    >
-                      <Icon name="plus" />
-                      <span>New Section</span>
-                    </button>
-                  </div>
-                </div>
-              )}
-            </React.Fragment>
-          );
-        })}
-      </SidebarSection>
-
-      <div className="mario-sidebar-footer">
-        <Button
-          variant="borderless"
-          size="small"
-          icon="plus"
-          onClick={onNewNotebook}
-        >
-          New Notebook
-        </Button>
+                          />
+                        ))}
+                      </ul>
+                    </li>
+                  )}
+                </React.Fragment>
+              );
+            })}
+          </SidebarSection>
+        )}
       </div>
-    </Sidebar>
+
+      {notebook && (
+        <div className="mario-sidebar-footer">
+          <Button
+            variant="borderless"
+            size="small"
+            icon="square-and-pencil"
+            disabled={!newPageSection}
+            onClick={() => newPageSection && onNewPage(notebook.id, newPageSection.id)}
+          >
+            New Page
+          </Button>
+          <Button variant="borderless" size="small" icon="plus" onClick={() => onNewSection(notebook.id)}>
+            New Section
+          </Button>
+        </div>
+      )}
+    </nav>
   );
 }

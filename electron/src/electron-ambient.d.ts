@@ -9,6 +9,11 @@ declare module 'electron' {
     webContents: {
       send(channel: string, ...args: unknown[]): void;
       once(event: string, listener: (...args: unknown[]) => void): void;
+      on(
+        event: 'will-navigate',
+        listener: (event: { preventDefault(): void }, url: string) => void,
+      ): void;
+      getURL(): string;
       capturePage(): Promise<{ toPNG(): Buffer }>;
       executeJavaScript(code: string): Promise<unknown>;
       setWindowOpenHandler(

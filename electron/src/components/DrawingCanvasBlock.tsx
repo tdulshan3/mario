@@ -162,7 +162,7 @@ export function DrawingCanvasBlock({
   };
 
   const toolbar = (
-    <div className="mario-rich-card__header">
+    <div className={overlay ? 'mario-ink-toolbar' : 'mario-block-bar'} contentEditable={false}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <SegmentedControl
           size="small"
@@ -224,9 +224,10 @@ export function DrawingCanvasBlock({
           <Button
             size="small"
             variant="borderless"
+            icon="arrow-down"
             onClick={() => onChange(strokes, Math.min(640, height + 80))}
           >
-            +Height
+            Taller
           </Button>
         )}
         {onDelete && (
@@ -274,16 +275,16 @@ export function DrawingCanvasBlock({
   }
 
   return (
-    <div className="mario-rich-card">
+    <>
       {toolbar}
       <canvas
         ref={canvasRef}
-        className="mario-drawing-canvas"
+        className="mario-drawing-canvas mario-drawing-canvas--block"
         style={{ height }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       />
-    </div>
+    </>
   );
 }

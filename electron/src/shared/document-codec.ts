@@ -8,6 +8,7 @@ import {
   WorkbookData,
 } from './types';
 import { nanoid6 } from './ids';
+import { Lexer } from 'marked';
 
 export const EMOJI_MAP: Record<string, string> = {
   tada: '🎉',
@@ -136,56 +137,329 @@ export function deltaToPlainText(delta?: DeltaOp[]): string {
   return delta.map((op) => (typeof op.insert === 'string' ? op.insert : '')).join('');
 }
 
-export function deltaToMarkdown(delta?: DeltaOp[]): string {
-  if (!Array.isArray(delta) || delta.length === 0) return '';
-  return delta
-    .map((op) => {
-      const text = typeof op.insert === 'string' ? op.insert : '';
-      if (!text) return '';
-      const a = op.attributes;
-      if (!a) return text;
-      let out = text;
-      if (a.code) out = `\`${out}\``;
-      if (a.bold) out = `**${out}**`;
-      if (a.italic) out = `*${out}*`;
-      if (a.strikethrough) out = `~~${out}~~`;
-      if (a.underline) out = `<u>${out}</u>`;
-      if (a.href) out = `[${out}](${a.href})`;
-      return out;
-    })
-    .join('');
+// ── Inline Markdown ⇄ Delta ─────────────────────────────────────────────────
+// Inline Markdown is read with marked's CommonMark/GFM inline lexer, so emphasis
+// follows the same flanking rules as VS Code's preview: `snake_case_name` and
+// `2 * 3 * 4` stay plain and `**bold *italic* bold**` nests. `$…$` math is cut
+// out first, so `_` and `*` inside a formula are never read as emphasis; it
+// stays in the delta as literal `$…$` text, which the editor renders with KaTeX.
+
+/** Delta attributes that Markdown can express; the rest (colours, fonts) it can't. */
+const MARKDOWN_ATTRS = ['bold', 'italic', 'strikethrough', 'underline', 'code', 'href'] as const;
+
+export interface InlineMathSpan {
+  start: number;
+  end: number;
+  tex: string;
+  display: boolean;
 }
+
+/** Finds `$…$` / `$$…$$` spans outside code spans, with pandoc's rules: no space
+ *  just inside either `$`, and a closing `$` is not followed by a digit — so
+ *  "costs $5 and $10" is not math. */
+export function findInlineMath(text: string): InlineMathSpan[] {
+  const spans: InlineMathSpan[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === '\\') {
+      i += 2;
+      continue;
+    }
+    if (ch === '`') {
+      let n = 1;
+      while (text[i + n] === '`') n++;
+      let j = i + n;
+      let closed = -1;
+      while (j < text.length) {
+        if (text[j] === '`') {
+          let m = 1;
+          while (text[j + m] === '`') m++;
+          if (m === n) {
+            closed = j + m;
+            break;
+          }
+          j += m;
+        } else j++;
+      }
+      i = closed > 0 ? closed : i + n;
+      continue;
+    }
+    if (ch === '$') {
+      const span = matchMathAt(text, i);
+      if (span) {
+        spans.push(span);
+        i = span.end;
+        continue;
+      }
+      i += text[i + 1] === '$' ? 2 : 1;
+      continue;
+    }
+    i++;
+  }
+  return spans;
+}
+
+/** The math span that starts exactly at `i` (a `$`), if there is one. */
+export function matchMathAt(text: string, i: number): InlineMathSpan | null {
+  if (text[i] !== '$') return null;
+  if (text[i + 1] === '$') {
+    const close = text.indexOf('$$', i + 2);
+    return close > i + 2
+      ? { start: i, end: close + 2, tex: text.slice(i + 2, close), display: true }
+      : null;
+  }
+  const next = text[i + 1];
+  if (!next || /\s/.test(next)) return null;
+  let j = i + 1;
+  while (j < text.length && text[j] !== '$' && text[j] !== '\n') {
+    j += text[j] === '\\' ? 2 : 1;
+  }
+  if (j < text.length && text[j] === '$' && !/\s/.test(text[j - 1]) && !/\d/.test(text[j + 1] ?? '')) {
+    return { start: i, end: j + 1, tex: text.slice(i + 1, j), display: false };
+  }
+  return null;
+}
+
+function cleanAttributes(attrs: DeltaAttributes): DeltaAttributes | undefined {
+  const out: DeltaAttributes = {};
+  for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false || v === '') continue;
+    out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sameAttributes(a?: DeltaAttributes, b?: DeltaAttributes): boolean {
+  const ka = Object.keys(a ?? {}).sort();
+  const kb = Object.keys(b ?? {}).sort();
+  if (ka.length !== kb.length) return false;
+  return ka.every((k, i) => k === kb[i] && JSON.stringify(a![k]) === JSON.stringify(b![k]));
+}
+
+/** Joins neighbouring ops that carry the same attributes and drops empty ones. */
+export function mergeDeltaOps(ops: DeltaOp[]): DeltaOp[] {
+  const out: DeltaOp[] = [];
+  for (const op of ops) {
+    if (typeof op.insert !== 'string' || op.insert === '') continue;
+    const attributes = op.attributes ? cleanAttributes(op.attributes) : undefined;
+    const prev = out[out.length - 1];
+    if (prev && sameAttributes(prev.attributes, attributes)) {
+      prev.insert += op.insert;
+    } else {
+      out.push(attributes ? { insert: op.insert, attributes } : { insert: op.insert });
+    }
+  }
+  return out;
+}
+
+type InlineToken = {
+  type: string;
+  raw: string;
+  text?: string;
+  href?: string;
+  tokens?: InlineToken[];
+};
 
 export function parseInlineMarkdownToDelta(line: string): DeltaOp[] {
   const expanded = expandEmojiShortcodes(line);
   if (!expanded) return [];
+
+  // Swap math for private-use placeholders the lexer reads as plain letters.
+  const math = findInlineMath(expanded);
+  let src = '';
+  let last = 0;
+  math.forEach((m, idx) => {
+    src += expanded.slice(last, m.start) + '' + String.fromCharCode(0xe100 + idx) + '';
+    last = m.end;
+  });
+  src += expanded.slice(last);
+  const restoreMath = (text: string) =>
+    text.replace(/([-])/g, (_, c: string) => {
+      const m = math[c.charCodeAt(0) - 0xe100];
+      return m ? expanded.slice(m.start, m.end) : '';
+    });
+
+  const hasClosedUnderline = /<u>[\s\S]*?<\/u>/i.test(src);
+  let underline = false;
   const ops: DeltaOp[] = [];
-  // Tokenize links, inline code, bold, italic, strikethrough
-  const pattern =
-    /(\[([^\]]+)\]\(([^)]+)\)|`([^`]+)`|\*\*([^*]+)\*\*|__([^_]+)__|~~([^~]+)~~|\*([^*]+)\*|_([^_]+)_)/g;
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(expanded)) !== null) {
-    if (match.index > lastIndex) {
-      ops.push({ insert: expanded.slice(lastIndex, match.index) });
+  const push = (text: string | undefined, attrs: DeltaAttributes) => {
+    if (!text) return;
+    ops.push({
+      insert: restoreMath(text),
+      attributes: underline ? { ...attrs, underline: true } : attrs,
+    });
+  };
+  const walk = (tokens: InlineToken[], attrs: DeltaAttributes) => {
+    for (const t of tokens) {
+      switch (t.type) {
+        case 'strong':
+          walk(t.tokens ?? [], { ...attrs, bold: true });
+          break;
+        case 'em':
+          walk(t.tokens ?? [], { ...attrs, italic: true });
+          break;
+        case 'del':
+          walk(t.tokens ?? [], { ...attrs, strikethrough: true });
+          break;
+        case 'codespan':
+          push(t.text, { ...attrs, code: true });
+          break;
+        case 'link':
+          walk(t.tokens ?? [], { ...attrs, href: t.href });
+          break;
+        case 'br':
+          push('\n', attrs);
+          break;
+        case 'escape':
+          push(t.text, attrs);
+          break;
+        case 'html':
+          if (hasClosedUnderline && /^<u>$/i.test(t.raw)) underline = true;
+          else if (hasClosedUnderline && /^<\/u>$/i.test(t.raw)) underline = false;
+          else if (/^<br\s*\/?>$/i.test(t.raw)) push('\n', attrs);
+          else push(t.raw, attrs);
+          break;
+        case 'text':
+          if (t.tokens && t.tokens.length > 0) walk(t.tokens, attrs);
+          else push(t.text ?? t.raw, attrs);
+          break;
+        default:
+          // Images and anything else inline stay as their literal source.
+          push(t.raw, attrs);
+      }
     }
-    if (match[2] !== undefined && match[3] !== undefined) {
-      ops.push({ insert: match[2], attributes: { href: match[3] } });
-    } else if (match[4] !== undefined) {
-      ops.push({ insert: match[4], attributes: { code: true } });
-    } else if (match[5] !== undefined || match[6] !== undefined) {
-      ops.push({ insert: match[5] ?? match[6], attributes: { bold: true } });
-    } else if (match[7] !== undefined) {
-      ops.push({ insert: match[7], attributes: { strikethrough: true } });
-    } else if (match[8] !== undefined || match[9] !== undefined) {
-      ops.push({ insert: match[8] ?? match[9], attributes: { italic: true } });
+  };
+  walk(Lexer.lexInline(src) as unknown as InlineToken[], {});
+  const merged = mergeDeltaOps(ops);
+  return merged.length > 0 ? merged : [{ insert: expanded }];
+}
+
+type OpenMark = {
+  key: 'href' | 'bold' | 'italic' | 'strikethrough' | 'underline';
+  value?: string;
+  delim?: string;
+};
+const MARK_ORDER: OpenMark['key'][] = ['href', 'bold', 'italic', 'strikethrough', 'underline'];
+
+/** Opens a mark. Emphasis right after a `*` run opens with `_` instead, or the
+ *  two runs would merge into one ambiguous `****`. */
+function openToken(m: OpenMark, before: string): string {
+  switch (m.key) {
+    case 'href':
+      return '[';
+    case 'bold':
+      m.delim = before.endsWith('*') ? '__' : '**';
+      return m.delim;
+    case 'italic':
+      m.delim = before.endsWith('*') ? '_' : '*';
+      return m.delim;
+    case 'strikethrough':
+      return '~~';
+    case 'underline':
+      return '<u>';
+  }
+}
+
+function closeToken(m: OpenMark): string {
+  switch (m.key) {
+    case 'href': {
+      const href = m.value ?? '';
+      return /[\s()<>]/.test(href) ? `](<${href}>)` : `](${href})`;
     }
-    lastIndex = pattern.lastIndex;
+    case 'bold':
+    case 'italic':
+      return m.delim ?? (m.key === 'bold' ? '**' : '*');
+    case 'strikethrough':
+      return '~~';
+    case 'underline':
+      return '</u>';
   }
-  if (lastIndex < expanded.length) {
-    ops.push({ insert: expanded.slice(lastIndex) });
+}
+
+function codeSpan(text: string): string {
+  let longest = 0;
+  for (const run of text.match(/`+/g) ?? []) longest = Math.max(longest, run.length);
+  const fence = '`'.repeat(longest + 1);
+  const pad = /^[`\s]|[`\s]$/.test(text) ? ' ' : '';
+  return `${fence}${pad}${text}${pad}${fence}`;
+}
+
+const escapeMarkdownText = (text: string) => text.replace(/([\\`*_~[\]<>$])/g, '\\$1');
+
+function serializeInline(ops: DeltaOp[], escapePlain: boolean): string {
+  // Emphasis can't open or close against a space (`**bold **` is literal), so
+  // the spaces at the edges of a bold/italic/struck run move outside it.
+  const split: DeltaOp[] = [];
+  for (const op of ops) {
+    const a = op.attributes ?? {};
+    if (!a.code && (a.bold || a.italic || a.strikethrough)) {
+      const m = /^(\s*)([\s\S]*?)(\s*)$/.exec(op.insert)!;
+      const plain = { ...a, bold: undefined, italic: undefined, strikethrough: undefined };
+      if (m[1]) split.push({ insert: m[1], attributes: plain });
+      if (m[2]) split.push({ insert: m[2], attributes: a });
+      if (m[3]) split.push({ insert: m[3], attributes: plain });
+    } else split.push(op);
   }
-  return ops.length > 0 ? ops : [{ insert: expanded }];
+
+  let out = '';
+  const stack: OpenMark[] = [];
+  const same = (x: OpenMark, y: OpenMark) => x.key === y.key && x.value === y.value;
+  for (const op of mergeDeltaOps(split)) {
+    const a = op.attributes ?? {};
+    const desired: OpenMark[] = MARK_ORDER.filter((k) => a[k]).map(
+      (key): OpenMark => (key === 'href' ? { key, value: String(a.href) } : { key }),
+    );
+    // A bare URL that links to itself stays a bare URL (GFM autolinks it).
+    const autolink =
+      desired.length === 1 &&
+      desired[0].key === 'href' &&
+      !a.code &&
+      desired[0].value === op.insert &&
+      /^https?:\/\/[^\s<>]+$/.test(op.insert);
+    let keep = 0;
+    while (keep < stack.length && desired.some((d) => same(d, stack[keep]))) keep++;
+    for (let k = stack.length - 1; k >= keep; k--) out += closeToken(stack[k]);
+    stack.length = keep;
+    if (autolink) {
+      out += op.insert;
+      continue;
+    }
+    for (const d of desired) {
+      if (!stack.some((s) => same(s, d))) {
+        out += openToken(d, out);
+        stack.push(d);
+      }
+    }
+    out += a.code ? codeSpan(op.insert) : escapePlain ? escapeMarkdownText(op.insert) : op.insert;
+  }
+  for (let k = stack.length - 1; k >= 0; k--) out += closeToken(stack[k]);
+  return out;
+}
+
+function markdownView(delta: DeltaOp[]): DeltaOp[] {
+  return mergeDeltaOps(
+    delta.map((op) => {
+      const attributes: Record<string, unknown> = {};
+      for (const k of MARKDOWN_ATTRS) if (op.attributes?.[k]) attributes[k] = op.attributes[k];
+      return { insert: op.insert, attributes };
+    }),
+  );
+}
+
+/** Delta → inline Markdown that parses back to the same delta. Plain text is
+ *  written as-is when that already round-trips, and escaped only when it
+ *  wouldn't (a literal `*a*` typed as text, say). Colours have no Markdown. */
+export function deltaToMarkdown(delta?: DeltaOp[]): string {
+  if (!Array.isArray(delta) || delta.length === 0) return '';
+  const ops = markdownView(delta);
+  const plain = serializeInline(ops, false);
+  const roundTrips = (md: string) => {
+    const back = markdownView(parseInlineMarkdownToDelta(md));
+    return back.length === ops.length && back.every((op, i) => op.insert === ops[i].insert && sameAttributes(op.attributes, ops[i].attributes));
+  };
+  if (roundTrips(plain)) return plain;
+  return serializeInline(ops, true);
 }
 
 export function extractTableRowsFromNode(node: AppFlowyNode): string[][] {
@@ -243,6 +517,29 @@ export function buildTableNodeFromRows(rows: string[][]): AppFlowyNode {
 }
 
 /**
+ * AppFlowy nests indented blocks as `children`; Mario's editor keeps blocks flat
+ * with `data.indent`. Flattens the first into the second (tables keep their
+ * cells), so both read the same everywhere.
+ */
+export function flattenNodes(nodes: AppFlowyNode[], depth = 0): AppFlowyNode[] {
+  const out: AppFlowyNode[] = [];
+  for (const node of nodes) {
+    if (node.type === 'table') {
+      out.push(node);
+      continue;
+    }
+    const indent = Number(node.data?.indent ?? 0) + depth;
+    const { children, ...rest } = node;
+    const data = { ...(node.data ?? {}) };
+    if (indent > 0) data.indent = indent;
+    else delete data.indent;
+    out.push({ ...rest, data });
+    if (children && children.length > 0) out.push(...flattenNodes(children, indent + 1));
+  }
+  return out;
+}
+
+/**
  * Converts a Mario/AppFlowy Document JSON into clean Markdown.
  * Fixes the Flutter bug where `/code` blocks threw `Delta is null` and where
  * `math_equation`, `drawing`, `spreadsheet`, and `audio_clip` were dropped!
@@ -252,7 +549,9 @@ export function documentToMarkdown(docOrWrapper: AppFlowyDocument | PageContent)
     'document' in docOrWrapper ? docOrWrapper.document : docOrWrapper;
   const lines: string[] = [];
 
-  for (const node of doc?.children ?? []) {
+  for (const node of flattenNodes(doc?.children ?? [])) {
+    // Four spaces per level nest under both "- " and "1. " items.
+    const pad = '    '.repeat(Number(node.data?.indent ?? 0));
     switch (node.type) {
       case 'heading': {
         const level = Math.min(6, Math.max(1, Number(node.data?.level ?? 2)));
@@ -265,17 +564,17 @@ export function documentToMarkdown(docOrWrapper: AppFlowyDocument | PageContent)
         break;
       }
       case 'bulleted_list': {
-        lines.push(`- ${deltaToMarkdown(node.data?.delta)}`);
+        lines.push(`${pad}- ${deltaToMarkdown(node.data?.delta)}`);
         break;
       }
       case 'numbered_list': {
         const num = node.data?.number ?? 1;
-        lines.push(`${num}. ${deltaToMarkdown(node.data?.delta)}`);
+        lines.push(`${pad}${num}. ${deltaToMarkdown(node.data?.delta)}`);
         break;
       }
       case 'todo_list': {
         const mark = node.data?.checked ? 'x' : ' ';
-        lines.push(`- [${mark}] ${deltaToMarkdown(node.data?.delta)}`);
+        lines.push(`${pad}- [${mark}] ${deltaToMarkdown(node.data?.delta)}`);
         break;
       }
       case 'quote': {
@@ -398,6 +697,16 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
   const nodes: AppFlowyNode[] = [];
   const rawLines = markdown.replace(/\r\n/g, '\n').split('\n');
   let i = 0;
+  // Leading-space columns of the open list levels: a deeper column nests one level.
+  let listColumns: number[] = [];
+  const listIndent = (line: string): number => {
+    const lead = (/^[ \t]*/.exec(line)?.[0] ?? '').replace(/\t/g, '    ').length;
+    while (listColumns.length > 0 && lead < listColumns[listColumns.length - 1]) listColumns.pop();
+    if (listColumns.length === 0 || lead > listColumns[listColumns.length - 1]) listColumns.push(lead);
+    return listColumns.length - 1;
+  };
+  const withIndent = (data: AppFlowyNode['data'], indent: number) =>
+    indent > 0 ? { ...data, indent } : data;
 
   while (i < rawLines.length) {
     const line = rawLines[i];
@@ -407,22 +716,37 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
       i++;
       continue;
     }
+    if (!/^([-*+]|\d+[.)])\s/.test(trimmed)) listColumns = [];
 
     // Fenced code block
-    if (trimmed.startsWith('```')) {
-      const lang = trimmed.slice(3).trim() || 'plaintext';
+    const fence = /^(`{3,}|~{3,})(.*)$/.exec(trimmed);
+    if (fence) {
+      const lang = fence[2].trim() || 'plaintext';
       i++;
       const codeLines: string[] = [];
-      while (i < rawLines.length && !rawLines[i].trim().startsWith('```')) {
+      while (i < rawLines.length && !rawLines[i].trim().startsWith(fence[1])) {
         codeLines.push(rawLines[i]);
         i++;
       }
       if (i < rawLines.length) i++;
+      const code = codeLines.join('\n');
       nodes.push({
         id: nanoid6(),
         type: 'code',
-        data: { language: lang, code: codeLines.join('\n') },
+        data: { language: lang, code, delta: [{ insert: code }] },
       });
+      continue;
+    }
+
+    // A line that is only an image
+    const imageMatch = /^!\[([^\]]*)\]\(<?([^)\s>]+)>?(?:\s+"[^"]*")?\)$/.exec(trimmed);
+    if (imageMatch) {
+      nodes.push({
+        id: nanoid6(),
+        type: 'image',
+        data: { url: imageMatch[2], width: 520, align: 'center' },
+      });
+      i++;
       continue;
     }
 
@@ -503,10 +827,13 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
       nodes.push({
         id: nanoid6(),
         type: 'todo_list',
-        data: {
-          checked: todoMatch[1].toLowerCase() === 'x',
-          delta: parseInlineMarkdownToDelta(todoMatch[2]),
-        },
+        data: withIndent(
+          {
+            checked: todoMatch[1].toLowerCase() === 'x',
+            delta: parseInlineMarkdownToDelta(todoMatch[2]),
+          },
+          listIndent(line),
+        ),
       });
       i++;
       continue;
@@ -518,7 +845,10 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
       nodes.push({
         id: nanoid6(),
         type: 'bulleted_list',
-        data: { delta: parseInlineMarkdownToDelta(bulletMatch[1]) },
+        data: withIndent(
+          { delta: parseInlineMarkdownToDelta(bulletMatch[1]) },
+          listIndent(line),
+        ),
       });
       i++;
       continue;
@@ -530,10 +860,13 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
       nodes.push({
         id: nanoid6(),
         type: 'numbered_list',
-        data: {
-          number: parseInt(numMatch[1], 10),
-          delta: parseInlineMarkdownToDelta(numMatch[2]),
-        },
+        data: withIndent(
+          {
+            number: parseInt(numMatch[1], 10),
+            delta: parseInlineMarkdownToDelta(numMatch[2]),
+          },
+          listIndent(line),
+        ),
       });
       i++;
       continue;
@@ -579,7 +912,7 @@ export function markdownToNodes(markdown: string): AppFlowyNode[] {
     nodes.push({
       id: nanoid6(),
       type: 'paragraph',
-      data: { delta: parseInlineMarkdownToDelta(line) },
+      data: { delta: parseInlineMarkdownToDelta(trimmed) },
     });
     i++;
   }

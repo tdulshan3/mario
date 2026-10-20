@@ -1,26 +1,21 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { marked } from 'marked';
-import katex from 'katex';
 import {
   Alert,
   Button,
   Column,
   FieldGrid,
-  MenuHeader,
-  MenuItem,
-  MenuSeparator,
   PopUpButton,
   Row,
   Sheet,
   TextField,
   Titlebar,
   ToolbarButton,
-  ToolbarGroup,
   Window,
   WindowBody,
   WindowMain,
 } from './macos/macos';
 import type {
+  AiCommand,
   AuthUser,
   CollaboratorRole,
   Notebook,
@@ -34,8 +29,8 @@ import {
   defaultSettings,
   documentToMarkdown,
   emptyPageContent,
-  normalizeLatexFormula,
 } from './shared/document-codec';
+import { renderMarkdownStandalone } from './shared/markdown-render';
 import { LoginView } from './components/LoginView';
 import {
   MacSidebarNav,
@@ -45,28 +40,32 @@ import {
 import { MacBrowserTable } from './components/MacBrowserTable';
 import { BlockEditor } from './components/BlockEditor';
 import { AiInspectorPanel } from './components/AiInspectorPanel';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import {
   SettingsWindow,
   type SettingsPane,
 } from './components/SettingsWindow';
 import { GlobalSearchSheet } from './components/GlobalSearchSheet';
 
-function buildPrintableHtml(title: string, md: string): string {
-  const withDisplayMath = md.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) =>
-    katex.renderToString(normalizeLatexFormula(String(tex).trim()), {
-      displayMode: true,
-      throwOnError: false,
-    }),
-  );
-  const withInlineMath = withDisplayMath.replace(
-    /\$([^$\n]+?)\$/g,
-    (_, tex) =>
-      katex.renderToString(normalizeLatexFormula(String(tex).trim()), {
-        displayMode: false,
-        throwOnError: false,
-      }),
-  );
-  const bodyHtml = String(marked.parse(withInlineMath, { async: false }));
+/** Below this window width the AI inspector collapses so the page keeps room. */
+const INSPECTOR_MIN_WINDOW_WIDTH = 1080;
+
+function findPageInSnapshot(snap: TreeSnapshot, pageId: string): NotePage | null {
+  for (const pages of Object.values(snap.pagesBySection)) {
+    const hit = pages.find((p) => p.id === pageId);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildPrintableHtml(rawTitle: string, md: string): string {
+  // Printed pages have no KaTeX stylesheet: math goes out as MathML.
+  const bodyHtml = renderMarkdownStandalone(md);
+  const title = escapeHtml(rawTitle);
   return `<!doctype html>
 <html>
 <head>
@@ -126,7 +125,21 @@ export function App() {
 
   // Navigation selection
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const [inspectorOpen, setInspectorOpen] = useState(
+    () => window.innerWidth >= INSPECTOR_MIN_WINDOW_WIDTH,
+  );
+  // Like a Mac split view, the inspector gives way first when the window gets
+  // narrow; it comes back only when the user shows it again.
+  useEffect(() => {
+    let wide = window.innerWidth >= INSPECTOR_MIN_WINDOW_WIDTH;
+    const onResize = () => {
+      const nowWide = window.innerWidth >= INSPECTOR_MIN_WINDOW_WIDTH;
+      if (wide && !nowWide) setInspectorOpen(false);
+      wide = nowWide;
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   const [activePlace, setActivePlace] = useState<SidebarPlace>('page');
   const [selectedNotebookId, setSelectedNotebookId] = useState<string | null>(
     null,
@@ -138,6 +151,8 @@ export function App() {
   const [sidebarSearch, setSidebarSearch] = useState('');
 
   // Open page content
+  // Which page `pageContent` belongs to: the editor waits until it is the selected one.
+  const [contentPageId, setContentPageId] = useState<string | null>(null);
   const [pageContent, setPageContent] = useState<PageContent>(() =>
     emptyPageContent(),
   );
@@ -145,6 +160,9 @@ export function App() {
     'saved',
   );
   const [rawHtmlOverride, setRawHtmlOverride] = useState<string | null>(null);
+  // A highlighted passage the next question is about, and the editor's AI slash commands.
+  const [aiQuote, setAiQuote] = useState<string | null>(null);
+  const [aiCommand, setAiCommand] = useState<AiCommand | null>(null);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Sheets & Alerts
@@ -303,6 +321,7 @@ export function App() {
     }
     let cancelled = false;
     setRawHtmlOverride(null);
+    setAiQuote(null);
     window.mario.page
       .loadContent(
         selectedPage.id,
@@ -312,6 +331,7 @@ export function App() {
       .then((loaded) => {
         if (!cancelled) {
           setPageContent(loaded);
+          setContentPageId(selectedPage.id);
           setSaveStatus('saved');
         }
       });
@@ -330,13 +350,14 @@ export function App() {
       const targetPage = selectedPage;
       saveTimerRef.current = setTimeout(async () => {
         setSaveStatus('saving');
-        await window.mario.page.saveContent(
-          targetPage.id,
-          targetPage.driveFileId,
-          next,
-        );
+        // The page record may have changed since the keystroke (a new title, a
+        // Drive id from sync): stamp the current one, not the captured copy.
+        const latest =
+          findPageInSnapshot(await window.mario.tree.getSnapshot(), targetPage.id) ??
+          targetPage;
+        await window.mario.page.saveContent(latest.id, latest.driveFileId, next);
         const updatedPage: NotePage = {
-          ...targetPage,
+          ...latest,
           updatedAt: new Date().toISOString(),
         };
         await window.mario.tree.updatePage(updatedPage);
@@ -709,6 +730,8 @@ export function App() {
             selectedPageId={selectedPageId}
             searchQuery={sidebarSearch}
             onSearchQueryChange={setSidebarSearch}
+            syncPending={tree.syncStatus.pendingChanges}
+            onSyncNow={() => void handleImmediateSaveAndSync()}
             onSelectRecents={() => setActivePlace('recents')}
             onSelectNotebook={(nbId) => {
               setSelectedNotebookId(nbId);
@@ -806,13 +829,6 @@ export function App() {
             }
             onExportPageMarkdown={(pg) => handleExportMarkdown(pg)}
             onExportPagePdf={(pg) => handleExportPdf(pg)}
-            onReorderNotebooks={async (ordered) => {
-              for (const nb of ordered) {
-                await window.mario.tree.updateNotebook(nb);
-              }
-              const snap = await window.mario.tree.getSnapshot();
-              setTree(snap);
-            }}
             onReorderSections={async (_, ordered) => {
               for (const sec of ordered) {
                 await window.mario.tree.updateSection(sec);
@@ -826,10 +842,6 @@ export function App() {
               }
               const snap = await window.mario.tree.getSnapshot();
               setTree(snap);
-            }}
-            onOpenSettings={() => {
-              setSettingsInitialPane('appearance');
-              setSettingsOpen(true);
             }}
           />
         )}
@@ -854,157 +866,6 @@ export function App() {
             />
 
             <ToolbarButton
-              icon="arrow-clockwise"
-              label={
-                tree.syncStatus.pendingChanges > 0
-                  ? `Sync (${tree.syncStatus.pendingChanges} pending)`
-                  : 'Sync with Cloud'
-              }
-              onClick={async () => {
-                const snap = await window.mario.tree.syncNow();
-                setTree(snap);
-              }}
-            />
-
-            <ToolbarButton
-              icon="ellipsis-circle"
-              label="View & Actions"
-              menu={
-                <>
-                  <MenuHeader>Create</MenuHeader>
-                  <MenuItem
-                    icon="square-and-pencil"
-                    shortcut="⌃N"
-                    onSelect={() => {
-                      const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
-                      const secId =
-                        selectedSectionId ??
-                        (nbId
-                          ? tree.sectionsByNotebook[nbId]?.[0]?.id
-                          : undefined);
-                      if (nbId && secId) handleCreatePage(nbId, secId);
-                    }}
-                  >
-                    New Page
-                  </MenuItem>
-                  <MenuItem
-                    icon="folder"
-                    shortcut="⇧⌃N"
-                    onSelect={() => {
-                      const nbId = selectedNotebookId ?? tree.notebooks[0]?.id;
-                      if (nbId) {
-                        setSecDialog({
-                          mode: 'create',
-                          notebookId: nbId,
-                          name: '',
-                          colorIndex:
-                            (tree.sectionsByNotebook[nbId]?.length ?? 0) %
-                            NOTEBOOK_COLORS.length,
-                        });
-                      }
-                    }}
-                  >
-                    New Section…
-                  </MenuItem>
-                  <MenuItem
-                    icon="book"
-                    shortcut="⌃⌥N"
-                    onSelect={() =>
-                      setNbDialog({
-                        mode: 'create',
-                        name: '',
-                        colorIndex:
-                          tree.notebooks.length % NOTEBOOK_COLORS.length,
-                      })
-                    }
-                  >
-                    New Notebook…
-                  </MenuItem>
-                  <MenuSeparator />
-                  <MenuHeader>View & Zoom</MenuHeader>
-                  <MenuItem
-                    icon="plus-circle"
-                    shortcut="⌃+"
-                    onSelect={() =>
-                      setZoom((z) =>
-                        Math.min(2, Math.round((z + 0.1) * 100) / 100),
-                      )
-                    }
-                  >
-                    Zoom In
-                  </MenuItem>
-                  <MenuItem
-                    icon="minus-circle"
-                    shortcut="⌃-"
-                    onSelect={() =>
-                      setZoom((z) =>
-                        Math.max(0.5, Math.round((z - 0.1) * 100) / 100),
-                      )
-                    }
-                  >
-                    Zoom Out
-                  </MenuItem>
-                  <MenuItem
-                    icon="magnifyingglass"
-                    shortcut="⌃0"
-                    onSelect={() => setZoom(1)}
-                  >
-                    Actual Size ({Math.round(zoom * 100)}%)
-                  </MenuItem>
-                  <MenuSeparator />
-                  <MenuItem
-                    checked={sidebarOpen}
-                    shortcut="⇧⌃B"
-                    onSelect={() => setSidebarOpen((v) => !v)}
-                  >
-                    Show Sidebar
-                  </MenuItem>
-                  <MenuItem
-                    checked={inspectorOpen}
-                    shortcut="⌃\"
-                    onSelect={() => setInspectorOpen((v) => !v)}
-                  >
-                    Show AI Assistant
-                  </MenuItem>
-                  <MenuSeparator />
-                  <MenuHeader>Page & Sync</MenuHeader>
-                  <MenuItem
-                    icon="arrow-clockwise"
-                    shortcut="⌃S"
-                    onSelect={() => handleImmediateSaveAndSync()}
-                  >
-                    Save & Sync Now
-                  </MenuItem>
-                  <MenuItem
-                    icon="doc-text"
-                    shortcut="⇧⌃M"
-                    onSelect={() => handleExportMarkdown()}
-                  >
-                    Export as Markdown (.md)…
-                  </MenuItem>
-                  <MenuItem
-                    icon="printer"
-                    shortcut="⌃P"
-                    onSelect={() => handleExportPdf()}
-                  >
-                    Export as PDF (.pdf)…
-                  </MenuItem>
-                  <MenuSeparator />
-                  <MenuItem
-                    icon="gear"
-                    shortcut="⌃,"
-                    onSelect={() => {
-                      setSettingsInitialPane('appearance');
-                      setSettingsOpen(true);
-                    }}
-                  >
-                    Settings…
-                  </MenuItem>
-                </>
-              }
-            />
-
-            <ToolbarButton
               icon="gear"
               label="Settings (Ctrl+,)"
               onClick={() => {
@@ -1022,7 +883,9 @@ export function App() {
           </Titlebar>
 
           <WindowBody>
-            {activePlace === 'page' && selectedPage ? (
+            {activePlace === 'page' && selectedPage && contentPageId !== selectedPage.id ? (
+              <div className="mario-editor-shell" aria-busy="true" />
+            ) : activePlace === 'page' && selectedPage ? (
               <BlockEditor
                 key={selectedPage.id}
                 pageTitle={selectedPage.title}
@@ -1044,6 +907,20 @@ export function App() {
                 onExportMarkdown={() => handleExportMarkdown()}
                 onExportPdf={() => handleExportPdf()}
                 onOpenShare={() => setShareDialogOpen(true)}
+                canvasWidth={settings.canvasWidth}
+                onHighlight={(text) => {
+                  // Settings ▸ "Ask AI on Text Highlight": a held highlight opens Ask about it.
+                  if (!settings.askOnHighlight) return;
+                  setAiQuote(text);
+                  setInspectorOpen(true);
+                }}
+                onAiCommand={(command) => {
+                  setAiCommand({ ...command, nonce: Date.now() });
+                  setInspectorOpen(true);
+                }}
+                notebookId={selectedNotebook?.id}
+                pageId={selectedPage.id}
+                onPreviewHtml={setRawHtmlOverride}
               />
             ) : (
               <MacBrowserTable
@@ -1080,75 +957,80 @@ export function App() {
             )}
 
             {inspectorOpen && (
-              <AiInspectorPanel
-                notebook={selectedNotebook}
-                section={selectedSection}
-                page={selectedPage}
-                pageContent={pageContent}
-                notebooks={tree.notebooks}
-                sectionsByNotebook={tree.sectionsByNotebook}
-                pagesByKey={tree.pagesBySection}
-                onPageContentChange={handlePageContentChange}
-                onRenameCurrentPage={handleTitleChange}
-                onOpenPage={(nbId, secId, pgId) => {
-                  setSelectedNotebookId(nbId);
-                  setSelectedSectionId(secId);
-                  setSelectedPageId(pgId);
-                  setActivePlace('page');
-                }}
-                onCreateNotebook={async (name, colorIdx) => {
-                  const nb = await window.mario.tree.createNotebook(
-                    name,
-                    colorIdx,
-                  );
-                  const snap = await window.mario.tree.getSnapshot();
-                  setTree(snap);
-                  return nb;
-                }}
-                onRenameNotebook={async (nb, newName) => {
-                  await window.mario.tree.updateNotebook({
-                    ...nb,
-                    name: newName,
-                  });
-                  const snap = await window.mario.tree.getSnapshot();
-                  setTree(snap);
-                }}
-                onDeleteNotebook={async (nbId) => {
-                  await window.mario.tree.deleteNotebook(nbId);
-                  const snap = await window.mario.tree.getSnapshot();
-                  applyTreeSelection(snap, false);
-                }}
-                onCreateSection={async (nbId, name) => {
-                  const sec = await window.mario.tree.createSection(nbId, name);
-                  const snap = await window.mario.tree.getSnapshot();
-                  setTree(snap);
-                  return sec;
-                }}
-                onRenameSection={async (sec, newName) => {
-                  await window.mario.tree.updateSection({
-                    ...sec,
-                    name: newName,
-                  });
-                  const snap = await window.mario.tree.getSnapshot();
-                  setTree(snap);
-                }}
-                onDeleteSection={async (nbId, secId) => {
-                  await window.mario.tree.deleteSection(nbId, secId);
-                  const snap = await window.mario.tree.getSnapshot();
-                  applyTreeSelection(snap, false);
-                }}
-                onCreatePage={handleCreatePage}
-                onDeletePage={async (nbId, secId, pgId) => {
-                  await window.mario.tree.deletePage(nbId, secId, pgId);
-                  const snap = await window.mario.tree.getSnapshot();
-                  applyTreeSelection(snap, false);
-                }}
-                onSetRawHtmlOverride={setRawHtmlOverride}
-                onOpenAiSettings={() => {
-                  setSettingsInitialPane('ai');
-                  setSettingsOpen(true);
-                }}
-              />
+              <ErrorBoundary resetKey={selectedNotebook?.id} title="The AI panel ran into a problem">
+                <AiInspectorPanel
+                  notebook={selectedNotebook}
+                  section={selectedSection}
+                  page={selectedPage}
+                  pageContent={pageContent}
+                  notebooks={tree.notebooks}
+                  sectionsByNotebook={tree.sectionsByNotebook}
+                  pagesByKey={tree.pagesBySection}
+                  onPageContentChange={handlePageContentChange}
+                  onRenameCurrentPage={handleTitleChange}
+                  onOpenPage={(nbId, secId, pgId) => {
+                    setSelectedNotebookId(nbId);
+                    setSelectedSectionId(secId);
+                    setSelectedPageId(pgId);
+                    setActivePlace('page');
+                  }}
+                  onCreateNotebook={async (name, colorIdx) => {
+                    const nb = await window.mario.tree.createNotebook(
+                      name,
+                      colorIdx,
+                    );
+                    const snap = await window.mario.tree.getSnapshot();
+                    setTree(snap);
+                    return nb;
+                  }}
+                  onRenameNotebook={async (nb, newName) => {
+                    await window.mario.tree.updateNotebook({
+                      ...nb,
+                      name: newName,
+                    });
+                    const snap = await window.mario.tree.getSnapshot();
+                    setTree(snap);
+                  }}
+                  onDeleteNotebook={async (nbId) => {
+                    await window.mario.tree.deleteNotebook(nbId);
+                    const snap = await window.mario.tree.getSnapshot();
+                    applyTreeSelection(snap, false);
+                  }}
+                  onCreateSection={async (nbId, name) => {
+                    const sec = await window.mario.tree.createSection(nbId, name);
+                    const snap = await window.mario.tree.getSnapshot();
+                    setTree(snap);
+                    return sec;
+                  }}
+                  onRenameSection={async (sec, newName) => {
+                    await window.mario.tree.updateSection({
+                      ...sec,
+                      name: newName,
+                    });
+                    const snap = await window.mario.tree.getSnapshot();
+                    setTree(snap);
+                  }}
+                  onDeleteSection={async (nbId, secId) => {
+                    await window.mario.tree.deleteSection(nbId, secId);
+                    const snap = await window.mario.tree.getSnapshot();
+                    applyTreeSelection(snap, false);
+                  }}
+                  onCreatePage={handleCreatePage}
+                  onDeletePage={async (nbId, secId, pgId) => {
+                    await window.mario.tree.deletePage(nbId, secId, pgId);
+                    const snap = await window.mario.tree.getSnapshot();
+                    applyTreeSelection(snap, false);
+                  }}
+                  onSetRawHtmlOverride={setRawHtmlOverride}
+                  onOpenAiSettings={() => {
+                    setSettingsInitialPane('ai');
+                    setSettingsOpen(true);
+                  }}
+                  quote={aiQuote}
+                  onClearQuote={() => setAiQuote(null)}
+                  command={aiCommand}
+                />
+              </ErrorBoundary>
             )}
           </WindowBody>
         </WindowMain>

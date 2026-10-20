@@ -48,6 +48,29 @@ const firestore = new FirestoreRestClient(auth);
 const drive = new DriveRestClient(auth);
 const aiService = new AiServiceMain(prefs, keyring);
 
+// AI requests in flight per window, so Stop in the AI panel can cancel them.
+type IpcSender = { id: number; isDestroyed(): boolean; send(channel: string, ...args: unknown[]): void };
+const senderOf = (event: unknown) => (event as { sender: IpcSender }).sender;
+// A request's channel ("panel", "inline") lets one Stop leave the other running.
+type AiRequest = { controller: AbortController; channel: string };
+const aiRequests = new Map<number, Set<AiRequest>>();
+async function withAbort<T>(
+  event: unknown,
+  run: (signal: AbortSignal) => Promise<T>,
+  channel = 'panel',
+): Promise<T> {
+  const id = senderOf(event).id;
+  const request: AiRequest = { controller: new AbortController(), channel };
+  const running = aiRequests.get(id) ?? new Set<AiRequest>();
+  running.add(request);
+  aiRequests.set(id, running);
+  try {
+    return await run(request.controller.signal);
+  } finally {
+    running.delete(request);
+  }
+}
+
 function getMinerUBinary(): string {
   const custom = process.env.MARIO_MINERU_PATH;
   if (custom && fs.existsSync(custom)) return custom;
@@ -173,6 +196,16 @@ function createMainWindow(): void {
       void shell.openExternal(url);
     }
     return { action: 'deny' };
+  });
+
+  // Mario is a single page: a link followed inside it would replace the whole app
+  // with the website. Reloads of the app itself are fine; anything else opens in
+  // the browser.
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const current = mainWindow?.webContents.getURL() ?? '';
+    if (url.split('#')[0] === current.split('#')[0]) return;
+    event.preventDefault();
+    if (/^(https?|mailto):/i.test(url)) void shell.openExternal(url);
   });
 
   const devServerUrl = process.env.VITE_DEV_SERVER_URL;
@@ -551,22 +584,38 @@ function registerIpcHandlers(): void {
     ) => aiService.listModelsForProvider(config),
   );
   ipcMain.handle('ai:discoverLocal', () => aiService.discoverLocalEndpoints());
+  type ChatOpts = {
+    systemPrompt: string;
+    userPrompt: string;
+    temperature?: number;
+    effort?: LlmEffort;
+    channel?: string;
+  };
+  ipcMain.handle('ai:chat', (event, opts: ChatOpts) =>
+    withAbort(event, (signal) => aiService.chatCompletion({ ...opts, signal })),
+  );
   ipcMain.handle(
-    'ai:chat',
-    (
-      _,
-      opts: {
-        systemPrompt: string;
-        userPrompt: string;
-        temperature?: number;
-        effort?: LlmEffort;
-      },
-    ) => aiService.chatCompletion(opts),
+    'ai:chatStream',
+    (event, requestId: string, { channel, ...opts }: ChatOpts) =>
+      withAbort(
+        event,
+        (signal) =>
+          aiService.chatStream({
+            ...opts,
+            thinkingBudget: aiService.thinkingBudget('chat'),
+            signal,
+            onDelta: (delta) => {
+              const sender = senderOf(event);
+              if (!sender.isDestroyed()) sender.send('ai:chatDelta', requestId, delta);
+            },
+          }),
+        channel,
+      ),
   );
   ipcMain.handle(
     'ai:structured',
     (
-      _,
+      event,
       opts: {
         schemaName: string;
         schema: Record<string, unknown>;
@@ -574,8 +623,49 @@ function registerIpcHandlers(): void {
         userPrompt: string;
         temperature?: number;
       },
-    ) => aiService.completeStructured(opts),
+    ) => withAbort(event, (signal) => aiService.completeStructured({ ...opts, signal })),
   );
+  ipcMain.handle(
+    'ai:structuredStream',
+    (
+      event,
+      requestId: string,
+      {
+        channel,
+        ...opts
+      }: {
+        schemaName: string;
+        schema: Record<string, unknown>;
+        systemPrompt: string;
+        userPrompt: string;
+        temperature?: number;
+        channel?: string;
+      },
+    ) =>
+      withAbort(
+        event,
+        (signal) =>
+          aiService.completeStructuredStream({
+            ...opts,
+            signal,
+            onDelta: (delta) => {
+              const sender = senderOf(event);
+              if (!sender.isDestroyed()) sender.send('ai:chatDelta', requestId, delta);
+            },
+          }),
+        channel,
+      ),
+  );
+  // Stop: cancel this window's AI requests on one channel, or all of them.
+  ipcMain.handle('ai:abort', (event, channel?: string) => {
+    let stopped = 0;
+    aiRequests.get(senderOf(event).id)?.forEach((r) => {
+      if (channel && r.channel !== channel) return;
+      r.controller.abort();
+      stopped++;
+    });
+    return stopped;
+  });
   ipcMain.handle('ai:webSearch', (_, query: string) =>
     aiService.webSearch(query),
   );

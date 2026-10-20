@@ -200,6 +200,20 @@ const KIND_ALIASES: Record<string, { kind: AgentActionKind; inferredLevel?: numb
   setting: { kind: 'setting' },
 };
 
+/**
+ * Block ids as the model writes them back. The prompt labels blocks `[id:ab12cd]`,
+ * and models often copy the label: "id:ab12cd", "[id:ab12cd]", "#ab12cd".
+ */
+function normaliseBlockId(raw: unknown): string | undefined {
+  const id = String(raw ?? '')
+    .trim()
+    .replace(/^\[\s*/, '')
+    .replace(/\s*\]$/, '')
+    .replace(/^(id\s*[:=]\s*|#)/i, '')
+    .trim();
+  return id || undefined;
+}
+
 export function parseAgentPlan(
   raw: Record<string, unknown>,
   knownBlockIds?: Set<string>,
@@ -236,9 +250,8 @@ export function parseAgentPlan(
     }
 
     let kind = mapped.kind;
-    const blockId = String(obj.blockId ?? obj.block_id ?? '').trim() || undefined;
-    const afterBlockId =
-      String(obj.afterBlockId ?? obj.after_block_id ?? '').trim() || undefined;
+    const blockId = normaliseBlockId(obj.blockId ?? obj.block_id);
+    let afterBlockId = normaliseBlockId(obj.afterBlockId ?? obj.after_block_id);
 
     if (
       knownBlockIds &&
@@ -249,9 +262,9 @@ export function parseAgentPlan(
         continue;
       }
     }
+    // An insert after a block that doesn't exist still happens — at the end of the page.
     if (knownBlockIds && afterBlockId && !knownBlockIds.has(afterBlockId)) {
-      dropped++;
-      continue;
+      afterBlockId = undefined;
     }
 
     const extractItems = (): string[] => {
@@ -423,51 +436,6 @@ export function marioAgentPrompt(userSkills: string[] = [], includeHtml = false)
   return parts.join('\n\n');
 }
 
-export function quizSchema(count = 5): Record<string, unknown> {
-  return {
-    type: 'object',
-    required: ['title', 'mcqs', 'essays'],
-    additionalProperties: false,
-    properties: {
-      title: { type: 'string' },
-      mcqs: {
-        type: 'array',
-        minItems: 1,
-        maxItems: Math.max(1, count),
-        items: {
-          type: 'object',
-          required: ['question', 'options', 'correctIndex', 'explanation'],
-          additionalProperties: false,
-          properties: {
-            question: { type: 'string' },
-            options: {
-              type: 'array',
-              items: { type: 'string' },
-              minItems: 4,
-              maxItems: 4,
-            },
-            correctIndex: { type: 'integer', minimum: 0, maximum: 3 },
-            explanation: { type: 'string' },
-          },
-        },
-      },
-      essays: {
-        type: 'array',
-        items: {
-          type: 'object',
-          required: ['question', 'rubric', 'maxMarks'],
-          additionalProperties: false,
-          properties: {
-            question: { type: 'string' },
-            rubric: { type: 'string' },
-            maxMarks: { type: 'integer', minimum: 1, maximum: 20 },
-          },
-        },
-      },
-    },
-  };
-}
-
 export const grammarSchema: Record<string, unknown> = {
   type: 'object',
   required: ['suggestions'],
@@ -489,4 +457,99 @@ export const grammarSchema: Record<string, unknown> = {
     },
   },
 };
+
+const DESTRUCTIVE_KINDS = new Set<AgentActionKind>(['replace_block', 'delete_block', 'move_block', 'rename_page', 'rename_section']);
+
+/**
+ * One line saying what an action will do, for the Do tab's preview, and whether
+ * it changes or removes something already there.
+ */
+export function describeAgentAction(
+  action: AgentAction,
+  textOf: (blockId: string) => string | undefined = () => undefined,
+): { text: string; destructive: boolean } {
+  const clip = (t: string | undefined, n = 48) => {
+    const one = (t ?? '').replace(/\s+/g, ' ').trim();
+    return one.length > n ? `${one.slice(0, n - 1)}…` : one;
+  };
+  const quoted = (t: string | undefined) => (clip(t) ? `“${clip(t)}”` : '');
+  const block = (id: string | undefined) => (id && textOf(id) ? quoted(textOf(id)) : 'a block');
+  const where = action.afterBlockId && textOf(action.afterBlockId) ? ` after ${quoted(textOf(action.afterBlockId))}` : '';
+  const n = (count: number, one: string) => `${count} ${one}${count === 1 ? '' : 's'}`;
+  const destructive = DESTRUCTIVE_KINDS.has(action.kind) || (action.kind === 'write_page' && action.mode === 'replace');
+  const text = (() => {
+    switch (action.kind) {
+      case 'paragraph':
+        return `Add a paragraph ${quoted(action.text)}${where}`;
+      case 'heading':
+        return `Add a heading ${quoted(action.text)}${where}`;
+      case 'bullets':
+        return `Add ${n(action.items?.length ?? 0, 'bullet point')}${where}`;
+      case 'numbered':
+        return `Add a numbered list of ${n(action.items?.length ?? 0, 'item')}${where}`;
+      case 'todo':
+        return `Add ${n(action.items?.length ?? 0, 'to-do')}${where}`;
+      case 'quote':
+        return `Add a quote ${quoted(action.text)}${where}`;
+      case 'divider':
+        return `Add a divider${where}`;
+      case 'code':
+        return `Add a ${action.language ? `${action.language} ` : ''}code block${where}`;
+      case 'math':
+        return `Add an equation${where}`;
+      case 'table':
+        return `Add a table of ${n(action.rows?.length ?? 0, 'row')}${where}`;
+      case 'spreadsheet':
+        return `Add a spreadsheet${action.text ? ` ${quoted(action.text)}` : ''}${where}`;
+      case 'markdown':
+        return `Add text${where}: ${quoted(action.text ?? action.content)}`;
+      case 'html':
+        return 'Show an interactive HTML preview';
+      case 'write_page':
+        return action.mode === 'replace'
+          ? 'Replace everything on the page'
+          : action.mode === 'prepend'
+            ? 'Add text at the top of the page'
+            : 'Add text at the end of the page';
+      case 'replace_block':
+        return `Rewrite ${block(action.blockId)}`;
+      case 'delete_block':
+        return `Delete ${block(action.blockId)}`;
+      case 'move_block':
+        return `Move ${block(action.blockId)}${where}`;
+      case 'rename_page':
+        return `Rename the page to ${quoted(action.text)}`;
+      case 'rename_section':
+        return `Rename the section to ${quoted(action.text)}`;
+      case 'create_page':
+        return `Create a page ${quoted(action.page ?? action.text)}`;
+      case 'create_section':
+        return `Create a section ${quoted(action.section ?? action.text)}`;
+      case 'create_notebook':
+        return `Create a notebook ${quoted(action.notebook ?? action.text)}`;
+      case 'open_page':
+        return `Open the page ${quoted(action.page ?? action.text)}`;
+      case 'setting':
+        return `Change the setting ${action.settingKey ?? ''} to ${action.settingValue ?? ''}`.trim();
+      case 'read_page':
+        return 'Read a page';
+      case 'list_notebooks':
+      case 'list_pages':
+        return 'Look through the notebook';
+      case 'search_notes':
+        return `Search the notes for ${quoted(action.text)}`;
+      case 'web_search':
+        return `Search the web for ${quoted(action.text)}`;
+      case 'ask_user':
+        return `Ask: ${action.text ?? ''}`;
+      default:
+        return String(action.kind);
+    }
+  })();
+  return { text: text.replace(/\s+/g, ' ').trim(), destructive };
+}
+
+/** Whether a plan changes anything, as opposed to only reading or asking. */
+export const planWrites = (actions: AgentAction[]) =>
+  actions.some((a) => !OBSERVING_KINDS.has(a.kind) && a.kind !== 'ask_user');
 

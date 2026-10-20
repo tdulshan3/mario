@@ -1,52 +1,71 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import katex from 'katex';
-import hljs from 'highlight.js';
+import { createPortal } from 'react-dom';
+import { EditorContent, useEditor, useEditorState, type Editor } from '@tiptap/react';
+import type { JSONContent } from '@tiptap/core';
+import { NodeSelection } from '@tiptap/pm/state';
+import StarterKit from '@tiptap/starter-kit';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { Color, TextStyle } from '@tiptap/extension-text-style';
+import Highlight from '@tiptap/extension-highlight';
+import { TableKit } from '@tiptap/extension-table';
+import { Placeholder } from '@tiptap/extensions';
+import { common, createLowlight } from 'lowlight';
 import {
+  Alert,
   Button,
-  Checkbox,
+  ContextMenu,
+  FieldGrid,
   MenuHeader,
   MenuItem,
-  PopUpButton,
+  MenuSeparator,
+  SegmentedControl,
+  Sheet,
   Spacer,
+  TextField,
   type IconName,
 } from '../macos/macos';
-import type {
-  AppFlowyNode,
-  BlockAlign,
-  DeltaAttributes,
-  DeltaOp,
-  PageContent,
-  Stroke,
-  WorkbookData,
-} from '../shared/types';
-import {
-  buildTableNodeFromRows,
-  colIndexToLabel,
-  deltaToMarkdown,
-  deltaToPlainText,
-  documentToMarkdown,
-  evaluateSheetCell,
-  expandEmojiShortcodes,
-  extractTableRowsFromNode,
-  makeCodeNode,
-  makeDividerNode,
-  makeDrawingNode,
-  makeHeadingNode,
-  makeHtmlNode,
-  makeListNode,
-  makeMathNode,
-  makeParagraphNode,
-  makeQuoteNode,
-  makeSpreadsheetNode,
-  makeTableNode,
-  markdownToNodes,
-  normalizeLatexFormula,
-  normalizeWorkbook,
-  parseInlineMarkdownToDelta,
-} from '../shared/document-codec';
-import { nanoid6 } from '../shared/ids';
+import type { AiCommand, AppFlowyDocument, PageContent } from '../shared/types';
+import { documentToMarkdown } from '../shared/document-codec';
+import { buildPreviewDocument } from '../shared/markdown-render';
 import { DrawingCanvasBlock } from './DrawingCanvasBlock';
-import { MacFormatBar, type InsertBlockKind } from './MacFormatBar';
+import { appflowyToPm, pmToAppflowy } from '../editor/pm-codec';
+import {
+  AppFlowyAttrs,
+  BlockAttributes,
+  BulletedList,
+  DocumentUpkeep,
+  Embed,
+  InlineMath,
+  MarioCode,
+  MarioHeading,
+  MarioIndentKeys,
+  MarioKeys,
+  MarkdownShortcuts,
+  MathBlock,
+  NumberedList,
+  Quote,
+  TodoList,
+  changeIndent,
+  codeBlockNodeView,
+  currentBlockStyle,
+  moveBlock,
+  setBlockStyle,
+  type BlockStyle,
+} from '../editor/extensions';
+import { handleMarkdownPaste, insertMarkdown, normalizePastedHtml, serializeClipboardText } from '../editor/clipboard';
+import { Ribbon, type InsertKind, type RibbonState } from '../editor/Ribbon';
+import {
+  WEB_SANDBOX,
+  buildBlockWebDocument,
+  buildPageWebDocument,
+  isFullHtmlDocument,
+  looksLikeHtmlSource,
+  prepareWebDocument,
+} from '../editor/web-page';
+import { nanoid6 } from '../shared/ids';
+import { InlineAsk, closeInlineAsk, inlineAskAnchor, inlineAskHost, openInlineAsk, type InlineAskAnchor } from '../editor/inline-ask';
+import { InlineAskBox } from './InlineAskBox';
+import { ErrorBoundary } from './ErrorBoundary';
 
 export interface BlockEditorProps {
   pageTitle: string;
@@ -66,618 +85,115 @@ export interface BlockEditorProps {
   onExportMarkdown: () => void;
   onExportPdf: () => void;
   onOpenShare: () => void;
+  /** Settings ▸ Page width. */
+  canvasWidth?: 'narrow' | 'medium' | 'full';
+  /** A passage the user highlighted and held (Flutter's "ask about a highlight"). */
+  onHighlight?: (text: string) => void;
+  /** The editor's AI slash commands: Summarise Above, Quiz Me (Ask AI opens in the page). */
+  onAiCommand?: (command: Omit<AiCommand, 'nonce'>) => void;
+  /** Where Inline Ask saves its chats. */
+  notebookId?: string;
+  pageId?: string;
+  /** Inline Ask ▸ Preview HTML. */
+  onPreviewHtml?: (html: string) => void;
 }
 
-const SLASH_ITEMS: Array<{
-  kind: InsertBlockKind;
-  label: string;
-  keywords: string;
-  icon: IconName;
-  shortcut?: string;
-}> = [
-  {
-    kind: 'heading1',
-    label: 'Heading 1',
-    keywords: 'h1 title heading1',
-    icon: 'book',
-    shortcut: '⌃⌥1',
-  },
-  {
-    kind: 'heading2',
-    label: 'Heading 2',
-    keywords: 'h2 subtitle heading2',
-    icon: 'book',
-    shortcut: '⌃⌥2',
-  },
-  {
-    kind: 'heading3',
-    label: 'Heading 3',
-    keywords: 'h3 subheading heading3',
-    icon: 'book',
-    shortcut: '⌃⌥3',
-  },
-  {
-    kind: 'bulleted_list',
-    label: 'Bulleted List',
-    keywords: 'bullet ul list',
-    icon: 'list-bullet',
-    shortcut: '⇧⌃8',
-  },
-  {
-    kind: 'numbered_list',
-    label: 'Numbered List',
-    keywords: 'number ol list',
-    icon: 'line-3-horizontal',
-    shortcut: '⇧⌃7',
-  },
-  {
-    kind: 'todo_list',
-    label: 'Checklist / To-Do',
-    keywords: 'todo check task',
-    icon: 'checkmark-circle-fill',
-    shortcut: '⇧⌃9',
-  },
-  {
-    kind: 'quote',
-    label: 'Quote Block',
-    keywords: 'quote blockquote',
-    icon: 'bubble-left',
-    shortcut: '⇧⌃Q',
-  },
-  {
-    kind: 'code',
-    label: 'Code Block',
-    keywords: 'code snippet pre',
-    icon: 'cpu',
-    shortcut: '⌃⌥C',
-  },
-  {
-    kind: 'math_equation',
-    label: 'Math Equation (LaTeX)',
-    keywords: 'math latex katex formula equation',
-    icon: 'command',
-    shortcut: '⌃⌥M',
-  },
-  {
-    kind: 'table',
-    label: 'Table (3×3)',
-    keywords: 'table grid',
-    icon: 'square-grid',
-  },
-  {
-    kind: 'spreadsheet',
-    label: 'Spreadsheet (Formulas)',
-    keywords: 'sheet excel spreadsheet formula sum',
-    icon: 'chart-bar',
-  },
-  {
-    kind: 'drawing',
-    label: 'Drawing Canvas',
-    keywords: 'draw sketch ink canvas pen',
-    icon: 'pencil-tip-circle',
-  },
-  {
-    kind: 'audio_clip',
-    label: 'Audio Voice Clip',
-    keywords: 'audio voice mic record',
-    icon: 'mic',
-  },
-  {
-    kind: 'image',
-    label: 'Image…',
-    keywords: 'image photo picture',
-    icon: 'photo',
-  },
-  {
-    kind: 'html',
-    label: 'HTML Render Block',
-    keywords: 'html iframe embed web markup render',
-    icon: 'globe',
-  },
-  {
-    kind: 'divider',
-    label: 'Horizontal Divider',
-    keywords: 'divider hr line',
-    icon: 'minus',
-  },
+const lowlight = createLowlight(common);
+
+type AiSlashKind = 'ai_ask' | 'ai_summary' | 'ai_quiz';
+
+const SLASH_ITEMS: Array<{ kind: InsertKind | BlockStyle | AiSlashKind; label: string; keywords: string; icon: IconName; shortcut?: string }> = [
+  { kind: 'heading-1', label: 'Heading 1', keywords: 'h1 title', icon: 'book', shortcut: '⌃⌥1' },
+  { kind: 'heading-2', label: 'Heading 2', keywords: 'h2 subtitle', icon: 'book', shortcut: '⌃⌥2' },
+  { kind: 'heading-3', label: 'Heading 3', keywords: 'h3', icon: 'book', shortcut: '⌃⌥3' },
+  { kind: 'bulleted_list', label: 'Bulleted List', keywords: 'bullet ul list', icon: 'list-bullet', shortcut: '⌃.' },
+  { kind: 'numbered_list', label: 'Numbered List', keywords: 'number ol list', icon: 'line-3-horizontal', shortcut: '⌃/' },
+  { kind: 'todo_list', label: 'To Do', keywords: 'todo check task checklist', icon: 'checkmark-circle-fill', shortcut: '⌃1' },
+  { kind: 'quote', label: 'Quote', keywords: 'quote blockquote citation', icon: 'bubble-left', shortcut: '⇧⌃Q' },
+  { kind: 'code', label: 'Code', keywords: 'code snippet pre', icon: 'cpu', shortcut: '⌃⌥C' },
+  { kind: 'table', label: 'Table', keywords: 'table grid', icon: 'square-grid' },
+  { kind: 'math_block', label: 'Equation', keywords: 'math latex katex formula equation', icon: 'command' },
+  { kind: 'inline_math', label: 'Inline Equation', keywords: 'math inline latex', icon: 'command' },
+  { kind: 'image', label: 'Picture…', keywords: 'image photo picture', icon: 'photo' },
+  { kind: 'link', label: 'Link…', keywords: 'link url href', icon: 'link' },
+  { kind: 'spreadsheet', label: 'Spreadsheet', keywords: 'sheet excel formula sum', icon: 'chart-bar' },
+  { kind: 'drawing', label: 'Drawing Canvas', keywords: 'draw sketch ink pen', icon: 'pencil-tip-circle' },
+  { kind: 'audio', label: 'Audio Recording', keywords: 'audio voice mic record', icon: 'mic' },
+  { kind: 'html', label: 'HTML Block', keywords: 'html iframe embed web', icon: 'globe' },
+  { kind: 'datetime', label: 'Date & Time', keywords: 'date time now today stamp', icon: 'calendar' },
+  { kind: 'ai_ask', label: 'Ask AI', keywords: 'ask ai question chat mario', icon: 'bubble-left' },
+  { kind: 'ai_summary', label: 'Summarise Above', keywords: 'summary summarise summarize tldr recap ai', icon: 'doc-text' },
+  { kind: 'ai_quiz', label: 'Quiz Me', keywords: 'quiz test exam mcq revise ai', icon: 'questionmark-circle' },
+  { kind: 'divider', label: 'Divider', keywords: 'divider hr line rule', icon: 'minus' },
 ];
 
-function ImageBlockView({
-  node,
-  onUpdate,
-  onDelete,
-  onInsertAfterMarkdown,
-}: {
-  node: AppFlowyNode;
-  onUpdate: (next: AppFlowyNode) => void;
-  onDelete: () => void;
-  onInsertAfterMarkdown?: (md: string) => void;
-}) {
-  const url = String(node.data?.url ?? '');
-  const driveId = String(node.data?.drive_id ?? '');
-  const width = Number(node.data?.width ?? 520);
-  const [resolvedSrc, setResolvedSrc] = useState<string | null>(null);
-  const [ocrRunning, setOcrRunning] = useState(false);
-  const [ocrMessage, setOcrMessage] = useState<string | null>(null);
+const BLOCK_STYLES = new Set<string>(['paragraph', 'heading-1', 'heading-2', 'heading-3', 'heading-4', 'bulleted_list', 'numbered_list', 'todo_list', 'quote', 'code']);
 
+const DEFAULT_HTML =
+  '<div style="padding:16px;border-radius:8px;font-family:system-ui,sans-serif">\n  <h3 style="margin-top:0">Interactive HTML</h3>\n  <p>Render custom HTML, charts, embeds, or widgets.</p>\n</div>';
+
+const isUntitled = (t: string) => !t.trim() || /^untitled( page)?$/i.test(t.trim());
+
+/** The text of an HTML page's <title>, else its first <h1>. */
+function htmlHeading(html: string): string | null {
+  const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html) ?? /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(html);
+  if (!m) return null;
+  const text = new DOMParser().parseFromString(m[1], 'text/html').documentElement.textContent ?? '';
+  return text.replace(/\s+/g, ' ').trim().slice(0, 120) || null;
+}
+
+/** The page's first heading — a heading line, or the title of a webpage pasted as an HTML block. */
+function firstHeading(editor: Editor): string | null {
+  let text: string | null = null;
+  editor.state.doc.forEach((n) => {
+    if (text !== null) return;
+    if (n.type.name === 'heading' && n.textContent.trim()) text = n.textContent.trim();
+    else if (n.type.name === 'embed' && n.attrs.kind === 'html') text = htmlHeading(String(n.attrs.data?.html ?? ''));
+  });
+  return text;
+}
+
+function fontStackFor(family: string): string {
+  switch (family) {
+    case 'Inter':
+      return '"Inter", var(--mac-font)';
+    case 'Serif':
+      return 'Georgia, "Times New Roman", serif';
+    case 'Monospace':
+      return 'var(--mac-font-mono)';
+    default:
+      return 'var(--mac-font)';
+  }
+}
+
+interface PreviewState {
+  layout: 'full' | 'split';
+  /** auto: the page's webpage when it has HTML, else the document. */
+  source: 'auto' | 'web' | 'document';
+  /** Preview one HTML block or HTML code block instead of the whole page. */
+  blockId?: string;
+}
+
+/** `value`, held back until it has stopped changing for `delay` ms (0 = live). */
+function useDebounced<T>(value: T, delay: number): T {
+  const [held, setHeld] = useState(value);
   useEffect(() => {
-    let cancelled = false;
-    window.mario.asset
-      .resolveImage(url || undefined, driveId || undefined)
-      .then((res) => {
-        if (!cancelled) setResolvedSrc(res);
-      })
-      .catch(() => {
-        if (!cancelled) setResolvedSrc(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [url, driveId]);
-
-  const handleRunOcr = async () => {
-    const target = resolvedSrc || url;
-    if (!target) return;
-    setOcrRunning(true);
-    setOcrMessage(null);
-    try {
-      const res = await window.mario.ocr.runMinerU(target);
-      if (res.success && res.markdown) {
-        setOcrMessage('Extracted text with MinerU!');
-        if (onInsertAfterMarkdown) {
-          onInsertAfterMarkdown(res.markdown);
-        }
-      } else {
-        setOcrMessage(res.error || 'No text recognized by MinerU');
-      }
-    } catch (err) {
-      setOcrMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setOcrRunning(false);
+    if (delay <= 0) {
+      setHeld(value);
+      return;
     }
-  };
-
-  return (
-    <div className="mario-rich-card">
-      <div className="mario-rich-card__header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Image</span>
-          {ocrMessage && (
-            <span
-              className="mac-caption mac-label-secondary"
-              style={{ fontSize: 11 }}
-            >
-              {ocrMessage}
-            </span>
-          )}
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Button
-            size="small"
-            variant="tinted"
-            icon="bolt"
-            disabled={ocrRunning || !resolvedSrc}
-            onClick={handleRunOcr}
-          >
-            {ocrRunning ? 'MinerU OCR…' : 'OCR (MinerU)'}
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            onClick={() =>
-              onUpdate({
-                ...node,
-                data: {
-                  ...node.data,
-                  width: Math.max(180, width - 80),
-                },
-              })
-            }
-          >
-            Smaller
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            onClick={() =>
-              onUpdate({
-                ...node,
-                data: {
-                  ...node.data,
-                  width: Math.min(760, width + 80),
-                },
-              })
-            }
-          >
-            Larger
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            icon="trash"
-            label="Remove Image"
-            onClick={onDelete}
-          />
-        </div>
-      </div>
-      <div style={{ padding: 12, textAlign: 'center' }}>
-        {resolvedSrc ? (
-          <img
-            src={resolvedSrc}
-            alt=""
-            style={{
-              maxWidth: '100%',
-              width,
-              borderRadius: 6,
-            }}
-          />
-        ) : (
-          <p className="mac-label-secondary" style={{ margin: 0 }}>
-            {url || driveId ? 'Loading image…' : 'No image selected'}
-          </p>
-        )}
-      </div>
-    </div>
-  );
+    const t = setTimeout(() => setHeld(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return delay <= 0 ? value : held;
 }
 
-function HtmlBlockView({
-  node,
-  onUpdate,
-  onDelete,
-}: {
-  node: AppFlowyNode;
-  onUpdate: (next: AppFlowyNode) => void;
-  onDelete: () => void;
-}) {
-  const [viewMode, setViewMode] = useState<'preview' | 'code'>('preview');
-  const rawHtml = String(node.data?.html ?? '');
-
-  return (
-    <div className="mario-rich-card">
-      <div className="mario-rich-card__header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>HTML Render</span>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Button
-            size="small"
-            variant={viewMode === 'preview' ? 'bordered' : 'tinted'}
-            onClick={() =>
-              setViewMode(viewMode === 'preview' ? 'code' : 'preview')
-            }
-          >
-            {viewMode === 'preview' ? 'Edit HTML' : 'Live Preview'}
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            icon="trash"
-            label="Remove HTML Block"
-            onClick={onDelete}
-          />
-        </div>
-      </div>
-      {viewMode === 'code' ? (
-        <div style={{ padding: 12 }}>
-          <textarea
-            rows={6}
-            style={{
-              width: '100%',
-              fontFamily: 'monospace',
-              fontSize: 13,
-              background: 'var(--mac-field-bg)',
-              color: 'var(--mac-text-primary)',
-              border: '1px solid var(--mac-separator)',
-              borderRadius: 6,
-              padding: 8,
-              resize: 'vertical',
-              boxSizing: 'border-box',
-            }}
-            value={rawHtml}
-            onChange={(e) =>
-              onUpdate({
-                ...node,
-                data: { ...node.data, html: e.target.value },
-              })
-            }
-            placeholder="Write or paste <div>HTML code</div> here…"
-          />
-        </div>
-      ) : (
-        <div style={{ padding: 12 }}>
-          <iframe
-            title="HTML Render"
-            srcDoc={
-              rawHtml ||
-              '<div style="font-family:sans-serif;color:#888;padding:12px;">Empty HTML block. Click Edit HTML to add markup.</div>'
-            }
-            sandbox="allow-scripts allow-forms allow-popups"
-            style={{
-              width: '100%',
-              minHeight: 120,
-              border: '1px solid var(--mac-separator)',
-              borderRadius: 6,
-              background: '#ffffff',
-            }}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AudioClipBlockView({
-  node,
-  onUpdate,
-  onDelete,
-}: {
-  node: AppFlowyNode;
-  onUpdate: (next: AppFlowyNode) => void;
-  onDelete: () => void;
-}) {
-  const [recording, setRecording] = useState(false);
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const dataUrl = String(node.data?.dataUrl ?? node.data?.path ?? '');
-  const durationMs = Number(node.data?.durationMs ?? 0);
-  const startedAtRef = useRef<number>(0);
-
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const rec = new MediaRecorder(stream);
-      chunksRef.current = [];
-      rec.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
-      rec.onstop = () => {
-        stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
-        const reader = new FileReader();
-        const elapsed = Date.now() - startedAtRef.current;
-        reader.onloadend = () => {
-          onUpdate({
-            ...node,
-            data: {
-              ...node.data,
-              dataUrl: String(reader.result ?? ''),
-              durationMs: elapsed,
-            },
-          });
-        };
-        reader.readAsDataURL(blob);
-      };
-      startedAtRef.current = Date.now();
-      recorderRef.current = rec;
-      rec.start();
-      setRecording(true);
-    } catch {
-      setRecording(false);
-    }
-  };
-
-  const stopRecording = () => {
-    recorderRef.current?.stop();
-    setRecording(false);
-  };
-
-  return (
-    <div className="mario-rich-card">
-      <div className="mario-rich-card__header">
-        <span>
-          Voice Clip{' '}
-          {durationMs > 0 ? `(${(durationMs / 1000).toFixed(1)}s)` : ''}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {recording ? (
-            <Button
-              size="small"
-              variant="destructive"
-              icon="stop"
-              onClick={stopRecording}
-            >
-              Stop Recording
-            </Button>
-          ) : (
-            <Button
-              size="small"
-              variant="bordered"
-              icon="mic"
-              onClick={startRecording}
-            >
-              {dataUrl ? 'Re-record' : 'Record Voice'}
-            </Button>
-          )}
-          <Button
-            size="small"
-            variant="borderless"
-            icon="trash"
-            label="Delete Audio Clip"
-            onClick={onDelete}
-          />
-        </div>
-      </div>
-      <div style={{ padding: 10 }}>
-        {dataUrl ? (
-          <audio
-            controls
-            src={dataUrl}
-            style={{ width: '100%', height: 32 }}
-          />
-        ) : (
-          <span className="mac-caption-1 mac-label-secondary">
-            {recording
-              ? 'Recording from microphone…'
-              : 'Click "Record Voice" to capture an audio note.'}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SpreadsheetBlockView({
-  node,
-  onUpdate,
-  onDelete,
-}: {
-  node: AppFlowyNode;
-  onUpdate: (next: AppFlowyNode) => void;
-  onDelete: () => void;
-}) {
-  const workbook: WorkbookData = useMemo(
-    () => normalizeWorkbook(node.data),
-    [node.data],
-  );
-
-  const [editingCell, setEditingCell] = useState<string | null>(null);
-  const activeIdx = Math.min(
-    Math.max(0, workbook.activeIndex || 0),
-    workbook.sheets.length - 1,
-  );
-  const sheet = workbook.sheets[activeIdx] ?? {
-    name: 'Sheet1',
-    rows: 5,
-    cols: 4,
-    cells: {},
-  };
-
-  const commitWorkbook = (next: WorkbookData) => {
-    onUpdate({
-      ...node,
-      data: {
-        ...node.data,
-        workbook: next,
-      },
-    });
-  };
-
-  const setCell = (key: string, val: string) => {
-    const nextCells = { ...sheet.cells };
-    if (!val) delete nextCells[key];
-    else nextCells[key] = val;
-    const nextSheets = workbook.sheets.map((s, i) =>
-      i === activeIdx ? { ...s, cells: nextCells } : s,
-    );
-    commitWorkbook({ ...workbook, sheets: nextSheets });
-  };
-
-  const addSheet = () => {
-    const nextSheets = [
-      ...workbook.sheets,
-      {
-        name: `Sheet${workbook.sheets.length + 1}`,
-        rows: 5,
-        cols: 4,
-        cells: {},
-      },
-    ];
-    commitWorkbook({
-      ...workbook,
-      activeIndex: nextSheets.length - 1,
-      sheets: nextSheets,
-    });
-  };
-
-  return (
-    <div className="mario-rich-card">
-      <div className="mario-rich-card__header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span>Spreadsheet</span>
-          {workbook.sheets.map((s, idx) => (
-            <Button
-              key={idx}
-              size="small"
-              variant={idx === activeIdx ? 'tinted' : 'borderless'}
-              onClick={() => commitWorkbook({ ...workbook, activeIndex: idx })}
-            >
-              {s.name}
-            </Button>
-          ))}
-          <Button
-            size="small"
-            variant="borderless"
-            icon="plus"
-            label="New Sheet"
-            onClick={addSheet}
-          />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <Button
-            size="small"
-            variant="borderless"
-            onClick={() => {
-              const nextSheets = workbook.sheets.map((s, i) =>
-                i === activeIdx ? { ...s, rows: s.rows + 1 } : s,
-              );
-              commitWorkbook({ ...workbook, sheets: nextSheets });
-            }}
-          >
-            +Row
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            onClick={() => {
-              const nextSheets = workbook.sheets.map((s, i) =>
-                i === activeIdx ? { ...s, cols: Math.min(12, s.cols + 1) } : s,
-              );
-              commitWorkbook({ ...workbook, sheets: nextSheets });
-            }}
-          >
-            +Col
-          </Button>
-          <Button
-            size="small"
-            variant="borderless"
-            icon="trash"
-            label="Delete Spreadsheet"
-            onClick={onDelete}
-          />
-        </div>
-      </div>
-      <div style={{ overflowX: 'auto' }}>
-        <table className="mario-sheet-table">
-          <thead>
-            <tr>
-              <th style={{ width: 32, minWidth: 32 }}>#</th>
-              {Array.from({ length: sheet.cols }).map((_, c) => (
-                <th key={c}>{colIndexToLabel(c)}</th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: sheet.rows }).map((_, r) => (
-              <tr key={r}>
-                <th>{r + 1}</th>
-                {Array.from({ length: sheet.cols }).map((__, c) => {
-                  const cellRef = `${colIndexToLabel(c)}${r + 1}`;
-                  const raw = sheet.cells[cellRef] ?? '';
-                  const isEditing = editingCell === cellRef;
-                  const display = isEditing
-                    ? raw
-                    : evaluateSheetCell(sheet, cellRef);
-                  return (
-                    <td key={c}>
-                      <input
-                        className="mario-sheet-cell-input"
-                        value={display}
-                        placeholder={isEditing ? '=SUM(A1:A3)' : ''}
-                        onFocus={() => setEditingCell(cellRef)}
-                        onBlur={() => setEditingCell(null)}
-                        onChange={(e) => setCell(cellRef, e.target.value)}
-                      />
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+interface SlashState {
+  from: number;
+  query: string;
+  left: number;
+  top: number;
+  index: number;
 }
 
 export function BlockEditor({
@@ -698,1630 +214,912 @@ export function BlockEditor({
   onExportMarkdown,
   onExportPdf,
   onOpenShare,
+  canvasWidth = 'medium',
+  onHighlight,
+  onAiCommand,
+  notebookId,
+  pageId,
+  onPreviewHtml,
 }: BlockEditorProps) {
-  const nodes = content.document?.children ?? [];
-  const [focusedBlockId, setFocusedBlockId] = useState<string | null>(
-    nodes[0]?.id ?? null,
-  );
-  const [drawMode, setDrawMode] = useState(false);
-  const [htmlPreviewOpen, setHtmlPreviewOpen] = useState(false);
-  const [slashState, setSlashState] = useState<{
-    blockId: string;
-    query: string;
-    x: number;
-    y: number;
-  } | null>(null);
-  const inputRefs = useRef<
-    Record<string, HTMLTextAreaElement | HTMLInputElement | null>
-  >({});
-  const undoStackRef = useRef<PageContent[]>([]);
-  const redoStackRef = useRef<PageContent[]>([]);
-  const [, setHistoryTick] = useState(0);
-
-  useEffect(() => {
-    if (rawHtmlOverride) {
-      setHtmlPreviewOpen(true);
-    }
-  }, [rawHtmlOverride]);
-
-  const focusedNode = useMemo(
-    () => nodes.find((n) => n.id === focusedBlockId) ?? nodes[0] ?? null,
-    [nodes, focusedBlockId],
-  );
-
-  const activeBlockStyle = useMemo(() => {
-    if (!focusedNode) return 'paragraph';
-    if (focusedNode.type === 'heading') {
-      return `heading-${Number(focusedNode.data?.level ?? 1)}`;
-    }
-    return focusedNode.type;
-  }, [focusedNode]);
-
-  const activeAlign: BlockAlign =
-    (focusedNode?.data?.align as BlockAlign) ?? 'left';
-
-  const commitContent = (nextContent: PageContent) => {
-    const prevStack = undoStackRef.current;
-    if (prevStack.length >= 60) prevStack.shift();
-    prevStack.push(content);
-    redoStackRef.current = [];
-    setHistoryTick((t) => t + 1);
-    onContentChange(nextContent);
-  };
-
-  const handleUndo = () => {
-    const prev = undoStackRef.current.pop();
-    if (!prev) return;
-    redoStackRef.current.push(content);
-    setHistoryTick((t) => t + 1);
-    onContentChange(prev);
-  };
-
-  const handleRedo = () => {
-    const next = redoStackRef.current.pop();
-    if (!next) return;
-    undoStackRef.current.push(content);
-    setHistoryTick((t) => t + 1);
-    onContentChange(next);
-  };
-
-  const commitNodes = (nextNodes: AppFlowyNode[]) => {
-    const safeNodes =
-      nextNodes.length > 0 ? nextNodes : [makeParagraphNode('')];
-    commitContent({
-      ...content,
-      document: {
-        type: 'page',
-        children: safeNodes,
-      },
-    });
-  };
-
-  const moveBlock = (id: string | undefined, delta: -1 | 1) => {
-    if (!id) return;
-    const idx = nodes.findIndex((n) => n.id === id);
-    const targetIdx = idx + delta;
-    if (idx < 0 || targetIdx < 0 || targetIdx >= nodes.length) return;
-    const next = [...nodes];
-    const [moved] = next.splice(idx, 1);
-    if (!moved) return;
-    next.splice(targetIdx, 0, moved);
-    commitNodes(next);
-    setFocusedBlockId(id);
-    setTimeout(() => inputRefs.current[id]?.focus(), 10);
-  };
-
-  const updateNode = (
-    id: string | undefined,
-    updater: (prev: AppFlowyNode) => AppFlowyNode,
-  ) => {
-    if (!id) return;
-    commitNodes(nodes.map((n) => (n.id === id ? updater(n) : n)));
-  };
-
-  const deleteNode = (id: string | undefined) => {
-    if (!id) return;
-    const idx = nodes.findIndex((n) => n.id === id);
-    const next = nodes.filter((n) => n.id !== id);
-    commitNodes(next);
-    const target = next[Math.max(0, idx - 1)];
-    if (target?.id) {
-      const targetId = target.id;
-      setFocusedBlockId(targetId);
-      setTimeout(() => inputRefs.current[targetId]?.focus(), 10);
-    }
-  };
-
-  const insertAfter = (afterId: string | null, newNode: AppFlowyNode) => {
-    const ensuredId = newNode.id ?? nanoid6();
-    const nodeWithId: AppFlowyNode = { ...newNode, id: ensuredId };
-    if (!afterId) {
-      commitNodes([...nodes, nodeWithId]);
-    } else {
-      const idx = nodes.findIndex((n) => n.id === afterId);
-      if (idx < 0) {
-        commitNodes([...nodes, nodeWithId]);
-      } else {
-        const next = [...nodes];
-        next.splice(idx + 1, 0, nodeWithId);
-        commitNodes(next);
-      }
-    }
-    setFocusedBlockId(ensuredId);
-    setTimeout(() => inputRefs.current[ensuredId]?.focus(), 15);
-  };
-
-  const createNodeForKind = async (
-    kind: InsertBlockKind,
-  ): Promise<AppFlowyNode | null> => {
-    switch (kind) {
-      case 'paragraph':
-        return makeParagraphNode('');
-      case 'heading1':
-        return makeHeadingNode(1, '');
-      case 'heading2':
-        return makeHeadingNode(2, '');
-      case 'heading3':
-        return makeHeadingNode(3, '');
-      case 'bulleted_list':
-        return makeListNode('bulleted_list', '');
-      case 'numbered_list':
-        return makeListNode('numbered_list', '');
-      case 'todo_list':
-        return makeListNode('todo_list', '', false);
-      case 'quote':
-        return makeQuoteNode('');
-      case 'code':
-        return makeCodeNode('', 'python');
-      case 'math_equation':
-        return makeMathNode('E = mc^2');
-      case 'table':
-        return makeTableNode([
-          ['Column 1', 'Column 2', 'Column 3'],
-          ['', '', ''],
-          ['', '', ''],
-        ]);
-      case 'spreadsheet':
-        return makeSpreadsheetNode({
-          activeIndex: 0,
-          sheets: [
-            {
-              name: 'Sheet1',
-              rows: 5,
-              cols: 4,
-              cells: {
-                A1: 'Item',
-                B1: 'Cost',
-                A2: 'Server',
-                B2: '120',
-                A3: 'Storage',
-                B3: '45',
-                A4: 'Total',
-                B4: '=SUM(B2:B3)',
-              },
-            },
-          ],
-        });
-      case 'drawing':
-        return makeDrawingNode([], 220);
-      case 'audio_clip':
-        return {
-          id: nanoid6(),
-          type: 'audio_clip',
-          data: { path: '', durationMs: 0 },
-        };
-      case 'divider':
-        return makeDividerNode();
-      case 'html':
-        return makeHtmlNode();
-      case 'image': {
-        const picked = await window.mario.asset.pickImage();
-        if (!picked) return null;
-        return {
-          id: nanoid6(),
-          type: 'image',
-          data: {
-            url: picked.localPath,
-            drive_id: picked.driveId,
-            width: 520,
-            align: 'center',
-          },
-        };
-      }
-    }
-  };
-
-  const handleInsertBlock = async (
-    kind: InsertBlockKind,
-    replaceBlockId?: string,
-  ) => {
-    setSlashState(null);
-    const created = await createNodeForKind(kind);
-    if (!created) return;
-    if (replaceBlockId) {
-      commitNodes(
-        nodes.map((n) =>
-          n.id === replaceBlockId ? { ...created, id: n.id } : n,
-        ),
-      );
-      setFocusedBlockId(replaceBlockId);
-      setTimeout(() => inputRefs.current[replaceBlockId]?.focus(), 15);
-    } else {
-      insertAfter(focusedBlockId, created);
-    }
-  };
-
-  const handleBlockStyleChange = (style: string) => {
-    if (!focusedNode?.id) return;
-    const text = deltaToPlainText(focusedNode.data?.delta);
-    updateNode(focusedNode.id, (prev) => {
-      if (style.startsWith('heading-')) {
-        const level = Number(style.split('-')[1]) || 1;
-        return {
-          ...prev,
-          type: 'heading',
-          data: {
-            ...prev.data,
-            level,
-            delta: prev.data?.delta ?? [{ insert: text }],
-          },
-        };
-      }
-      if (style === 'code') {
-        return {
-          ...prev,
-          type: 'code',
-          data: {
-            language: 'python',
-            code: text,
-            delta: [{ insert: text }],
-          },
-        };
-      }
-      if (style === 'todo_list') {
-        return {
-          ...prev,
-          type: 'todo_list',
-          data: {
-            ...prev.data,
-            checked: Boolean(prev.data?.checked),
-            delta: prev.data?.delta ?? [{ insert: text }],
-          },
-        };
-      }
-      return {
-        ...prev,
-        type: style,
-        data: {
-          ...prev.data,
-          delta: prev.data?.delta ?? [{ insert: text }],
-        },
-      };
-    });
-  };
-
-  const applyInlineSelectionMark = (
-    mark: 'bold' | 'italic' | 'underline' | 'strikethrough' | 'code',
-  ) => {
-    if (!focusedNode?.id) return;
-    const el = inputRefs.current[focusedNode.id];
-    const raw = deltaToMarkdown(focusedNode.data?.delta);
-    const wrapMap: Record<typeof mark, [string, string]> = {
-      bold: ['**', '**'],
-      italic: ['*', '*'],
-      underline: ['<u>', '</u>'],
-      strikethrough: ['~~', '~~'],
-      code: ['`', '`'],
-    };
-    const [open, close] = wrapMap[mark];
-    if (
-      el &&
-      el.selectionStart != null &&
-      el.selectionEnd != null &&
-      el.selectionEnd > el.selectionStart
-    ) {
-      const start = el.selectionStart;
-      const end = el.selectionEnd;
-      const selected = raw.slice(start, end);
-      const nextText = `${raw.slice(0, start)}${open}${selected}${close}${raw.slice(end)}`;
-      updateNode(focusedNode.id, (prev) => ({
-        ...prev,
-        data: {
-          ...prev.data,
-          delta: parseInlineMarkdownToDelta(nextText),
-        },
-      }));
+  const contentRef = useRef(content);
+  contentRef.current = content;
+  const onContentChangeRef = useRef(onContentChange);
+  onContentChangeRef.current = onContentChange;
+  const onTitleChangeRef = useRef(onTitleChange);
+  onTitleChangeRef.current = onTitleChange;
+  const lastEmitted = useRef<AppFlowyDocument>(content.document);
+  const onHighlightRef = useRef(onHighlight);
+  onHighlightRef.current = onHighlight;
+  const onAiCommandRef = useRef(onAiCommand);
+  onAiCommandRef.current = onAiCommand;
+  // A highlight counts once it has held still for half a second and is a
+  // passage (12+ characters), not a word being fixed — as in Mario v1.
+  const lastHighlight = useRef('');
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reportSelection = (ed: Editor) => {
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+    const { from, to, empty } = ed.state.selection;
+    if (empty) {
+      lastHighlight.current = '';
       return;
     }
-    updateNode(focusedNode.id, (prev) => {
-      const delta = prev.data?.delta ?? [
-        { insert: deltaToPlainText(prev.data?.delta) },
-      ];
-      const allMarked = delta.every((op) => op.attributes?.[mark]);
-      const nextDelta: DeltaOp[] = delta.map((op) => ({
-        insert: op.insert,
+    const text = ed.state.doc.textBetween(from, to, '\n', ' ').trim();
+    if (text.length < 12 || text === lastHighlight.current) return;
+    highlightTimer.current = setTimeout(() => {
+      lastHighlight.current = text;
+      onHighlightRef.current?.(text);
+    }, 500);
+  };
+
+  const [drawMode, setDrawMode] = useState(false);
+  // The preview fills the editor pane by default (OneNote/Typora "reading view"); side by side on request.
+  const [preview, setPreview] = useState<PreviewState | null>(
+    rawHtmlOverride ? { layout: 'full', source: 'auto' } : null,
+  );
+  const [previewReload, setPreviewReload] = useState(0);
+  const previewOpen = preview !== null;
+  const [linkDialog, setLinkDialog] = useState<{ text: string; href: string; hasSelection: boolean } | null>(null);
+  const [alert, setAlert] = useState<{ title: string; message: string } | null>(null);
+  const [slash, setSlashState] = useState<SlashState | null>(null);
+  // Inline Ask: the box in the page after the caret's line (“/ask”).
+  const [inlineAsk, setInlineAsk] = useState<InlineAskAnchor | null>(null);
+  const slashRef = useRef<SlashState | null>(null);
+  const slashDismissedAt = useRef<number | null>(null);
+  const setSlash = (next: SlashState | null) => {
+    slashRef.current = next;
+    setSlashState(next);
+  };
+
+  // ── Title (OneNote: an untitled page is named by its first heading) ───────
+  const [title, setTitleState] = useState(pageTitle);
+  const titleRef = useRef(pageTitle);
+  const autoTitleRef = useRef<string | null>(null);
+  const titleTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingTitle = useRef<string | null>(null);
+  const setTitle = (t: string) => {
+    titleRef.current = t;
+    setTitleState(t);
+  };
+  const flushTitle = () => {
+    if (titleTimer.current) clearTimeout(titleTimer.current);
+    titleTimer.current = null;
+    if (pendingTitle.current !== null) {
+      const t = pendingTitle.current;
+      pendingTitle.current = null;
+      onTitleChangeRef.current(t);
+    }
+  };
+  const commitTitleSoon = (t: string) => {
+    pendingTitle.current = t;
+    if (titleTimer.current) clearTimeout(titleTimer.current);
+    titleTimer.current = setTimeout(flushTitle, 600);
+  };
+  useEffect(() => () => flushTitle(), []);
+  useEffect(() => () => {
+    if (highlightTimer.current) clearTimeout(highlightTimer.current);
+  }, []);
+  useEffect(() => {
+    if (pendingTitle.current === null && pageTitle !== titleRef.current) setTitle(pageTitle);
+  }, [pageTitle]);
+
+  const syncTitleFromHeading = (ed: Editor) => {
+    const heading = firstHeading(ed);
+    const current = titleRef.current;
+    if (!heading || heading === current) return;
+    if (isUntitled(current) || (autoTitleRef.current !== null && current === autoTitleRef.current)) {
+      autoTitleRef.current = heading;
+      setTitle(heading);
+      commitTitleSoon(heading);
+    }
+  };
+
+  // ── Slash menu ────────────────────────────────────────────────────────────
+  // Best first: a label that starts with what was typed ("/ask" → Ask AI), then a word
+  // that does, then anything containing it ("task" → To Do).
+  const slashMatches = (query: string) => {
+    if (!query) return SLASH_ITEMS;
+    const rank = (i: (typeof SLASH_ITEMS)[number]) => {
+      const label = i.label.toLowerCase();
+      if (label.startsWith(query)) return 0;
+      if (`${label} ${i.keywords}`.split(/\s+/).some((w) => w.startsWith(query))) return 1;
+      return label.includes(query) || i.keywords.includes(query) ? 2 : -1;
+    };
+    return SLASH_ITEMS.map((item, at) => ({ item, at, r: rank(item) }))
+      .filter((x) => x.r >= 0)
+      .sort((a, b) => a.r - b.r || a.at - b.at)
+      .map((x) => x.item);
+  };
+
+  const updateSlash = (ed: Editor) => {
+    const sel = ed.state.selection;
+    const $f = sel.$from;
+    if (!sel.empty || !$f.parent.isTextblock || $f.parent.type.spec.code) return setSlash(null);
+    const before = $f.parent.textBetween(Math.max(0, $f.parentOffset - 40), $f.parentOffset, undefined, '￼');
+    const m = /(?:^|\s)\/([\w-]*)$/.exec(before);
+    if (!m) {
+      slashDismissedAt.current = null;
+      return setSlash(null);
+    }
+    const from = $f.pos - m[1].length - 1;
+    if (slashDismissedAt.current === from || slashMatches(m[1].toLowerCase()).length === 0) return setSlash(null);
+    const coords = ed.view.coordsAtPos(from);
+    const prev = slashRef.current;
+    setSlash({
+      from,
+      query: m[1].toLowerCase(),
+      left: coords.left,
+      top: coords.bottom + 4,
+      index: prev && prev.from === from ? Math.min(prev.index, slashMatches(m[1].toLowerCase()).length - 1) : 0,
+    });
+  };
+
+  const editorRef = useRef<Editor | null>(null);
+  const editor: Editor | null = useEditor(
+    {
+      extensions: [
+        StarterKit.configure({
+          heading: false,
+          bulletList: false,
+          orderedList: false,
+          listItem: false,
+          listKeymap: false,
+          blockquote: false,
+          codeBlock: false,
+          code: false,
+          link: {
+            openOnClick: false,
+            autolink: true,
+            linkOnPaste: true,
+            defaultProtocol: 'https',
+            HTMLAttributes: { rel: 'noopener noreferrer', target: null },
+          },
+          dropcursor: { color: 'var(--mac-accent)', width: 2 },
+          undoRedo: { depth: 200 },
+        }),
+        MarioHeading.configure({ levels: [1, 2, 3, 4, 5, 6] }),
+        MarioCode,
+        CodeBlockLowlight.extend({ addNodeView: codeBlockNodeView }).configure({
+          lowlight,
+          defaultLanguage: 'plaintext',
+          enableTabIndentation: true,
+          tabSize: 2,
+        }),
+        BlockAttributes,
+        BulletedList,
+        NumberedList,
+        TodoList,
+        Quote,
+        MathBlock,
+        InlineMath,
+        Embed,
+        AppFlowyAttrs,
+        TextStyle,
+        Color,
+        Highlight.configure({ multicolor: true }),
+        TableKit.configure({ table: { resizable: true } }),
+        Placeholder.configure({
+          showOnlyCurrent: true,
+          includeChildren: false,
+          placeholder: ({ node, editor: ed }) => {
+            switch (node.type.name) {
+              case 'heading':
+                return `Heading ${node.attrs.level}`;
+              case 'paragraph':
+                return ed.state.doc.childCount <= 1 ? 'Start writing, or type “/” for commands' : 'Type “/” for commands';
+              case 'bulleted_list':
+              case 'numbered_list':
+                return 'List';
+              case 'todo_list':
+                return 'To do';
+              case 'quote':
+                return 'Quote';
+              default:
+                return '';
+            }
+          },
+        }),
+        DocumentUpkeep,
+        InlineAsk,
+        MarioKeys,
+        MarioIndentKeys,
+        MarkdownShortcuts,
+      ],
+      content: appflowyToPm(content.document),
+      editorProps: {
         attributes: {
-          ...op.attributes,
-          [mark]: !allMarked,
+          class: 'mario-doc',
+          spellcheck: String(spellcheck),
+          'aria-label': 'Page',
+          role: 'textbox',
+          'aria-multiline': 'true',
         },
-      }));
-      return {
-        ...prev,
-        data: {
-          ...prev.data,
-          delta: nextDelta,
+        transformPastedHTML: normalizePastedHtml,
+        clipboardTextSerializer: serializeClipboardText,
+        handlePaste: (_view, event): boolean => {
+          const ed: Editor | null = editorRef.current;
+          if (!ed) return false;
+          const file = Array.from(event.clipboardData?.items ?? [])
+            .find((i) => i.type.startsWith('image/'))
+            ?.getAsFile();
+          if (file) {
+            event.preventDefault();
+            void insertImageFile(ed, file);
+            return true;
+          }
+          // HTML source becomes an HTML block that renders it; a whole page opens full size.
+          const text = event.clipboardData?.getData('text/plain') ?? '';
+          if (!ed.state.selection.$from.parent.type.spec.code && looksLikeHtmlSource(text)) {
+            event.preventDefault();
+            const id = nanoid6();
+            insertBlock(ed, { type: 'embed', attrs: { id, kind: 'html', data: { html: text.trim() } } });
+            if (isFullHtmlDocument(text)) setPreview({ layout: 'full', source: 'web', blockId: id });
+            return true;
+          }
+          return handleMarkdownPaste(ed, event);
         },
-      };
-    });
-  };
-
-  const applyBlockColor = (attrKey: 'text_color' | 'bg_color', hex: string) => {
-    if (!focusedNode?.id) return;
-    updateNode(focusedNode.id, (prev) => {
-      const delta = prev.data?.delta ?? [
-        { insert: deltaToPlainText(prev.data?.delta) },
-      ];
-      const nextDelta: DeltaOp[] = delta.map((op) => {
-        const nextAttrs: DeltaAttributes = { ...op.attributes };
-        if (!hex) delete nextAttrs[attrKey];
-        else nextAttrs[attrKey] = hex;
-        return { insert: op.insert, attributes: nextAttrs };
-      });
-      return {
-        ...prev,
-        data: {
-          ...prev.data,
-          delta: nextDelta,
+        handleDrop: (_view, event) => {
+          const ed = editorRef.current;
+          const file = Array.from((event as DragEvent).dataTransfer?.files ?? []).find((f) => f.type.startsWith('image/'));
+          if (!ed || !file) return false;
+          event.preventDefault();
+          void insertImageFile(ed, file);
+          return true;
         },
-      };
-    });
-  };
-
-  const handleAlignChange = (align: BlockAlign) => {
-    if (!focusedNode?.id) return;
-    const cleanAlign = align === 'justify' ? 'left' : align;
-    updateNode(focusedNode.id, (prev) => ({
-      ...prev,
-      data: {
-        ...prev.data,
-        align: cleanAlign,
+        handleClick: (_view, _pos, event) => {
+          // Links open with ⌘/Ctrl-click, in the browser; a plain click edits.
+          const a = (event.target as HTMLElement | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+          if (a && (event.metaKey || event.ctrlKey)) {
+            window.open(a.href, '_blank', 'noopener');
+            return true;
+          }
+          return false;
+        },
+        handleKeyDown: (_view, event) => {
+          const s = slashRef.current;
+          const ed = editorRef.current;
+          if (!s || !ed) {
+            if ((event.metaKey || event.ctrlKey) && event.shiftKey && event.key.toLowerCase() === 'k' && ed) {
+              event.preventDefault();
+              openLinkDialog(ed);
+              return true;
+            }
+            return false;
+          }
+          const items = slashMatches(s.query);
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            const d = event.key === 'ArrowDown' ? 1 : -1;
+            setSlash({ ...s, index: (s.index + d + items.length) % items.length });
+            return true;
+          }
+          if (event.key === 'Enter' || event.key === 'Tab') {
+            const item = items[s.index];
+            if (item) runSlash(ed, s, item.kind);
+            return true;
+          }
+          if (event.key === 'Escape') {
+            slashDismissedAt.current = s.from;
+            setSlash(null);
+            return true;
+          }
+          return false;
+        },
       },
-    }));
-  };
+      onUpdate: ({ editor: ed }) => {
+        const doc = pmToAppflowy(ed.getJSON());
+        lastEmitted.current = doc;
+        onContentChangeRef.current({ ...contentRef.current, document: doc });
+        syncTitleFromHeading(ed);
+        updateSlash(ed);
+        reportSelection(ed);
+      },
+      onSelectionUpdate: ({ editor: ed }) => {
+        updateSlash(ed);
+        reportSelection(ed);
+      },
+      onBlur: () => setSlash(null),
+    },
+    [],
+  );
+  editorRef.current = editor;
 
-  const stats = useMemo(() => {
-    const md = documentToMarkdown(content.document);
-    const words = md
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean).length;
-    return { words, blocks: nodes.length };
-  }, [content.document, nodes.length]);
+  // Opening a page whose title is still "Untitled" names it after its first heading.
+  useEffect(() => {
+    if (!editor) return;
+    const heading = firstHeading(editor);
+    if (heading && pageTitle === heading) autoTitleRef.current = heading;
+    syncTitleFromHeading(editor);
+  }, [editor]);
 
-  const fontStack = useMemo(() => {
-    switch (fontFamily) {
-      case 'Inter':
-        return '"Inter", -apple-system, BlinkMacSystemFont, sans-serif';
-      case 'Serif':
-        return 'Georgia, "Times New Roman", serif';
-      case 'Monospace':
-        return 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
-      default:
-        return 'inherit';
-    }
-  }, [fontFamily]);
+  // Content changed outside the editor (the AI agent, a sync): show it, without an undo step.
+  useEffect(() => {
+    if (!editor || editor.isDestroyed || content.document === lastEmitted.current) return;
+    lastEmitted.current = content.document;
+    editor
+      .chain()
+      .setMeta('addToHistory', false)
+      .setContent(appflowyToPm(content.document), { emitUpdate: false })
+      .run();
+    syncTitleFromHeading(editor);
+  }, [content.document, editor]);
 
-  const renderFormattedDeltaPreview = (node: AppFlowyNode) => {
-    const ops = node.data?.delta ?? [];
-    if (ops.length === 0) {
-      return (
-        <span className="mac-label-tertiary">
-          {node.type === 'heading'
-            ? `Heading ${node.data?.level ?? 1}`
-            : 'Type "/" for commands…'}
-        </span>
-      );
-    }
-    return ops.map((op, i) => {
-      const text = op.insert ?? '';
-      const a = op.attributes ?? {};
-      const parts = text.split(/(\$[^$\n]+\$)/g);
-      const rendered = parts.map((part, pIdx) => {
-        if (part.startsWith('$') && part.endsWith('$') && part.length > 2) {
-          const tex = part.slice(1, -1);
-          const html = katex.renderToString(normalizeLatexFormula(tex), {
-            displayMode: false,
-            throwOnError: false,
-          });
-          return <span key={pIdx} dangerouslySetInnerHTML={{ __html: html }} />;
-        }
-        return <React.Fragment key={pIdx}>{part}</React.Fragment>;
-      });
-
-      const style: React.CSSProperties = {
-        fontWeight: a.bold ? 600 : undefined,
-        fontStyle: a.italic ? 'italic' : undefined,
-        textDecoration:
-          [
-            a.underline ? 'underline' : '',
-            a.strikethrough ? 'line-through' : '',
-          ]
-            .filter(Boolean)
-            .join(' ') || undefined,
-        color: (a.text_color as string) || undefined,
-        backgroundColor: (a.bg_color as string) || undefined,
-      };
-
-      if (a.code) {
-        return (
-          <code key={i} className="mario-inline-code" style={style}>
-            {rendered}
-          </code>
-        );
-      }
-      if (a.href) {
-        return (
-          <a
-            key={i}
-            href={a.href}
-            style={{ ...style, color: 'var(--mac-accent)' }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            {rendered}
-          </a>
-        );
-      }
-      return (
-        <span key={i} style={style}>
-          {rendered}
-        </span>
-      );
+  useEffect(() => {
+    if (!editor || editor.isDestroyed) return;
+    const props = editor.options.editorProps;
+    editor.setOptions({
+      editorProps: { ...props, attributes: { ...(props.attributes as Record<string, string>), spellcheck: String(spellcheck) } },
     });
+  }, [editor, spellcheck]);
+
+  useEffect(() => {
+    if (rawHtmlOverride) setPreview({ layout: 'full', source: 'auto' });
+  }, [rawHtmlOverride]);
+
+  // An HTML block or HTML code block asked to be shown as a webpage.
+  useEffect(() => {
+    const onRequest = (e: Event) => {
+      const blockId = (e as CustomEvent<{ blockId: string }>).detail?.blockId;
+      if (blockId) setPreview({ layout: 'full', source: 'web', blockId });
+    };
+    window.addEventListener('mario-preview-block', onRequest);
+    return () => window.removeEventListener('mario-preview-block', onRequest);
+  }, []);
+
+  // Escape leaves a full-pane preview.
+  useEffect(() => {
+    if (preview?.layout !== 'full') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPreview(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [preview?.layout]);
+
+  const ribbonState = useEditorState({
+    editor,
+    selector: ({ editor: ed }): RibbonState & { words: number } => {
+      if (!ed) {
+        return { bold: false, italic: false, underline: false, strike: false, code: false, link: false, blockStyle: 'paragraph', align: 'left', inTable: false, canUndo: false, canRedo: false, words: 0 };
+      }
+      const parent = ed.state.selection.$from.parent;
+      const text = ed.state.doc.textBetween(0, ed.state.doc.content.size, ' ', ' ');
+      return {
+        bold: ed.isActive('bold'),
+        italic: ed.isActive('italic'),
+        underline: ed.isActive('underline'),
+        strike: ed.isActive('strike'),
+        code: ed.isActive('code'),
+        link: ed.isActive('link'),
+        blockStyle: currentBlockStyle(ed.state),
+        align: (parent.attrs.align as 'center' | 'right' | null) ?? 'left',
+        inTable: ed.isActive('table'),
+        canUndo: ed.can().undo(),
+        canRedo: ed.can().redo(),
+        words: text.trim() ? text.trim().split(/\s+/).length : 0,
+      };
+    },
+  });
+
+  // ── Inserting things (ribbon, slash menu, context menu) ───────────────────
+
+  async function insertImageFile(ed: Editor, file: File) {
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    try {
+      const saved = await window.mario.asset.savePastedImage(dataUrl);
+      insertBlock(ed, { type: 'embed', attrs: { kind: 'image', data: { url: saved.assetPath, width: 520, align: 'center' } } });
+    } catch (err) {
+      setAlert({ title: 'The picture couldn’t be added.', message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  /** Puts a block in place of an empty line, or after the line the caret is on. */
+  function insertBlock(ed: Editor, json: JSONContent, selectNode = false): number {
+    const sel = ed.state.selection;
+    const $f = sel.$from;
+    let pos: number;
+    if ($f.depth < 1) {
+      // A whole block is selected: the new one goes after it.
+      pos = sel.to;
+      ed.chain().focus().insertContentAt(pos, json).run();
+    } else {
+      const top = $f.node(1);
+      const start = $f.before(1);
+      const replace = top.type.name === 'paragraph' && top.content.size === 0;
+      pos = replace ? start : start + top.nodeSize;
+      const chain = ed.chain().focus();
+      if (replace) chain.insertContentAt({ from: start, to: start + top.nodeSize }, json);
+      else chain.insertContentAt(pos, json);
+      chain.run();
+    }
+    if (selectNode && ed.state.doc.nodeAt(pos)) {
+      ed.view.dispatch(ed.state.tr.setSelection(NodeSelection.create(ed.state.doc, pos)));
+    }
+    return pos;
+  }
+
+  /** Inline Ask after the caret's line, about the highlight when there is one. */
+  function openAsk(ed: Editor) {
+    openInlineAsk(ed);
+    setInlineAsk(inlineAskAnchor(ed.state));
+  }
+
+  function closeAsk() {
+    if (editor) closeInlineAsk(editor);
+    setInlineAsk(null);
+  }
+
+  function openLinkDialog(ed: Editor) {
+    const { from, to, empty } = ed.state.selection;
+    const href = String(ed.getAttributes('link').href ?? '');
+    setLinkDialog({ text: empty ? '' : ed.state.doc.textBetween(from, to, ' '), href, hasSelection: !empty });
+  }
+
+  async function performInsert(ed: Editor, kind: InsertKind | BlockStyle | AiSlashKind) {
+    if (kind === 'ai_ask') {
+      openAsk(ed);
+      return;
+    }
+    if (kind === 'ai_summary' || kind === 'ai_quiz') {
+      const above = ed.state.doc.textBetween(0, ed.state.selection.from, '\n\n', ' ').trim();
+      onAiCommandRef.current?.(
+        kind === 'ai_summary' ? { kind: 'summary', text: above } : { kind: 'quiz' },
+      );
+      return;
+    }
+    if (BLOCK_STYLES.has(kind)) {
+      setBlockStyle(ed, kind as BlockStyle);
+      ed.commands.focus();
+      return;
+    }
+    switch (kind as InsertKind) {
+      case 'table':
+        ed.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: false }).run();
+        return;
+      case 'math_block':
+        insertBlock(ed, { type: 'math_block', attrs: { formula: '' } }, true);
+        return;
+      case 'inline_math': {
+        const pos = ed.state.selection.from;
+        ed.chain().focus().insertContent('$$').setTextSelection(pos + 1).run();
+        return;
+      }
+      case 'code': {
+        // An empty line becomes the code block; a line with text gets one after it.
+        const $f = ed.state.selection.$from;
+        if ($f.parent.type.name === 'paragraph' && $f.parent.content.size === 0) {
+          setBlockStyle(ed, 'code');
+          ed.commands.focus();
+        } else {
+          const pos = insertBlock(ed, { type: 'codeBlock', attrs: { language: 'plaintext' } });
+          ed.chain().focus().setTextSelection(pos + 1).run();
+        }
+        return;
+      }
+      case 'divider':
+        ed.chain().focus().setHorizontalRule().run();
+        return;
+      case 'todo':
+        setBlockStyle(ed, 'todo_list');
+        return;
+      case 'quote':
+        setBlockStyle(ed, 'quote');
+        return;
+      case 'image': {
+        const picked = await window.mario.asset.pickImage();
+        if (picked) {
+          insertBlock(ed, {
+            type: 'embed',
+            attrs: { kind: 'image', data: { url: picked.localPath, drive_id: picked.driveId, width: 520, align: 'center' } },
+          });
+        }
+        return;
+      }
+      case 'spreadsheet':
+        insertBlock(ed, {
+          type: 'embed',
+          attrs: {
+            kind: 'spreadsheet',
+            data: {
+              workbook: {
+                activeIndex: 0,
+                sheets: [
+                  {
+                    name: 'Sheet1',
+                    rows: 5,
+                    cols: 4,
+                    cells: { A1: 'Item', B1: 'Cost', A2: 'Server', B2: '120', A3: 'Storage', B3: '45', A4: 'Total', B4: '=SUM(B2:B3)' },
+                  },
+                ],
+              },
+            },
+          },
+        });
+        return;
+      case 'drawing':
+        insertBlock(ed, { type: 'embed', attrs: { kind: 'drawing', data: { strokes: [], height: 220 } } }, true);
+        return;
+      case 'audio':
+        insertBlock(ed, { type: 'embed', attrs: { kind: 'audio_clip', data: { path: '', durationMs: 0 } } }, true);
+        return;
+      case 'html':
+        insertBlock(ed, { type: 'embed', attrs: { kind: 'html', data: { html: DEFAULT_HTML } } }, true);
+        return;
+      case 'datetime': {
+        const now = new Date();
+        const stamp = `${now.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} ${now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`;
+        ed.chain().focus().insertContent(stamp).run();
+        return;
+      }
+      case 'link':
+        openLinkDialog(ed);
+        return;
+    }
+  }
+
+  function runSlash(ed: Editor, s: SlashState, kind: InsertKind | BlockStyle | AiSlashKind) {
+    setSlash(null);
+    ed.chain().focus().deleteRange({ from: s.from, to: ed.state.selection.from }).run();
+    void performInsert(ed, kind);
+  }
+
+  const applyLink = () => {
+    if (!editor || !linkDialog) return;
+    const href = linkDialog.href.trim();
+    const chain = editor.chain().focus();
+    if (!href) {
+      chain.extendMarkRange('link').unsetLink().run();
+    } else if (linkDialog.hasSelection) {
+      chain.extendMarkRange('link').setLink({ href }).run();
+    } else {
+      const text = linkDialog.text.trim() || href;
+      chain.insertContent({ type: 'text', text, marks: [{ type: 'link', attrs: { href } }] }).unsetMark('link').run();
+    }
+    setLinkDialog(null);
   };
 
-  const previewHtmlDoc = useMemo(() => {
-    if (rawHtmlOverride) return rawHtmlOverride;
-    const htmlCodeBlock = nodes.find(
-      (n) =>
-        n.type === 'code' &&
-        String(n.data?.language ?? '').toLowerCase() === 'html',
-    );
-    if (htmlCodeBlock) {
-      return String(
-        htmlCodeBlock.data?.code ??
-          deltaToPlainText(htmlCodeBlock.data?.delta),
-      );
+  const runOcrDocument = async () => {
+    try {
+      const res = await window.mario.ocr.pickAndRunMinerU();
+      if (res && res.success && res.markdown && editor) {
+        editor.commands.focus('end');
+        insertMarkdown(editor, res.markdown);
+      } else if (res && !res.success) {
+        setAlert({ title: 'MinerU couldn’t read the file.', message: res.error || 'No text was recognised.' });
+      }
+    } catch (err) {
+      setAlert({ title: 'MinerU couldn’t read the file.', message: err instanceof Error ? err.message : String(err) });
     }
-    const md = documentToMarkdown(content.document);
-    return `<!doctype html><html><head><meta charset="utf-8"><style>body{font-family:-apple-system,BlinkMacSystemFont,"Inter",sans-serif;padding:24px 32px;line-height:1.6;color:#1d1d1f;max-width:740px;margin:0 auto}pre{background:#f5f5f7;padding:12px;border-radius:6px;overflow:auto}</style></head><body><h1>${pageTitle}</h1><pre style="white-space:pre-wrap;font-family:inherit;background:transparent;padding:0">${md.replace(/</g, '&lt;')}</pre></body></html>`;
-  }, [rawHtmlOverride, nodes, content.document, pageTitle]);
+  };
 
-  let numberedIndex = 0;
+  // While editing side by side, the webpage reloads after a pause, not on every key.
+  const previewSourceDoc = useDebounced(content.document, preview?.layout === 'split' ? 500 : 0);
+  const webDoc = useMemo(() => {
+    if (!preview) return null;
+    if (rawHtmlOverride) return prepareWebDocument({ html: [rawHtmlOverride] });
+    if (preview.blockId) return buildBlockWebDocument(previewSourceDoc, preview.blockId);
+    return buildPageWebDocument(previewSourceDoc);
+  }, [preview, rawHtmlOverride, previewSourceDoc]);
+  const previewSource: 'web' | 'document' = webDoc && preview?.source !== 'document' ? 'web' : 'document';
+  const previewDoc = useMemo(() => {
+    if (!preview) return '';
+    if (previewSource === 'web' && webDoc) return webDoc;
+    return buildPreviewDocument(title, documentToMarkdown(previewSourceDoc));
+  }, [preview, previewSource, webDoc, title, previewSourceDoc]);
+
+  const created = content.createdAt ? new Date(content.createdAt) : null;
+  const stamp =
+    created && !Number.isNaN(created.getTime())
+      ? `${created.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}   ${created.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}`
+      : null;
+
+  const inTable = ribbonState?.inTable ?? false;
+  const contextMenu = editor && (
+    <>
+      <MenuItem shortcut="⌃X" onSelect={() => { editor.commands.focus(); document.execCommand('cut'); }}>Cut</MenuItem>
+      <MenuItem icon="bubble-left" onSelect={() => openAsk(editor)}>
+        Ask Mario…
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem shortcut="⌃C" onSelect={() => { editor.commands.focus(); document.execCommand('copy'); }}>Copy</MenuItem>
+      <MenuItem
+        shortcut="⌃V"
+        onSelect={async () => {
+          const text = await navigator.clipboard.readText().catch(() => '');
+          if (text) insertMarkdown(editor, text);
+        }}
+      >
+        Paste
+      </MenuItem>
+      <MenuSeparator />
+      <MenuItem shortcut="⌃B" onSelect={() => editor.chain().focus().toggleBold().run()}>Bold</MenuItem>
+      <MenuItem shortcut="⌃I" onSelect={() => editor.chain().focus().toggleItalic().run()}>Italic</MenuItem>
+      <MenuItem shortcut="⌃U" onSelect={() => editor.chain().focus().toggleUnderline().run()}>Underline</MenuItem>
+      <MenuItem shortcut="⇧⌃H" onSelect={() => editor.chain().focus().toggleHighlight({ color: 'rgba(255, 214, 10, 0.4)' }).run()}>Highlight</MenuItem>
+      <MenuItem shortcut="⇧⌃K" onSelect={() => openLinkDialog(editor)}>Link…</MenuItem>
+      <MenuItem shortcut="⇧⌃N" onSelect={() => editor.chain().focus().unsetAllMarks().run()}>Clear Formatting</MenuItem>
+      <MenuSeparator />
+      {inTable ? (
+        <>
+          <MenuHeader>Table</MenuHeader>
+          <MenuItem onSelect={() => editor.chain().focus().addRowBefore().run()}>Insert Row Above</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().addRowAfter().run()}>Insert Row Below</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().addColumnBefore().run()}>Insert Column Left</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().addColumnAfter().run()}>Insert Column Right</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().deleteRow().run()}>Delete Row</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().deleteColumn().run()}>Delete Column</MenuItem>
+          <MenuItem onSelect={() => editor.chain().focus().deleteTable().run()}>Delete Table</MenuItem>
+        </>
+      ) : (
+        <>
+          <MenuHeader>Turn Into</MenuHeader>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'paragraph')}>Body</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'heading-1')}>Heading 1</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'heading-2')}>Heading 2</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'heading-3')}>Heading 3</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'bulleted_list')}>Bulleted List</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'numbered_list')}>Numbered List</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'todo_list')}>To Do</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'quote')}>Quote</MenuItem>
+          <MenuItem onSelect={() => setBlockStyle(editor, 'code')}>Code</MenuItem>
+          <MenuSeparator />
+          <MenuItem shortcut="⌥↑" onSelect={() => moveBlock(editor, -1)}>Move Up</MenuItem>
+          <MenuItem shortcut="⌥↓" onSelect={() => moveBlock(editor, 1)}>Move Down</MenuItem>
+          <MenuItem shortcut="⇥" onSelect={() => changeIndent(editor, 1)}>Indent</MenuItem>
+          <MenuItem shortcut="⇧⇥" onSelect={() => changeIndent(editor, -1)}>Outdent</MenuItem>
+        </>
+      )}
+    </>
+  );
+
+  if (!editor) return null;
+  const slashItems = slash ? slashMatches(slash.query) : [];
 
   return (
-    <div
-      className="mario-editor-shell"
-      onKeyDown={(e) => {
-        const cmd = e.metaKey || e.ctrlKey;
-        if (!cmd) return;
-        const k = e.key.toLowerCase();
-        if (k === 'z' && !e.shiftKey && !e.altKey) {
-          if (undoStackRef.current.length > 0) {
-            e.preventDefault();
-            handleUndo();
-          }
-        } else if (
-          (k === 'z' && e.shiftKey && !e.altKey) ||
-          (k === 'y' && !e.shiftKey && !e.altKey)
-        ) {
-          if (redoStackRef.current.length > 0) {
-            e.preventDefault();
-            handleRedo();
-          }
-        }
-      }}
-    >
-      <MacFormatBar
-        activeBlockStyle={activeBlockStyle}
-        onBlockStyleChange={handleBlockStyleChange}
+    <div className="mario-editor-shell">
+      <Ribbon
+        editor={editor}
+        state={ribbonState ?? ({} as RibbonState)}
         fontFamily={fontFamily}
         onFontFamilyChange={onFontFamilyChange}
         fontSize={fontSize}
         onFontSizeChange={onFontSizeChange}
-        onToggleInlineFormat={applyInlineSelectionMark}
-        onApplyTextColor={(hex) => applyBlockColor('text_color', hex)}
-        onApplyHighlightColor={(hex) => applyBlockColor('bg_color', hex)}
-        activeAlign={activeAlign}
-        onAlignChange={handleAlignChange}
-        onInsertBlock={(kind) => handleInsertBlock(kind)}
         zoom={zoom}
         onZoomChange={onZoomChange}
-        canUndo={undoStackRef.current.length > 0}
-        canRedo={redoStackRef.current.length > 0}
-        onUndo={handleUndo}
-        onRedo={handleRedo}
         drawMode={drawMode}
         onToggleDrawMode={() => setDrawMode((d) => !d)}
-        htmlPreviewOpen={htmlPreviewOpen}
-        onToggleHtmlPreview={() => setHtmlPreviewOpen((v) => !v)}
+        hasInk={(content.strokes?.length ?? 0) > 0}
+        onClearInk={() => onContentChangeRef.current({ ...contentRef.current, document: lastEmitted.current, strokes: [] })}
+        htmlPreviewOpen={previewOpen}
+        onToggleHtmlPreview={() => setPreview((p) => (p ? null : { layout: 'full', source: 'auto' }))}
         hasHtmlArtifact={Boolean(rawHtmlOverride)}
         saveStatus={saveStatus}
+        wordCount={ribbonState?.words ?? 0}
+        onInsert={(kind) => void performInsert(editor, kind)}
+        onOcrDocument={runOcrDocument}
         onExportMarkdown={onExportMarkdown}
         onExportPdf={onExportPdf}
         onOpenShare={onOpenShare}
-        onOcrMinerU={async () => {
-          try {
-            const res = await window.mario.ocr.pickAndRunMinerU();
-            if (res && res.success && res.markdown) {
-              const parsed = markdownToNodes(res.markdown);
-              if (parsed.length > 0) {
-                const nextNodes = [...nodes, ...parsed];
-                commitNodes(nextNodes);
-              }
-            } else if (res && !res.success) {
-              alert(`MinerU OCR failed: ${res.error || 'Unknown error'}`);
-            }
-          } catch (err) {
-            alert(`MinerU OCR error: ${err instanceof Error ? err.message : String(err)}`);
-          }
-        }}
       />
 
       <div className="mario-editor-split">
-        <div
-          className="mario-editor-scroll mac-scroll"
-          style={{
-            fontFamily: fontStack,
-            fontSize: `${fontSize}px`,
-            zoom,
-          }}
-        >
-          <div className="mario-editor-canvas-wrap">
+        <div className="mario-editor-scroll mac-scroll" hidden={preview?.layout === 'full'}>
+          <div
+            className="mario-page"
+            data-width={canvasWidth}
+            style={
+              {
+                '--mario-font': fontStackFor(fontFamily),
+                '--mario-font-size': `${fontSize}px`,
+                zoom,
+              } as React.CSSProperties
+            }
+          >
             {drawMode && (
               <DrawingCanvasBlock
                 overlay
                 strokes={content.strokes ?? []}
-                onChange={(nextStrokes) =>
-                  onContentChange({
-                    ...content,
-                    strokes: nextStrokes,
-                  })
+                onChange={(strokes) =>
+                  onContentChangeRef.current({ ...contentRef.current, document: lastEmitted.current, strokes })
                 }
                 onCloseOverlay={() => setDrawMode(false)}
               />
             )}
-
-            <input
-              className="mario-page-title-input"
-              value={pageTitle}
-              placeholder="Untitled Page"
-              spellCheck={spellcheck}
-              onChange={(e) => onTitleChange(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  const first = nodes[0];
-                  if (first?.id) {
-                    setFocusedBlockId(first.id);
-                    inputRefs.current[first.id]?.focus();
-                  }
-                }
-              }}
-            />
-
-            <div className="mario-page-meta">
-              <span>{stats.words} words</span>
-              <span>·</span>
-              <span>{stats.blocks} blocks</span>
-              {(content.strokes?.length ?? 0) > 0 && (
-                <>
-                  <span>·</span>
-                  <span>{content.strokes?.length} ink strokes</span>
-                </>
-              )}
-            </div>
-
-            <div
-              className="mario-blocks"
-              onClick={(e) => {
-                if (e.target === e.currentTarget && nodes.length > 0) {
-                  const last = nodes[nodes.length - 1];
-                  if (last?.id) {
-                    setFocusedBlockId(last.id);
-                    inputRefs.current[last.id]?.focus();
-                  }
-                }
-              }}
-            >
-              {nodes.map((node, index) => {
-                const nodeId = node.id ?? `blk_${index}`;
-                if (node.type === 'numbered_list') {
-                  numberedIndex += 1;
-                } else {
-                  numberedIndex = 0;
-                }
-                const currentNumber = numberedIndex;
-                const isFocused = focusedBlockId === nodeId;
-                const align = (node.data?.align as BlockAlign) ?? 'left';
-
-                // 1. Divider block
-                if (node.type === 'divider') {
-                  return (
-                    <div
-                      key={nodeId}
-                      className={`mario-block-row ${
-                        isFocused ? 'mario-block-row--focused' : ''
-                      }`}
-                      onClick={() => setFocusedBlockId(nodeId)}
-                    >
-                      <div className="mario-block-gutter">
-                        <button
-                          type="button"
-                          className="mario-block-gutter__btn"
-                          title="Delete Divider"
-                          onClick={() => deleteNode(nodeId)}
-                        >
-                          ×
-                        </button>
-                      </div>
-                      <div
-                        className="mario-block-body"
-                        style={{ padding: '6px 0' }}
-                      >
-                        <hr className="mac-divider" />
-                      </div>
-                    </div>
-                  );
-                }
-
-                // 2. Code block
-                if (node.type === 'code') {
-                  const lang = String(node.data?.language ?? 'python');
-                  const rawCode = String(
-                    node.data?.code ?? deltaToPlainText(node.data?.delta),
-                  );
-                  let highlighted = '';
-                  try {
-                    highlighted = hljs.getLanguage(lang)
-                      ? hljs.highlight(rawCode, { language: lang }).value
-                      : hljs.highlightAuto(rawCode).value;
-                  } catch {
-                    highlighted = rawCode;
-                  }
-
-                  return (
-                    <div
-                      key={nodeId}
-                      className="mario-rich-card"
-                      onClick={() => setFocusedBlockId(nodeId)}
-                    >
-                      <div className="mario-rich-card__header">
-                        <PopUpButton
-                          size="small"
-                          aria-label="Language"
-                          value={lang}
-                          onChange={(nextLang) =>
-                            updateNode(nodeId, (prev) => ({
-                              ...prev,
-                              data: {
-                                ...prev.data,
-                                language: nextLang,
-                              },
-                            }))
-                          }
-                          options={[
-                            'python',
-                            'javascript',
-                            'typescript',
-                            'bash',
-                            'dart',
-                            'rust',
-                            'go',
-                            'sql',
-                            'json',
-                            'html',
-                            'css',
-                            'markdown',
-                          ]}
-                        />
-                        <Spacer />
-                        <Button
-                          size="small"
-                          variant="borderless"
-                          icon="doc-on-doc"
-                          onClick={() => navigator.clipboard?.writeText(rawCode)}
-                        >
-                          Copy
-                        </Button>
-                        <Button
-                          size="small"
-                          variant="borderless"
-                          icon="trash"
-                          label="Delete Code Block"
-                          onClick={() => deleteNode(nodeId)}
-                        />
-                      </div>
-                      {isFocused || rawCode.trim().length === 0 ? (
-                        <textarea
-                          ref={(el) => {
-                            inputRefs.current[nodeId] = el;
-                          }}
-                          className="mario-code-textarea"
-                          rows={Math.max(3, rawCode.split('\n').length)}
-                          value={rawCode}
-                          spellCheck={false}
-                          placeholder="Write or paste code…"
-                          onFocus={() => setFocusedBlockId(nodeId)}
-                          onBlur={() => {
-                            if (focusedBlockId === nodeId) {
-                              setFocusedBlockId(null);
-                            }
-                          }}
-                          onChange={(e) => {
-                            const val = e.target.value;
-                            updateNode(nodeId, (prev) => ({
-                              ...prev,
-                              data: {
-                                ...prev.data,
-                                code: val,
-                                delta: [{ insert: val }],
-                              },
-                            }));
-                          }}
-                        />
-                      ) : (
-                        <pre
-                          onClick={() => {
-                            setFocusedBlockId(nodeId);
-                            setTimeout(() => inputRefs.current[nodeId]?.focus(), 10);
-                          }}
-                          style={{
-                            margin: 0,
-                            padding: '10px 12px',
-                            fontSize: 13,
-                            lineHeight: '19px',
-                            fontFamily: 'var(--mac-font-mono)',
-                            overflowX: 'auto',
-                            cursor: 'text',
-                          }}
-                        >
-                          <code
-                            dangerouslySetInnerHTML={{ __html: highlighted }}
-                          />
-                        </pre>
-                      )}
-                    </div>
-                  );
-                }
-
-                // 3. Math Equation block
-                if (node.type === 'math_equation') {
-                  const formula = String(node.data?.formula ?? '');
-                  const html = katex.renderToString(
-                    normalizeLatexFormula(formula || '\\text{Empty equation}'),
-                    {
-                      displayMode: true,
-                      throwOnError: false,
-                    },
-                  );
-                  return (
-                    <div
-                      key={nodeId}
-                      className="mario-rich-card"
-                      onClick={() => setFocusedBlockId(nodeId)}
-                    >
-                      <div className="mario-rich-card__header">
-                        <span>LaTeX Equation</span>
-                        <Button
-                          size="small"
-                          variant="borderless"
-                          icon="trash"
-                          label="Delete Equation"
-                          onClick={() => deleteNode(nodeId)}
-                        />
-                      </div>
-                      <div
-                        className="mario-math-preview"
-                        dangerouslySetInnerHTML={{ __html: html }}
-                      />
-                      {isFocused && (
-                        <input
-                          ref={(el) => {
-                            inputRefs.current[nodeId] = el;
-                          }}
-                          className="mario-code-textarea"
-                          style={{
-                            borderTop: '1px solid var(--mac-separator)',
-                          }}
-                          value={formula}
-                          placeholder="e.g. \int_0^\infty e^{-x^2} dx = \frac{\sqrt{\pi}}{2}"
-                          onChange={(e) =>
-                            updateNode(nodeId, (prev) => ({
-                              ...prev,
-                              data: {
-                                ...prev.data,
-                                formula: e.target.value,
-                              },
-                            }))
-                          }
-                        />
-                      )}
-                    </div>
-                  );
-                }
-
-                // 4. Table block
-                if (node.type === 'table') {
-                  const matrix = extractTableRowsFromNode(node);
-                  const rowsCount = matrix.length;
-                  const colsCount = matrix[0]?.length ?? 3;
-
-                  const updateCell = (r: number, c: number, val: string) => {
-                    const nextMatrix = matrix.map((row, ri) =>
-                      ri === r
-                        ? row.map((cell, ci) => (ci === c ? val : cell))
-                        : [...row],
-                    );
-                    updateNode(nodeId, () => ({
-                      ...buildTableNodeFromRows(nextMatrix),
-                      id: nodeId,
-                    }));
-                  };
-
-                  return (
-                    <div
-                      key={nodeId}
-                      className="mario-rich-card"
-                      onClick={() => setFocusedBlockId(nodeId)}
-                    >
-                      <div className="mario-rich-card__header">
-                        <span>
-                          Table ({rowsCount}×{colsCount})
-                        </span>
-                        <div style={{ display: 'flex', gap: 6 }}>
-                          <Button
-                            size="small"
-                            variant="borderless"
-                            onClick={() => {
-                              const nextMatrix = [
-                                ...matrix,
-                                Array.from({ length: colsCount }, () => ''),
-                              ];
-                              updateNode(nodeId, () => ({
-                                ...buildTableNodeFromRows(nextMatrix),
-                                id: nodeId,
-                              }));
-                            }}
-                          >
-                            +Row
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="borderless"
-                            onClick={() => {
-                              const nextMatrix = matrix.map((r) => [...r, '']);
-                              updateNode(nodeId, () => ({
-                                ...buildTableNodeFromRows(nextMatrix),
-                                id: nodeId,
-                              }));
-                            }}
-                          >
-                            +Col
-                          </Button>
-                          <Button
-                            size="small"
-                            variant="borderless"
-                            icon="trash"
-                            label="Delete Table"
-                            onClick={() => deleteNode(nodeId)}
-                          />
-                        </div>
-                      </div>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table className="mario-sheet-table">
-                          <tbody>
-                            {matrix.map((row, r) => (
-                              <tr key={r}>
-                                {row.map((cell, c) => (
-                                  <td key={c}>
-                                    <input
-                                      className="mario-sheet-cell-input"
-                                      style={{
-                                        fontWeight: r === 0 ? 600 : 400,
-                                      }}
-                                      value={cell}
-                                      onChange={(e) =>
-                                        updateCell(r, c, e.target.value)
-                                      }
-                                    />
-                                  </td>
-                                ))}
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  );
-                }
-
-                // 5. Spreadsheet block
-                if (node.type === 'spreadsheet') {
-                  return (
-                    <SpreadsheetBlockView
-                      key={nodeId}
-                      node={node}
-                      onUpdate={(next) => updateNode(nodeId, () => next)}
-                      onDelete={() => deleteNode(nodeId)}
-                    />
-                  );
-                }
-
-                // 6. Drawing block
-                if (node.type === 'drawing') {
-                  const strokes: Stroke[] = Array.isArray(node.data?.strokes)
-                    ? (node.data.strokes as Stroke[])
-                    : [];
-                  const h = Number(node.data?.height ?? 220);
-                  return (
-                    <DrawingCanvasBlock
-                      key={nodeId}
-                      strokes={strokes}
-                      height={h}
-                      onChange={(nextStrokes, nextHeight) =>
-                        updateNode(nodeId, (prev) => ({
-                          ...prev,
-                          data: {
-                            ...prev.data,
-                            strokes: nextStrokes,
-                            height: nextHeight ?? h,
-                          },
-                        }))
-                      }
-                      onDelete={() => deleteNode(nodeId)}
-                    />
-                  );
-                }
-
-                // 7. Audio clip block
-                if (node.type === 'audio_clip') {
-                  return (
-                    <AudioClipBlockView
-                      key={nodeId}
-                      node={node}
-                      onUpdate={(next) => updateNode(nodeId, () => next)}
-                      onDelete={() => deleteNode(nodeId)}
-                    />
-                  );
-                }
-
-                // 8. Image block
-                if (node.type === 'image') {
-                  return (
-                    <ImageBlockView
-                      key={nodeId}
-                      node={node}
-                      onUpdate={(next) => updateNode(nodeId, () => next)}
-                      onDelete={() => deleteNode(nodeId)}
-                      onInsertAfterMarkdown={(md) => {
-                        const parsed = markdownToNodes(md);
-                        if (parsed.length > 0) {
-                          const nextNodes = [...nodes];
-                          nextNodes.splice(index + 1, 0, ...parsed);
-                          commitNodes(nextNodes);
-                        }
-                      }}
-                    />
-                  );
-                }
-
-                // 8b. HTML Render block
-                if (node.type === 'html' || node.type === 'html_preview') {
-                  return (
-                    <HtmlBlockView
-                      key={nodeId}
-                      node={node}
-                      onUpdate={(next) => updateNode(nodeId, () => next)}
-                      onDelete={() => deleteNode(nodeId)}
-                    />
-                  );
-                }
-
-                // 9. Textual blocks: paragraph, heading, bulleted_list, numbered_list, todo_list, quote
-                const rawMd = deltaToMarkdown(node.data?.delta);
-                const level = Number(node.data?.level ?? 1);
-                const headingClass =
-                  node.type === 'heading' ? `mario-heading-${level}` : '';
-
-                const handleTextChange = (rawVal: string) => {
-                  const val = expandEmojiShortcodes(rawVal);
-
-                  if (val.startsWith('/') && !val.includes(' ')) {
-                    const el = inputRefs.current[nodeId];
-                    const rect = el?.getBoundingClientRect();
-                    setSlashState({
-                      blockId: nodeId,
-                      query: val.slice(1).toLowerCase(),
-                      x: rect ? rect.left : 280,
-                      y: rect ? rect.bottom + 4 : 200,
-                    });
-                  } else if (slashState?.blockId === nodeId) {
-                    setSlashState(null);
-                  }
-
-                  if (node.type === 'paragraph') {
-                    if (val === '# ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'heading',
-                        data: { level: 1, delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '## ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'heading',
-                        data: { level: 2, delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '### ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'heading',
-                        data: { level: 3, delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '- ' || val === '* ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'bulleted_list',
-                        data: { delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '1. ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'numbered_list',
-                        data: { delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '[] ' || val === '[ ] ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'todo_list',
-                        data: { checked: false, delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '[x] ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'todo_list',
-                        data: { checked: true, delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '> ') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'quote',
-                        data: { delta: [] },
-                      }));
-                      return;
-                    }
-                    if (val === '---') {
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'divider',
-                        data: {},
-                      }));
-                      insertAfter(nodeId, makeParagraphNode(''));
-                      return;
-                    }
-                    if (val.startsWith('```')) {
-                      const lang = val.slice(3).trim() || 'python';
-                      updateNode(nodeId, (p) => ({
-                        ...p,
-                        type: 'code',
-                        data: {
-                          language: lang,
-                          code: '',
-                          delta: [{ insert: '' }],
-                        },
-                      }));
-                      return;
-                    }
-                  }
-
-                  updateNode(nodeId, (prev) => ({
-                    ...prev,
-                    data: {
-                      ...prev.data,
-                      delta: parseInlineMarkdownToDelta(val),
-                    },
-                  }));
-                };
-
-                const handleKeyDown = (
-                  e: React.KeyboardEvent<HTMLTextAreaElement | HTMLInputElement>,
-                ) => {
-                  if (slashState && slashState.blockId === nodeId) {
-                    if (e.key === 'Escape') {
-                      e.preventDefault();
-                      setSlashState(null);
-                      return;
-                    }
-                    if (e.key === 'Enter') {
-                      const matches = SLASH_ITEMS.filter(
-                        (item) =>
-                          item.label.toLowerCase().includes(slashState.query) ||
-                          item.keywords.includes(slashState.query),
-                      );
-                      if (matches[0]) {
-                        e.preventDefault();
-                        handleInsertBlock(matches[0].kind, nodeId);
-                        return;
-                      }
-                    }
-                  }
-
-                  const cmd = e.metaKey || e.ctrlKey;
-                  const k = e.key.toLowerCase();
-
-                  if (cmd && !e.altKey && !e.shiftKey && k === 'b') {
+            <div className="mac-editor">
+              <input
+                className="mac-editor__title"
+                aria-label="Page Title"
+                placeholder="Untitled Page"
+                value={isUntitled(title) ? '' : title}
+                spellCheck={spellcheck}
+                onChange={(e) => {
+                  const t = e.target.value;
+                  setTitle(t);
+                  autoTitleRef.current = null;
+                  commitTitleSoon(t.trim() ? t : 'Untitled Page');
+                }}
+                onBlur={() => {
+                  if (isUntitled(titleRef.current)) syncTitleFromHeading(editor);
+                  flushTitle();
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === 'ArrowDown') {
                     e.preventDefault();
-                    applyInlineSelectionMark('bold');
-                    return;
+                    editor.commands.focus('start');
                   }
-                  if (cmd && !e.altKey && !e.shiftKey && k === 'i') {
-                    e.preventDefault();
-                    applyInlineSelectionMark('italic');
-                    return;
-                  }
-                  if (cmd && !e.altKey && !e.shiftKey && k === 'u') {
-                    e.preventDefault();
-                    applyInlineSelectionMark('underline');
-                    return;
-                  }
-                  if (cmd && !e.altKey && e.shiftKey && k === 'x') {
-                    e.preventDefault();
-                    applyInlineSelectionMark('strikethrough');
-                    return;
-                  }
-                  if (cmd && !e.altKey && !e.shiftKey && k === 'e') {
-                    e.preventDefault();
-                    applyInlineSelectionMark('code');
-                    return;
-                  }
-
-                  // Block style shortcuts (Ctrl+Alt+0/1/2/3/C/M, Ctrl+Shift+7/8/9/Q)
-                  if (cmd && e.altKey && !e.shiftKey) {
-                    if (k === '0') {
-                      e.preventDefault();
-                      handleBlockStyleChange('paragraph');
-                      return;
-                    }
-                    if (k === '1') {
-                      e.preventDefault();
-                      handleBlockStyleChange('heading-1');
-                      return;
-                    }
-                    if (k === '2') {
-                      e.preventDefault();
-                      handleBlockStyleChange('heading-2');
-                      return;
-                    }
-                    if (k === '3') {
-                      e.preventDefault();
-                      handleBlockStyleChange('heading-3');
-                      return;
-                    }
-                    if (k === 'c') {
-                      e.preventDefault();
-                      handleBlockStyleChange('code');
-                      return;
-                    }
-                    if (k === 'm') {
-                      e.preventDefault();
-                      handleInsertBlock('math_equation');
-                      return;
-                    }
-                  }
-
-                  if (cmd && e.shiftKey && !e.altKey) {
-                    if (e.code === 'Digit8' || k === '8' || k === '*') {
-                      e.preventDefault();
-                      handleBlockStyleChange('bulleted_list');
-                      return;
-                    }
-                    if (e.code === 'Digit7' || k === '7' || k === '&') {
-                      e.preventDefault();
-                      handleBlockStyleChange('numbered_list');
-                      return;
-                    }
-                    if (e.code === 'Digit9' || k === '9' || k === '(') {
-                      e.preventDefault();
-                      handleBlockStyleChange('todo_list');
-                      return;
-                    }
-                    if (k === 'q') {
-                      e.preventDefault();
-                      handleBlockStyleChange('quote');
-                      return;
-                    }
-                    if (k === 'l') {
-                      e.preventDefault();
-                      handleAlignChange('left');
-                      return;
-                    }
-                    if (k === 'e') {
-                      e.preventDefault();
-                      handleAlignChange('center');
-                      return;
-                    }
-                    if (k === 'r') {
-                      e.preventDefault();
-                      handleAlignChange('right');
-                      return;
-                    }
-                    if (k === 'j') {
-                      e.preventDefault();
-                      handleAlignChange('justify');
-                      return;
-                    }
-                  }
-
-                  // Ctrl+Enter toggles checklist item
-                  if (cmd && e.key === 'Enter') {
-                    e.preventDefault();
-                    if (node.type === 'todo_list') {
-                      updateNode(nodeId, (prev) => ({
-                        ...prev,
-                        data: {
-                          ...prev.data,
-                          checked: !Boolean(prev.data?.checked),
-                        },
-                      }));
-                    } else {
-                      insertAfter(nodeId, makeParagraphNode(''));
-                    }
-                    return;
-                  }
-
-                  // Alt+ArrowUp / Alt+ArrowDown moves the focused block up or down
-                  if (e.altKey && !cmd && e.key === 'ArrowUp') {
-                    e.preventDefault();
-                    moveBlock(nodeId, -1);
-                    return;
-                  }
-                  if (e.altKey && !cmd && e.key === 'ArrowDown') {
-                    e.preventDefault();
-                    moveBlock(nodeId, 1);
-                    return;
-                  }
-
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    setSlashState(null);
-                    const isList =
-                      node.type === 'bulleted_list' ||
-                      node.type === 'numbered_list' ||
-                      node.type === 'todo_list';
-                    if (isList && rawMd.trim() === '') {
-                      updateNode(nodeId, (prev) => ({
-                        ...prev,
-                        type: 'paragraph',
-                        data: { delta: [] },
-                      }));
-                      return;
-                    }
-                    const nextNode = isList
-                      ? makeListNode(
-                          node.type as
-                            | 'bulleted_list'
-                            | 'numbered_list'
-                            | 'todo_list',
-                          '',
-                          false,
-                        )
-                      : makeParagraphNode('');
-                    insertAfter(nodeId, nextNode);
-                    return;
-                  }
-
-                  if (e.key === 'Backspace' && rawMd === '') {
-                    e.preventDefault();
-                    setSlashState(null);
-                    if (node.type !== 'paragraph') {
-                      updateNode(nodeId, (prev) => ({
-                        ...prev,
-                        type: 'paragraph',
-                        data: { delta: [] },
-                      }));
-                    } else if (nodes.length > 1) {
-                      deleteNode(nodeId);
-                    }
-                    return;
-                  }
-
-                  if (e.key === 'ArrowUp' && index > 0) {
-                    const prev = nodes[index - 1];
-                    if (prev?.id && inputRefs.current[prev.id]) {
-                      e.preventDefault();
-                      setFocusedBlockId(prev.id);
-                      inputRefs.current[prev.id]?.focus();
-                    }
-                  }
-                  if (e.key === 'ArrowDown' && index < nodes.length - 1) {
-                    const next = nodes[index + 1];
-                    if (next?.id && inputRefs.current[next.id]) {
-                      e.preventDefault();
-                      setFocusedBlockId(next.id);
-                      inputRefs.current[next.id]?.focus();
-                    }
-                  }
-                };
-
-                const handlePaste = (
-                  e: React.ClipboardEvent<HTMLTextAreaElement>,
-                ) => {
-                  const items = e.clipboardData?.items;
-                  if (items) {
-                    for (let i = 0; i < items.length; i++) {
-                      const item = items[i];
-                      if (item.type.indexOf('image') !== -1) {
-                        const file = item.getAsFile();
-                        if (file) {
-                          e.preventDefault();
-                          const reader = new FileReader();
-                          reader.onload = async () => {
-                            const dataUrl = reader.result as string;
-                            try {
-                              const saved =
-                                await window.mario.asset.savePastedImage(
-                                  dataUrl,
-                                );
-                              const imgNode: AppFlowyNode = {
-                                id: nanoid6(),
-                                type: 'image',
-                                data: {
-                                  url: saved.assetPath,
-                                  width: 520,
-                                  align: 'center',
-                                },
-                              };
-                              insertAfter(nodeId, imgNode);
-                            } catch (err) {
-                              console.error('Failed to save pasted image', err);
-                            }
-                          };
-                          reader.readAsDataURL(file);
-                          return;
-                        }
-                      }
-                    }
-                  }
-
-                  const text = e.clipboardData?.getData('text/plain') ?? '';
-                  if (
-                    text.includes('\n') ||
-                    /^(\#{1,6}\s|```|\||\*\s|-\s|\d+\.\s|\$\$|>)/m.test(text)
-                  ) {
-                    e.preventDefault();
-                    const parsed = markdownToNodes(text);
-                    if (parsed.length > 0) {
-                      const currentNode = nodes[index];
-                      const currentText = deltaToMarkdown(
-                        currentNode?.data?.delta,
-                      );
-                      if (!currentText.trim()) {
-                        const nextNodes = [...nodes];
-                        nextNodes.splice(index, 1, ...parsed);
-                        commitNodes(nextNodes);
-                        const last = parsed[parsed.length - 1];
-                        const lastId = last?.id;
-                        if (lastId) {
-                          setFocusedBlockId(lastId);
-                          setTimeout(
-                            () => inputRefs.current[lastId]?.focus(),
-                            15,
-                          );
-                        }
-                      } else {
-                        const nextNodes = [...nodes];
-                        nextNodes.splice(index + 1, 0, ...parsed);
-                        commitNodes(nextNodes);
-                        const last = parsed[parsed.length - 1];
-                        const lastId = last?.id;
-                        if (lastId) {
-                          setFocusedBlockId(lastId);
-                          setTimeout(
-                            () => inputRefs.current[lastId]?.focus(),
-                            15,
-                          );
-                        }
-                      }
-                    }
-                  }
-                };
-
-                const textInput = (
-                  <textarea
-                    ref={(el) => {
-                      inputRefs.current[nodeId] = el;
-                      if (el) {
-                        el.style.height = 'auto';
-                        el.style.height = `${Math.max(26, el.scrollHeight)}px`;
-                      }
-                    }}
-                    rows={1}
-                    className={`mario-editable ${headingClass}`}
-                    style={{
-                      width: '100%',
-                      border: 'none',
-                      outline: 'none',
-                      background: 'transparent',
-                      color: 'inherit',
-                      font: 'inherit',
-                      resize: 'none',
-                      overflow: 'hidden',
-                      lineHeight: 1.5,
-                      padding: 0,
-                      margin: 0,
-                      display: 'block',
-                      textAlign: align,
-                      textDecoration:
-                        node.type === 'todo_list' && node.data?.checked
-                          ? 'line-through'
-                          : undefined,
-                      opacity:
-                        node.type === 'todo_list' && node.data?.checked
-                          ? 0.6
-                          : 1,
-                    }}
-                    value={rawMd}
-                    placeholder={
-                      index === 0 && nodes.length === 1
-                        ? 'Type "/" for commands or start writing…'
-                        : ''
-                    }
-                    spellCheck={spellcheck}
-                    onFocus={() => setFocusedBlockId(nodeId)}
-                    onChange={(e) => {
-                      const el = e.target;
-                      el.style.height = 'auto';
-                      el.style.height = `${Math.max(26, el.scrollHeight)}px`;
-                      handleTextChange(el.value);
-                    }}
-                    onKeyDown={handleKeyDown}
-                    onPaste={handlePaste}
-                  />
-                );
-
-                return (
-                  <div
-                    key={nodeId}
-                    className={`mario-block-row ${
-                      isFocused ? 'mario-block-row--focused' : ''
-                    }`}
-                    onClick={() => {
-                      setFocusedBlockId(nodeId);
-                      setTimeout(() => inputRefs.current[nodeId]?.focus(), 0);
-                    }}
-                  >
-
-                    <div
-                      className={`mario-block-body ${
-                        node.type === 'quote' ? 'mario-quote-block' : ''
-                      }`}
-                      style={{ textAlign: align }}
-                    >
-                      {node.type === 'bulleted_list' ? (
-                        <div className="mario-list-row">
-                          <span className="mario-list-marker">•</span>
-                          <div style={{ flex: 1 }}>
-                            {isFocused
-                              ? textInput
-                              : renderFormattedDeltaPreview(node)}
-                          </div>
-                        </div>
-                      ) : node.type === 'numbered_list' ? (
-                        <div className="mario-list-row">
-                          <span className="mario-list-marker">
-                            {currentNumber}.
-                          </span>
-                          <div style={{ flex: 1 }}>
-                            {isFocused
-                              ? textInput
-                              : renderFormattedDeltaPreview(node)}
-                          </div>
-                        </div>
-                      ) : node.type === 'todo_list' ? (
-                        <div className="mario-list-row">
-                          <span
-                            style={{ paddingTop: 2 }}
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <Checkbox
-                              checked={Boolean(node.data?.checked)}
-                              onChange={(checked) =>
-                                updateNode(nodeId, (prev) => ({
-                                  ...prev,
-                                  data: {
-                                    ...prev.data,
-                                    checked,
-                                  },
-                                }))
-                              }
-                            />
-                          </span>
-                          <div style={{ flex: 1 }}>
-                            {isFocused
-                              ? textInput
-                              : renderFormattedDeltaPreview(node)}
-                          </div>
-                        </div>
-                      ) : isFocused ? (
-                        textInput
-                      ) : (
-                        <div className={`mario-editable ${headingClass}`}>
-                          {renderFormattedDeltaPreview(node)}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+                }}
+              />
+              <div className="mario-page__meta">
+                {stamp && <span>{stamp}</span>}
+                {(content.strokes?.length ?? 0) > 0 && <span>{content.strokes?.length} ink strokes</span>}
+              </div>
+              <ContextMenu menu={contextMenu}>
+                <EditorContent
+                  editor={editor}
+                  className="mario-doc-host"
+                  style={{ fontFamily: 'var(--mario-font)', fontSize: 'var(--mario-font-size)' }}
+                />
+              </ContextMenu>
             </div>
           </div>
         </div>
 
-        {htmlPreviewOpen && (
-          <div className="mario-html-preview-pane">
-            <div className="mario-rich-card__header">
-              <span>
-                {rawHtmlOverride
-                  ? 'Interactive HTML Artifact (AI)'
-                  : 'Live HTML Preview'}
-              </span>
-              <div style={{ display: 'flex', gap: 6 }}>
-                {rawHtmlOverride && (
-                  <Button
-                    size="small"
-                    variant="borderless"
-                    onClick={onClearHtmlOverride}
-                  >
-                    Reset Artifact
-                  </Button>
-                )}
+        {preview && (
+          <div
+            className={`mario-preview mario-preview--${preview.layout}${previewSource === 'web' ? ' mario-preview--web' : ''}`}
+          >
+            <div className="mario-preview__bar">
+              {webDoc && !preview.blockId && !rawHtmlOverride ? (
+                <SegmentedControl
+                  size="small"
+                  label="Preview As"
+                  value={previewSource}
+                  onChange={(v) => setPreview({ ...preview, source: v as 'web' | 'document' })}
+                  options={[
+                    { value: 'web', label: 'Web Page' },
+                    { value: 'document', label: 'Document' },
+                  ]}
+                />
+              ) : (
+                <span className="mac-text-subheadline mac-label-secondary">
+                  {rawHtmlOverride ? 'Web page from the AI assistant' : preview.blockId ? 'HTML block' : 'Document'}
+                </span>
+              )}
+              <Spacer />
+              {rawHtmlOverride && (
+                <Button size="small" variant="borderless" onClick={onClearHtmlOverride}>
+                  Discard
+                </Button>
+              )}
+              {previewSource === 'web' && (
                 <Button
                   size="small"
                   variant="borderless"
-                  icon="xmark"
-                  label="Close HTML Preview"
-                  onClick={() => setHtmlPreviewOpen(false)}
+                  icon="arrow-clockwise"
+                  label="Reload"
+                  onClick={() => setPreviewReload((n) => n + 1)}
                 />
-              </div>
+              )}
+              <Button
+                size="small"
+                variant="borderless"
+                icon="sidebar-right"
+                label="Side by Side"
+                pressed={preview.layout === 'split'}
+                onClick={() => setPreview({ ...preview, layout: preview.layout === 'split' ? 'full' : 'split' })}
+              />
+              <Button size="small" onClick={() => setPreview(null)}>
+                Done
+              </Button>
             </div>
             <iframe
-              title="HTML Preview"
-              className="mario-html-preview-iframe"
-              sandbox="allow-scripts"
-              srcDoc={previewHtmlDoc}
+              key={previewReload}
+              title="Preview"
+              className="mario-preview__frame"
+              sandbox={previewSource === 'web' ? WEB_SANDBOX : 'allow-popups'}
+              srcDoc={previewDoc}
             />
           </div>
         )}
       </div>
 
-      {slashState && (
+      {inlineAsk &&
+        inlineAskHost(editor) &&
+        createPortal(
+          <ErrorBoundary key={inlineAsk.nonce} title="Ask Mario ran into a problem" compact>
+            <InlineAskBox
+              editor={editor}
+              anchor={inlineAsk}
+              notebookId={notebookId}
+              pageId={pageId}
+              pageTitle={title}
+              onClose={closeAsk}
+              onPreviewHtml={onPreviewHtml}
+            />
+          </ErrorBoundary>,
+          inlineAskHost(editor)!,
+        )}
+
+      {slash && slashItems.length > 0 && (
         <div
           className="mac-menu mario-slash-menu"
-          style={{ left: slashState.x, top: slashState.y }}
           role="menu"
+          aria-label="Insert"
+          style={{ left: slash.left, top: Math.min(slash.top, window.innerHeight - 320) }}
+          onMouseDown={(e) => e.preventDefault()}
         >
-          <MenuHeader>Insert Block</MenuHeader>
-          {SLASH_ITEMS.filter(
-            (item) =>
-              !slashState.query ||
-              item.label.toLowerCase().includes(slashState.query) ||
-              item.keywords.includes(slashState.query),
-          ).map((item) => (
+          <MenuHeader>Insert</MenuHeader>
+          {slashItems.map((item, i) => (
             <MenuItem
               key={item.kind}
               icon={item.icon}
               shortcut={item.shortcut}
-              onSelect={() => handleInsertBlock(item.kind, slashState.blockId)}
+              className={i === slash.index ? 'is-highlighted' : undefined}
+              onSelect={() => runSlash(editor, slash, item.kind)}
             >
               {item.label}
             </MenuItem>
           ))}
         </div>
       )}
+
+      <Sheet
+        open={linkDialog != null}
+        onClose={() => setLinkDialog(null)}
+        title="Link"
+        top={60}
+        buttons={[
+          { label: 'Cancel', role: 'cancel', onClick: () => setLinkDialog(null) },
+          ...(linkDialog?.hasSelection && editor.isActive('link')
+            ? [{ label: 'Remove Link', onClick: () => { editor.chain().focus().extendMarkRange('link').unsetLink().run(); setLinkDialog(null); } }]
+            : []),
+          { label: 'OK', role: 'default' as const, disabled: !linkDialog?.href.trim(), onClick: applyLink },
+        ]}
+      >
+        {linkDialog && (
+          <FieldGrid
+            rows={[
+              ...(linkDialog.hasSelection
+                ? []
+                : [
+                    {
+                      label: 'Text:',
+                      control: (
+                        <TextField
+                          value={linkDialog.text}
+                          placeholder="Shown in the page"
+                          onChange={(text) => setLinkDialog({ ...linkDialog, text })}
+                        />
+                      ),
+                    },
+                  ]),
+              {
+                label: 'Address:',
+                control: (
+                  <TextField
+                    autoFocus
+                    type="url"
+                    value={linkDialog.href}
+                    placeholder="https://"
+                    onChange={(href) => setLinkDialog({ ...linkDialog, href })}
+                  />
+                ),
+              },
+            ]}
+          />
+        )}
+      </Sheet>
+
+      <Alert
+        open={alert != null}
+        onClose={() => setAlert(null)}
+        title={alert?.title ?? ''}
+        message={alert?.message}
+        buttons={[{ label: 'OK', role: 'default', onClick: () => setAlert(null) }]}
+      />
     </div>
   );
 }

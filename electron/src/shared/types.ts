@@ -308,16 +308,14 @@ export interface QuizMcq {
   options: string[];
   correctIndex: number;
   explanation: string;
-  selectedIndex?: number;
 }
 
 export interface QuizEssay {
   question: string;
-  rubric: string;
-  maxMarks: number;
-  answer?: string;
-  awardedMarks?: number;
-  feedback?: string;
+  /** The points a full-mark answer makes: the rubric it is marked against. */
+  expectedPoints: string[];
+  /** Marks available: one per rubric point. */
+  marks: number;
 }
 
 export interface QuizData {
@@ -326,12 +324,61 @@ export interface QuizData {
   essays: QuizEssay[];
 }
 
+/**
+ * An essay's mark. The model's mark is a draft (`provisional`): it comes with
+ * the rubric points it matched and missed, and the student can change it.
+ */
+export interface QuizGrade {
+  awarded: number;
+  outOf: number;
+  feedback: string;
+  matchedPoints: string[];
+  missedPoints: string[];
+  provisional: boolean;
+  /** The student's own mark, replacing the model's. */
+  override?: number;
+}
+
+export interface QuizEntry {
+  id: string;
+  pageId?: string;
+  quiz: QuizData;
+  /** Chosen option per multiple-choice question. */
+  answers?: Record<number, number>;
+  /** Written answer per essay question. */
+  essayAnswers?: Record<number, string>;
+  /** Mark per essay question, from the last marking. */
+  essayGrades?: Record<number, QuizGrade>;
+  /** Marks awarded and available, from the last marking. */
+  score?: number;
+  outOf?: number;
+  checkedAt?: string;
+  createdAt: string;
+}
+
+/** A request from the page to the AI panel (the editor's AI slash commands). */
+export interface AiCommand {
+  kind: 'ask' | 'summary' | 'quiz';
+  /** ask: a question to send; summary: the notes above the caret. */
+  text?: string;
+  /** Changes with every request, so the same command can be sent twice. */
+  nonce: number;
+}
+
 export interface AiArtifactData {
   askHistory: Array<{
     id: string;
     pageId?: string;
     question: string;
     answer: string;
+    /** The highlighted passage the question was about. */
+    quote?: string;
+    /** Web pages the answer drew on, numbered as the answer cites them. */
+    sources?: Array<{ title: string; link: string }>;
+    /** The model's reasoning, when it thought before answering. */
+    thinking?: string;
+    /** Seconds spent thinking. */
+    thinkingSeconds?: number;
     createdAt: string;
   }>;
   doHistory: Array<{
@@ -340,12 +387,9 @@ export interface AiArtifactData {
     instruction: string;
     summary: string;
     steps: string[];
+    thinking?: string;
+    thinkingSeconds?: number;
     createdAt: string;
   }>;
-  quizzes: Array<{
-    id: string;
-    pageId?: string;
-    quiz: QuizData;
-    createdAt: string;
-  }>;
+  quizzes: QuizEntry[];
 }

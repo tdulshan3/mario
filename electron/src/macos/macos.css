@@ -4737,6 +4737,13 @@ details[open] > summary.mac-disclosure-button::before {
   background-image: var(--mac-popup-indicator-disabled);
   opacity: 1;                                           /* Chrome dims disabled <select> by default */
 }
+/* Pop-up and pull-down labels truncate with … before the indicator (macos.tsx wraps them in this span). */
+.mac-popup__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The open list of a <select> (Windows/Linux draw it with these colours; macOS uses a native menu). */
 .mac-popup option,
 .mac-popup optgroup {

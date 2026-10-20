@@ -106,6 +106,88 @@ export function splitThinkTags(raw: string): { text: string; reasoning: string }
   };
 }
 
+/** One piece of a streamed reply: model reasoning or answer text. */
+export interface ChatDelta {
+  kind: 'thinking' | 'text';
+  text: string;
+}
+
+export interface ChatStreamResult {
+  text: string;
+  reasoning: string;
+  /** The user pressed Stop: text and reasoning are what arrived until then. */
+  stopped: boolean;
+}
+
+type Emit = (kind: ChatDelta['kind'], text: string) => void;
+
+/** The lines of a streamed HTTP body (NDJSON or server-sent events). */
+async function* readLines(resp: Response): AsyncGenerator<string> {
+  if (!resp.body) return;
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let i: number;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      yield buf.slice(0, i).replace(/\r$/, '');
+      buf = buf.slice(i + 1);
+    }
+  }
+  buf += decoder.decode();
+  if (buf) yield buf;
+}
+
+/**
+ * Splits `<think>…</think>` out of streamed answer text, for models that print
+ * their reasoning inline. A tag cut across two chunks is held back until the
+ * next chunk shows what it is.
+ */
+class ThinkTagSplitter {
+  private inThink = false;
+  private pending = '';
+  constructor(private readonly emit: Emit) {}
+
+  push(chunk: string): void {
+    let s = this.pending + chunk;
+    this.pending = '';
+    while (s) {
+      const tag = this.inThink ? '</think>' : '<think>';
+      const i = s.indexOf(tag);
+      if (i >= 0) {
+        this.emit(this.inThink ? 'thinking' : 'text', s.slice(0, i));
+        s = s.slice(i + tag.length);
+        this.inThink = !this.inThink;
+        continue;
+      }
+      let keep = 0;
+      for (let k = Math.min(tag.length - 1, s.length); k > 0; k--) {
+        if (tag.startsWith(s.slice(-k))) {
+          keep = k;
+          break;
+        }
+      }
+      this.emit(this.inThink ? 'thinking' : 'text', s.slice(0, s.length - keep));
+      this.pending = s.slice(s.length - keep);
+      s = '';
+    }
+  }
+
+  flush(): void {
+    if (this.pending) this.emit(this.inThink ? 'thinking' : 'text', this.pending);
+    this.pending = '';
+  }
+}
+
+/** Ollama's own API root ("http://host:11434") from a base URL that may end in /v1 or /api. */
+export function ollamaRoot(baseUrl: string): string {
+  const u = baseUrl.trim().replace(/\/+$/, '').replace(/\/(v1|api)(\/.*)?$/i, '');
+  return u || 'http://127.0.0.1:11434';
+}
+
 export function extractJsonObject(raw: string): Record<string, unknown> | null {
   if (!raw) return null;
   const { text } = splitThinkTags(raw);
@@ -405,6 +487,7 @@ export class AiServiceMain {
     effort?: LlmEffort;
     jsonSchema?: { name: string; schema: Record<string, unknown> };
     disableThinking?: boolean;
+    signal?: AbortSignal;
   }): Promise<{ text: string; reasoning: string }> {
     const { config, apiKey } = this.getActiveProvider();
     if (config.kind === 'anthropic') {
@@ -422,6 +505,7 @@ export class AiServiceMain {
       temperature?: number;
       effort?: LlmEffort;
       jsonSchema?: { name: string; schema: Record<string, unknown> };
+      signal?: AbortSignal;
     },
   ): Promise<{ text: string; reasoning: string }> {
     if (!apiKey) {
@@ -445,6 +529,7 @@ export class AiServiceMain {
         system: sys,
         messages: [{ role: 'user', content: opts.userPrompt }],
       }),
+      signal: opts.signal,
     });
 
     if (!resp.ok) {
@@ -474,6 +559,7 @@ export class AiServiceMain {
       effort?: LlmEffort;
       jsonSchema?: { name: string; schema: Record<string, unknown> };
       disableThinking?: boolean;
+      signal?: AbortSignal;
     },
   ): Promise<{ text: string; reasoning: string }> {
     const base = normalizeOpenAiBaseUrl(config.baseUrl);
@@ -543,6 +629,7 @@ export class AiServiceMain {
           method: 'POST',
           headers,
           body: JSON.stringify(buildBody(mode, withThinking)),
+          signal: opts.signal,
         });
 
         if (resp.ok) {
@@ -575,6 +662,332 @@ export class AiServiceMain {
   }
 
   /**
+   * A chat reply streamed as it is generated: reasoning first (when the model
+   * thinks), then the answer — what `ollama run` prints. Ollama is spoken to in
+   * its own API, which streams `thinking` and `content` separately; other
+   * servers stream server-sent events. Aborting `signal` (Stop) ends the
+   * stream and returns what had arrived.
+   */
+  /**
+   * Characters of reasoning allowed at the active provider's effort before the
+   * model is told to answer. A small local model can think about a three-word
+   * rewrite for minutes; a chat gets half as much again as a task, since its
+   * reader can watch the thinking and stop it.
+   */
+  thinkingBudget(kind: 'chat' | 'task'): number {
+    const effort = this.getActiveProvider().config.effort ?? 'low';
+    const task = { off: 0, low: 4000, medium: 8000, high: 12000 }[effort] ?? 4000;
+    return kind === 'chat' ? Math.round(task * 1.5) : task;
+  }
+
+  async chatStream(opts: {
+    systemPrompt: string;
+    userPrompt: string;
+    temperature?: number;
+    effort?: LlmEffort;
+    signal?: AbortSignal;
+    /** Ask for JSON matching this schema (Ollama `format`, OpenAI `response_format`). */
+    jsonSchema?: { name: string; schema: Record<string, unknown> };
+    /** Characters of reasoning allowed before thinking is cut short and the reply asked for directly. */
+    thinkingBudget?: number;
+    onDelta: (delta: ChatDelta) => void;
+  }): Promise<ChatStreamResult> {
+    const { config, apiKey } = this.getActiveProvider();
+    let text = '';
+    let reasoning = '';
+    const emit: Emit = (kind, piece) => {
+      if (!piece) return;
+      if (kind === 'text') text += piece;
+      else reasoning += piece;
+      opts.onDelta({ kind, text: piece });
+    };
+    try {
+      if (config.kind === 'ollama') await this.streamOllama(config, opts, emit);
+      else if (config.kind === 'anthropic') await this.streamAnthropic(config, apiKey, opts, emit);
+      else await this.streamOpenAiCompatible(config, apiKey, opts, emit);
+    } catch (err) {
+      if (opts.signal?.aborted) return { text: text.trim(), reasoning: reasoning.trim(), stopped: true };
+      throw err;
+    }
+    return { text: text.trim(), reasoning: reasoning.trim(), stopped: false };
+  }
+
+  private async streamOllama(
+    config: LlmProviderConfig,
+    opts: {
+      systemPrompt: string;
+      userPrompt: string;
+      temperature?: number;
+      effort?: LlmEffort;
+      signal?: AbortSignal;
+      jsonSchema?: { name: string; schema: Record<string, unknown> };
+      thinkingBudget?: number;
+    },
+    emit: Emit,
+  ): Promise<void> {
+    const eff = opts.effort ?? config.effort ?? 'low';
+    // gpt-oss takes a level; other thinking models take true/false.
+    const think: boolean | string = eff === 'off' ? false : /gpt-oss/i.test(config.model) ? eff : true;
+
+    const run = async (thinkParam: boolean | string | undefined): Promise<'done' | 'over-budget' | 'no-think'> => {
+      // Our own controller, so a run over its thinking budget can be cut without it looking like Stop.
+      const inner = new AbortController();
+      const forward = () => inner.abort();
+      if (opts.signal?.aborted) inner.abort();
+      else opts.signal?.addEventListener('abort', forward, { once: true });
+      try {
+        const resp = await fetch(`${ollamaRoot(config.baseUrl)}/api/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: config.model,
+            stream: true,
+            messages: [
+              { role: 'system', content: opts.systemPrompt },
+              { role: 'user', content: opts.userPrompt },
+            ],
+            options: { temperature: opts.temperature ?? 0.3 },
+            ...(opts.jsonSchema ? { format: opts.jsonSchema.schema } : {}),
+            ...(thinkParam === undefined ? {} : { think: thinkParam }),
+          }),
+          signal: inner.signal,
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          // A model that can't think says so; ask again without the parameter.
+          if (resp.status === 400 && /think/i.test(errText) && thinkParam !== undefined) return 'no-think';
+          throw new Error(`Ollama error (${resp.status}): ${errText}`);
+        }
+        const split = new ThinkTagSplitter(emit);
+        let thought = 0;
+        for await (const line of readLines(resp)) {
+          if (!line.trim()) continue;
+          let msg: { message?: { thinking?: string; content?: string }; error?: string; done?: boolean };
+          try {
+            msg = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (msg.error) throw new Error(`Ollama error: ${msg.error}`);
+          if (msg.message?.thinking) {
+            emit('thinking', msg.message.thinking);
+            thought += msg.message.thinking.length;
+            if (thinkParam && opts.thinkingBudget && thought > opts.thinkingBudget) {
+              inner.abort();
+              return 'over-budget';
+            }
+          }
+          if (msg.message?.content) split.push(msg.message.content);
+          if (msg.done) break;
+        }
+        split.flush();
+        return 'done';
+      } finally {
+        opts.signal?.removeEventListener('abort', forward);
+      }
+    };
+
+    let outcome = await run(think);
+    if (outcome === 'no-think') outcome = await run(undefined);
+    if (outcome === 'over-budget') {
+      emit('thinking', '\n\n*Thinking cut short to keep this quick — answering directly.*\n');
+      await run(false);
+    }
+  }
+
+  private async streamOpenAiCompatible(
+    config: LlmProviderConfig,
+    apiKey: string | null,
+    opts: {
+      systemPrompt: string;
+      userPrompt: string;
+      temperature?: number;
+      effort?: LlmEffort;
+      signal?: AbortSignal;
+      jsonSchema?: { name: string; schema: Record<string, unknown> };
+      thinkingBudget?: number;
+    },
+    emit: Emit,
+  ): Promise<void> {
+    const base = normalizeOpenAiBaseUrl(config.baseUrl);
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+    const eff = opts.effort ?? config.effort ?? 'low';
+    // With a schema, try the strictest JSON mode the server takes, then looser ones.
+    const formats: Array<'schema' | 'object' | 'none'> = opts.jsonSchema
+      ? config.capabilities?.strictJsonSchema
+        ? ['schema', 'object', 'none']
+        : ['object', 'none']
+      : ['none'];
+    const attempts = formats.flatMap((format) => [true, false].map((withThinking) => ({ format, withThinking })));
+    for (const { format, withThinking } of attempts) {
+      const payload: Record<string, unknown> = {
+        model: config.model,
+        stream: true,
+        messages: [
+          { role: 'system', content: opts.systemPrompt },
+          { role: 'user', content: opts.userPrompt },
+        ],
+        temperature: opts.temperature ?? 0.3,
+      };
+      if (withThinking && config.kind === 'openAiCompatible') {
+        payload.think = eff !== 'off';
+        payload.chat_template_kwargs = { enable_thinking: eff !== 'off' };
+      }
+      if (format === 'schema' && opts.jsonSchema) {
+        payload.response_format = {
+          type: 'json_schema',
+          json_schema: { name: opts.jsonSchema.name, strict: true, schema: opts.jsonSchema.schema },
+        };
+      } else if (format === 'object') {
+        payload.response_format = { type: 'json_object' };
+      }
+      const inner = new AbortController();
+      const forward = () => inner.abort();
+      if (opts.signal?.aborted) inner.abort();
+      else opts.signal?.addEventListener('abort', forward, { once: true });
+      const resp = await fetch(`${base}/chat/completions`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
+        signal: inner.signal,
+      });
+      if (!resp.ok) {
+        opts.signal?.removeEventListener('abort', forward);
+        const errText = await resp.text();
+        const last = attempts[attempts.length - 1];
+        if ((format !== last.format || withThinking !== last.withThinking) && [400, 422, 501].includes(resp.status)) continue;
+        throw new Error(`LLM request failed: HTTP ${resp.status}: ${errText}`);
+      }
+      const split = new ThinkTagSplitter(emit);
+      let thought = 0;
+      let overBudget = false;
+      for await (const line of readLines(resp)) {
+        const l = line.trim();
+        if (!l.startsWith('data:')) continue;
+        const data = l.slice(5).trim();
+        if (data === '[DONE]') break;
+        let chunk: {
+          choices?: Array<{ delta?: { content?: string; reasoning_content?: string; reasoning?: string } }>;
+        };
+        try {
+          chunk = JSON.parse(data);
+        } catch {
+          continue;
+        }
+        const delta = chunk.choices?.[0]?.delta;
+        const reasoningPiece = delta?.reasoning_content ?? delta?.reasoning;
+        if (reasoningPiece) {
+          emit('thinking', String(reasoningPiece));
+          thought += String(reasoningPiece).length;
+          if (withThinking && opts.thinkingBudget && thought > opts.thinkingBudget) {
+            overBudget = true;
+            inner.abort();
+            break;
+          }
+        }
+        if (delta?.content) split.push(String(delta.content));
+      }
+      opts.signal?.removeEventListener('abort', forward);
+      if (overBudget) {
+        emit('thinking', '\n\n*Thinking cut short to keep this quick — answering directly.*\n');
+        continue;
+      }
+      split.flush();
+      return;
+    }
+  }
+
+  private async streamAnthropic(
+    config: LlmProviderConfig,
+    apiKey: string | null,
+    opts: { systemPrompt: string; userPrompt: string; signal?: AbortSignal },
+    emit: Emit,
+  ): Promise<void> {
+    if (!apiKey) {
+      throw new Error('Anthropic API key is missing. Add it in Settings → AI.');
+    }
+    const resp = await fetch(`${config.baseUrl.replace(/\/+$/, '')}/messages`, {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: config.model || 'claude-sonnet-4-6',
+        max_tokens: 4096,
+        system: opts.systemPrompt,
+        messages: [{ role: 'user', content: opts.userPrompt }],
+        stream: true,
+      }),
+      signal: opts.signal,
+    });
+    if (!resp.ok) {
+      throw new Error(`Anthropic error (${resp.status}): ${await resp.text()}`);
+    }
+    for await (const line of readLines(resp)) {
+      if (!line.startsWith('data:')) continue;
+      let ev: { type?: string; delta?: { type?: string; text?: string; thinking?: string }; error?: { message?: string } };
+      try {
+        ev = JSON.parse(line.slice(5));
+      } catch {
+        continue;
+      }
+      if (ev.type === 'content_block_delta') {
+        if (ev.delta?.type === 'text_delta' && ev.delta.text) emit('text', ev.delta.text);
+        else if (ev.delta?.type === 'thinking_delta' && ev.delta.thinking) emit('thinking', ev.delta.thinking);
+      } else if (ev.type === 'error') {
+        throw new Error(`Anthropic error: ${ev.error?.message ?? 'stream failed'}`);
+      }
+    }
+  }
+
+  /**
+   * Structured JSON whose generation streams: the reasoning arrives as it is
+   * thought (shown in the AI panel), the JSON is parsed at the end. Falls back
+   * to one repair pass when the model's JSON doesn't parse.
+   */
+  async completeStructuredStream(opts: {
+    schemaName: string;
+    schema: Record<string, unknown>;
+    systemPrompt: string;
+    userPrompt: string;
+    temperature?: number;
+    signal?: AbortSignal;
+    onDelta: (delta: ChatDelta) => void;
+  }): Promise<Record<string, unknown>> {
+    // Quiz, Writing and Do wait on this: reasoning past the budget is cut short.
+    const res = await this.chatStream({
+      thinkingBudget: this.thinkingBudget('task'),
+      systemPrompt: `${opts.systemPrompt}\n\nReturn ONLY valid JSON conforming to this schema:\n${JSON.stringify(opts.schema)}`,
+      userPrompt: opts.userPrompt,
+      temperature: opts.temperature ?? 0.2,
+      signal: opts.signal,
+      jsonSchema: { name: opts.schemaName, schema: opts.schema },
+      onDelta: opts.onDelta,
+    });
+    if (res.stopped) {
+      const stopped = new Error('Stopped');
+      stopped.name = 'AbortError';
+      throw stopped;
+    }
+    const parsed = extractJsonObject(res.text) ?? extractJsonObject(res.reasoning);
+    if (parsed) return parsed;
+    const repaired = await this.chatCompletion({
+      systemPrompt: `Convert the following text into a valid JSON object matching this schema:\n${JSON.stringify(opts.schema)}`,
+      userPrompt: res.text || res.reasoning || opts.userPrompt,
+      temperature: 0,
+      jsonSchema: { name: opts.schemaName, schema: opts.schema },
+      disableThinking: true,
+      signal: opts.signal,
+    });
+    const fixed = extractJsonObject(repaired.text) ?? extractJsonObject(repaired.reasoning);
+    if (fixed) return fixed;
+    throw new Error('Model did not return valid structured JSON.');
+  }
+
+  /**
    * Structured JSON completion with automatic thinking-budget fallback and 1 repair retry.
    */
   async completeStructured(opts: {
@@ -583,12 +996,14 @@ export class AiServiceMain {
     systemPrompt: string;
     userPrompt: string;
     temperature?: number;
+    signal?: AbortSignal;
   }): Promise<Record<string, unknown>> {
     let res = await this.chatCompletion({
       systemPrompt: opts.systemPrompt,
       userPrompt: opts.userPrompt,
       temperature: opts.temperature ?? 0.2,
       jsonSchema: { name: opts.schemaName, schema: opts.schema },
+      signal: opts.signal,
     });
 
     let parsed = extractJsonObject(res.text) ?? extractJsonObject(res.reasoning);
@@ -602,6 +1017,7 @@ export class AiServiceMain {
         temperature: opts.temperature ?? 0.2,
         jsonSchema: { name: opts.schemaName, schema: opts.schema },
         disableThinking: true,
+        signal: opts.signal,
       });
       parsed = extractJsonObject(res.text) ?? extractJsonObject(res.reasoning);
       if (parsed) return parsed;
@@ -614,6 +1030,7 @@ export class AiServiceMain {
       temperature: 0,
       jsonSchema: { name: opts.schemaName, schema: opts.schema },
       disableThinking: true,
+      signal: opts.signal,
     });
     parsed =
       extractJsonObject(repairRes.text) ?? extractJsonObject(repairRes.reasoning);

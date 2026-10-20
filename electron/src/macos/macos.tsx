@@ -935,7 +935,8 @@ export function PopUpButton({ options, value, defaultValue, onChange, size, clas
         {...popup.triggerProps}
         {...rest}
       >
-        {currentLabel}
+        {/* Bare text in an inline-flex box can't ellipsize: it would run under the ⌃⌄. */}
+        <span className="mac-popup__label">{currentLabel}</span>
       </button>
       <MenuPanel popup={popup}>
         {options.map(o => {
@@ -980,7 +981,7 @@ export function PullDownButton({ label, children, size, className, ...rest }: Pu
   return (
     <>
       <button ref={popup.triggerRef} type="button" className={cx('mac-pulldown', sizeClass(size), className)} {...popup.triggerProps} {...rest}>
-        {label}
+        <span className="mac-popup__label">{label}</span>
       </button>
       <MenuPanel popup={popup}>{children}</MenuPanel>
     </>
@@ -2146,8 +2147,17 @@ export function ContextMenu({ menu, children }: ContextMenuProps) {
           if (!panel) return;
           e.preventDefault();
           popup.point.current = { x: e.clientX, y: e.clientY };
-          if (isOpenPopover(panel)) panel.hidePopover();
-          panel.showPopover();
+          const show = () => {
+            if (isOpenPopover(panel)) panel.hidePopover();
+            panel.showPopover();
+          };
+          // On Linux and macOS this event comes on mouse-down. A menu shown before the
+          // button is released is light-dismissed by that release, so wait for it.
+          if (e.buttons & 2) {
+            window.addEventListener('pointerup', () => setTimeout(show, 0), { once: true, capture: true });
+          } else {
+            show();
+          }
         }}
       >
         {children}

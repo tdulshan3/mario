@@ -189,3 +189,26 @@ describe('IDs, LaTeX Normalizer & Emoji Shortcodes', () => {
     );
   });
 });
+
+describe('Agent plans as models write them', () => {
+  it('reads block ids copied with their [id:…] label and keeps inserts after unknown blocks', () => {
+    const plan = parseAgentPlan(
+      {
+        summary: 'Adding a summary',
+        actions: [
+          { kind: 'heading', text: 'Summary', level: 2, afterBlockId: 'id:ph0010' },
+          { kind: 'bullets', items: ['One'], afterBlockId: '[id:ph0002]' },
+          { kind: 'bullets', items: ['Two'], afterBlockId: 'no-such-block' },
+          { kind: 'delete_block', blockId: 'no-such-block' },
+        ],
+      },
+      new Set(['ph0002', 'ph0010']),
+    );
+    expect(plan.actions.map((a) => [a.kind, a.afterBlockId])).toEqual([
+      ['heading', 'ph0010'],
+      ['bullets', 'ph0002'],
+      ['bullets', undefined],
+    ]);
+  });
+});
+

@@ -147,6 +147,32 @@ export interface MarioElectronApi {
       temperature?: number;
       effort?: LlmEffort;
     }) => Promise<{ text: string; reasoning: string }>;
+    /** A reply streamed piece by piece: reasoning ("thinking") and answer text. */
+    chatStream: (
+      opts: {
+        systemPrompt: string;
+        userPrompt: string;
+        temperature?: number;
+        effort?: LlmEffort;
+        /** Which Stop cancels it: "panel" (default) or "inline". */
+        channel?: string;
+      },
+      onDelta: (delta: { kind: 'thinking' | 'text'; text: string }) => void,
+    ) => Promise<{ text: string; reasoning: string; stopped: boolean }>;
+    /** Structured JSON whose reasoning streams while it is generated. */
+    structuredStream: (
+      opts: {
+        schemaName: string;
+        schema: Record<string, unknown>;
+        systemPrompt: string;
+        userPrompt: string;
+        temperature?: number;
+        channel?: string;
+      },
+      onDelta: (delta: { kind: 'thinking' | 'text'; text: string }) => void,
+    ) => Promise<Record<string, unknown>>;
+    /** Stop: cancels the AI requests in flight on one channel, or every one. */
+    abort: (channel?: string) => Promise<number>;
     structured: (opts: {
       schemaName: string;
       schema: Record<string, unknown>;
@@ -243,6 +269,27 @@ const api: MarioElectronApi = {
     listModels: (config) => ipcRenderer.invoke('ai:listModels', config),
     discoverLocal: () => ipcRenderer.invoke('ai:discoverLocal'),
     chat: (opts) => ipcRenderer.invoke('ai:chat', opts),
+    chatStream: (opts, onDelta) => {
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, id: string, delta: { kind: 'thinking' | 'text'; text: string }) => {
+        if (id === requestId) onDelta(delta);
+      };
+      ipcRenderer.on('ai:chatDelta', listener);
+      return ipcRenderer
+        .invoke('ai:chatStream', requestId, opts)
+        .finally(() => ipcRenderer.removeListener('ai:chatDelta', listener));
+    },
+    structuredStream: (opts, onDelta) => {
+      const requestId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      const listener = (_e: unknown, id: string, delta: { kind: 'thinking' | 'text'; text: string }) => {
+        if (id === requestId) onDelta(delta);
+      };
+      ipcRenderer.on('ai:chatDelta', listener);
+      return ipcRenderer
+        .invoke('ai:structuredStream', requestId, opts)
+        .finally(() => ipcRenderer.removeListener('ai:chatDelta', listener));
+    },
+    abort: (channel) => ipcRenderer.invoke('ai:abort', channel),
     structured: (opts) => ipcRenderer.invoke('ai:structured', opts),
     webSearch: (query) => ipcRenderer.invoke('ai:webSearch', query),
     getUserSkills: () => ipcRenderer.invoke('ai:getUserSkills'),
