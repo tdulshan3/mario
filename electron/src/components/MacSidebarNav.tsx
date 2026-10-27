@@ -12,7 +12,17 @@ import {
   SidebarSection,
   type IconName,
 } from '../macos/macos';
-import type { Notebook, NotePage, Section } from '../shared/types';
+import type {
+  Notebook,
+  NotePage,
+  RecentSelectionState,
+  Section,
+  TreeSnapshot,
+} from '../shared/types';
+import {
+  resolveNotebookSelection,
+  resolveSectionSelection,
+} from '../shared/recent-selection';
 
 export const NOTEBOOK_COLORS = [
   '#3584e4',
@@ -37,6 +47,7 @@ export interface MacSidebarNavProps {
   selectedNotebookId: string | null;
   selectedSectionId: string | null;
   selectedPageId: string | null;
+  recentSelection?: RecentSelectionState;
   searchQuery: string;
   onSearchQueryChange: (q: string) => void;
   /** Changes waiting to be uploaded, shown next to Sync Now. */
@@ -116,6 +127,7 @@ export function MacSidebarNav({
   selectedNotebookId,
   selectedSectionId,
   selectedPageId,
+  recentSelection,
   searchQuery,
   onSearchQueryChange,
   syncPending,
@@ -146,18 +158,38 @@ export function MacSidebarNav({
   const pagesOf = (nbId: string, secId: string) => pagesByKey[`${nbId}/${secId}`] ?? [];
   const q = searchQuery.trim().toLowerCase();
 
-  /** Opening a section opens its first page, as OneNote does. */
+  const snapForResolve: TreeSnapshot = {
+    notebooks,
+    sectionsByNotebook,
+    pagesBySection: pagesByKey,
+    syncStatus: { pendingChanges: syncPending, syncing: false, offlineMode: false },
+  };
+
+  /** Opening a section opens its recent page (or first page), as OneNote does. */
   const openSection = (nbId: string, sec: Section) => {
-    const first = pagesOf(nbId, sec.id)[0];
-    if (first) onSelectPage(nbId, sec.id, first.id);
+    const resolved = resolveSectionSelection(
+      snapForResolve,
+      nbId,
+      sec.id,
+      recentSelection,
+    );
+    if (resolved.pageId) onSelectPage(nbId, sec.id, resolved.pageId);
     else onSelectSection(nbId, sec.id);
   };
 
   const openNotebook = (nb: Notebook) => {
-    const secs = sectionsByNotebook[nb.id] ?? [];
-    const sec = secs.find((s) => pagesOf(nb.id, s.id).length > 0) ?? secs[0];
-    if (sec) openSection(nb.id, sec);
-    else onSelectNotebook(nb.id);
+    const resolved = resolveNotebookSelection(
+      snapForResolve,
+      nb.id,
+      recentSelection,
+    );
+    if (resolved.sectionId && resolved.pageId) {
+      onSelectPage(nb.id, resolved.sectionId, resolved.pageId);
+    } else if (resolved.sectionId) {
+      onSelectSection(nb.id, resolved.sectionId);
+    } else {
+      onSelectNotebook(nb.id);
+    }
   };
 
   const sectionInView = sections.some((s) => s.id === selectedSectionId);

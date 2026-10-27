@@ -9,10 +9,12 @@ import {
   LlmProviderConfig,
   MarioThemeMode,
   PageContent,
+  RecentSelectionState,
   SettingsState,
 } from '../src/shared/types';
 import { safeFilename } from '../src/shared/ids';
 import { emptyPageContent } from '../src/shared/document-codec';
+import { normalizeRecentSelection } from '../src/shared/recent-selection';
 
 export const APP_ID = 'com.marionote.app.mario';
 
@@ -106,6 +108,7 @@ export class SharedPreferencesStore {
       voiceLocale: String(this.get('mario.voiceLocale', 'en_US')),
       offlineMode: Boolean(this.get('mario.offlineMode', false)),
       askOnHighlight: Boolean(this.get('mario.askOnHighlight', true)),
+      recentSelection: this.loadRecentSelection(),
     };
   }
 
@@ -119,7 +122,21 @@ export class SharedPreferencesStore {
     this.set('mario.voiceLocale', next.voiceLocale);
     this.set('mario.offlineMode', next.offlineMode);
     this.set('mario.askOnHighlight', next.askOnHighlight);
+    if (next.recentSelection !== undefined) {
+      this.saveRecentSelection(next.recentSelection);
+    }
     return this.loadSettings();
+  }
+
+  loadRecentSelection(): RecentSelectionState {
+    const raw = this.get<unknown>('mario.recentSelection', null);
+    return normalizeRecentSelection(raw);
+  }
+
+  saveRecentSelection(recent: RecentSelectionState): RecentSelectionState {
+    const normalized = normalizeRecentSelection(recent);
+    this.set('mario.recentSelection', JSON.stringify(normalized));
+    return normalized;
   }
 
   loadAiProviders(): { providers: LlmProviderConfig[]; activeId: string | null } {

@@ -21,6 +21,7 @@ import type {
   Notebook,
   NotePage,
   PageContent,
+  RecentSelectionState,
   Section,
   SettingsState,
   TreeSnapshot,
@@ -30,6 +31,14 @@ import {
   documentToMarkdown,
   emptyPageContent,
 } from './shared/document-codec';
+import {
+  emptyRecentSelection,
+  findValidPageLocation,
+  normalizeRecentSelection,
+  recordRecentSelection,
+  resolveInitialTreeSelection,
+  resolveSectionSelection,
+} from './shared/recent-selection';
 import { renderMarkdownStandalone } from './shared/markdown-render';
 import { LoginView } from './components/LoginView';
 import {
@@ -148,6 +157,35 @@ export function App() {
     null,
   );
   const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const [recentSelection, setRecentSelection] = useState<RecentSelectionState>(
+    () => {
+      try {
+        const cached = window.localStorage.getItem('mario.recentSelection');
+        if (cached) return normalizeRecentSelection(cached);
+      } catch {
+        // ignore
+      }
+      return emptyRecentSelection();
+    },
+  );
+  const recentSelectionRef = useRef<RecentSelectionState>(recentSelection);
+  recentSelectionRef.current = recentSelection;
+  const selectionRef = useRef<{
+    notebookId: string | null;
+    sectionId: string | null;
+    pageId: string | null;
+  }>({
+    notebookId: selectedNotebookId,
+    sectionId: selectedSectionId,
+    pageId: selectedPageId,
+  });
+  selectionRef.current = {
+    notebookId: selectedNotebookId,
+    sectionId: selectedSectionId,
+    pageId: selectedPageId,
+  };
+  const treeRef = useRef<TreeSnapshot>(tree);
+  treeRef.current = tree;
   const [sidebarSearch, setSidebarSearch] = useState('');
 
   // Open page content
@@ -222,61 +260,88 @@ export function App() {
     }
   }, [settings.themeMode]);
 
+  const persistRecentSelection = useCallback((next: RecentSelectionState) => {
+    recentSelectionRef.current = next;
+    setRecentSelection(next);
+    try {
+      window.localStorage.setItem(
+        'mario.recentSelection',
+        JSON.stringify(next),
+      );
+    } catch {
+      // ignore
+    }
+    void window.mario.settings.saveRecent?.(next);
+  }, []);
+
   const applyTreeSelection = useCallback(
-    (snap: TreeSnapshot, keepCurrent = true) => {
+    (
+      snap: TreeSnapshot,
+      keepCurrent = true,
+      overrideRecent?: RecentSelectionState | null,
+    ) => {
+      treeRef.current = snap;
       setTree(snap);
-      if (snap.notebooks.length === 0) return;
+      if (snap.notebooks.length === 0) {
+        selectionRef.current = {
+          notebookId: null,
+          sectionId: null,
+          pageId: null,
+        };
+        setSelectedNotebookId(null);
+        setSelectedSectionId(null);
+        setSelectedPageId(null);
+        return;
+      }
 
-      setSelectedNotebookId((prevNbId) => {
-        const validNb =
-          (keepCurrent &&
-            prevNbId &&
-            snap.notebooks.find((n) => n.id === prevNbId)) ||
-          snap.notebooks[0];
-        if (!validNb) return null;
-
-        const secs = snap.sectionsByNotebook[validNb.id] ?? [];
-        setSelectedSectionId((prevSecId) => {
-          const validSec =
-            (keepCurrent &&
-              prevSecId &&
-              secs.find((s) => s.id === prevSecId)) ||
-            secs[0];
-          if (!validSec) return null;
-
-          const pgs = snap.pagesBySection[`${validNb.id}/${validSec.id}`] ?? [];
-          setSelectedPageId((prevPageId) => {
-            const validPage =
-              (keepCurrent &&
-                prevPageId &&
-                pgs.find((p) => p.id === prevPageId)) ||
-              pgs[0];
-            return validPage ? validPage.id : null;
-          });
-          return validSec.id;
-        });
-
-        return validNb.id;
+      const activeRecent = overrideRecent ?? recentSelectionRef.current;
+      const resolved = resolveInitialTreeSelection(snap, {
+        current: selectionRef.current,
+        keepCurrent,
+        recent: activeRecent,
       });
+
+      selectionRef.current = resolved;
+      setSelectedNotebookId(resolved.notebookId);
+      setSelectedSectionId(resolved.sectionId);
+      setSelectedPageId(resolved.pageId);
+      if (resolved.pageId) {
+        setActivePlace('page');
+      } else if (resolved.sectionId) {
+        setActivePlace('section');
+      } else if (resolved.notebookId) {
+        setActivePlace('notebook');
+      }
     },
     [],
   );
 
   // Initial boot: load settings + restore auth + load snapshot
   useEffect(() => {
-    let unsubscribeTree: (() => void) | undefined;
     (async () => {
       try {
         const loadedSettings = await window.mario.settings.load();
         setSettings(loadedSettings);
+        const diskRecent = loadedSettings.recentSelection
+          ? normalizeRecentSelection(loadedSettings.recentSelection)
+          : null;
+        const hasDiskRecent = Boolean(
+          diskRecent &&
+            (diskRecent.pageId ||
+              diskRecent.notebookId ||
+              diskRecent.recentPages.length > 0),
+        );
+        const initialRecent = hasDiskRecent
+          ? diskRecent!
+          : recentSelectionRef.current;
+        recentSelectionRef.current = initialRecent;
+        setRecentSelection(initialRecent);
+
         const restored = await window.mario.auth.restore();
         setUser(restored);
         if (restored) {
           const snap = await window.mario.tree.getSnapshot();
-          applyTreeSelection(snap, false);
-          unsubscribeTree = window.mario.tree.onChanged((nextSnap) => {
-            setTree(nextSnap);
-          });
+          applyTreeSelection(snap, false, initialRecent);
         }
       } catch (err) {
         setAuthError(err instanceof Error ? err.message : String(err));
@@ -284,10 +349,69 @@ export function App() {
         setRestoringAuth(false);
       }
     })();
-    return () => {
-      unsubscribeTree?.();
-    };
   }, [applyTreeSelection]);
+
+  // Keep tree updated and reconcile selection if the active page arrived or was removed
+  useEffect(() => {
+    if (!user) return;
+    return window.mario.tree.onChanged((nextSnap) => {
+      const cur = selectionRef.current;
+      const curPageStillValid =
+        cur.pageId != null &&
+        findValidPageLocation(
+          nextSnap,
+          cur.pageId,
+          cur.notebookId,
+          cur.sectionId,
+        ) != null;
+      if (curPageStillValid) {
+        treeRef.current = nextSnap;
+        setTree(nextSnap);
+      } else {
+        applyTreeSelection(nextSnap, true);
+      }
+    });
+  }, [user, applyTreeSelection]);
+
+  // Persist the active notebook, section, and page whenever the user's selection changes
+  useEffect(() => {
+    if (restoringAuth || !user || !selectedNotebookId) return;
+    if (
+      selectedPageId &&
+      !findValidPageLocation(
+        treeRef.current,
+        selectedPageId,
+        selectedNotebookId,
+        selectedSectionId,
+      )
+    ) {
+      return;
+    }
+    const cur = recentSelectionRef.current;
+    if (
+      cur.notebookId === selectedNotebookId &&
+      cur.sectionId === selectedSectionId &&
+      cur.pageId === selectedPageId &&
+      (selectedPageId == null ||
+        cur.bySection?.[`${selectedNotebookId}/${selectedSectionId}`] ===
+          selectedPageId)
+    ) {
+      return;
+    }
+    const nextRecent = recordRecentSelection(cur, {
+      notebookId: selectedNotebookId,
+      sectionId: selectedSectionId,
+      pageId: selectedPageId,
+    });
+    persistRecentSelection(nextRecent);
+  }, [
+    restoringAuth,
+    user,
+    selectedNotebookId,
+    selectedSectionId,
+    selectedPageId,
+    persistRecentSelection,
+  ]);
 
   const selectedNotebook = useMemo(
     () => tree.notebooks.find((n) => n.id === selectedNotebookId) ?? null,
@@ -728,6 +852,7 @@ export function App() {
             selectedNotebookId={selectedNotebookId}
             selectedSectionId={selectedSectionId}
             selectedPageId={selectedPageId}
+            recentSelection={recentSelection}
             searchQuery={sidebarSearch}
             onSearchQueryChange={setSidebarSearch}
             syncPending={tree.syncStatus.pendingChanges}
@@ -736,12 +861,14 @@ export function App() {
             onSelectNotebook={(nbId) => {
               setSelectedNotebookId(nbId);
               const firstSec = tree.sectionsByNotebook[nbId]?.[0];
-              if (firstSec) setSelectedSectionId(firstSec.id);
+              setSelectedSectionId(firstSec ? firstSec.id : null);
+              setSelectedPageId(null);
               setActivePlace('notebook');
             }}
             onSelectSection={(nbId, secId) => {
               setSelectedNotebookId(nbId);
               setSelectedSectionId(secId);
+              setSelectedPageId(null);
               setActivePlace('section');
             }}
             onSelectPage={(nbId, secId, pgId) => {
@@ -804,7 +931,7 @@ export function App() {
                 onConfirm: async () => {
                   await window.mario.tree.deleteSection(sec.notebookId, sec.id);
                   const snap = await window.mario.tree.getSnapshot();
-                  applyTreeSelection(snap, false);
+                  applyTreeSelection(snap, true);
                 },
               })
             }
@@ -823,7 +950,7 @@ export function App() {
                     pg.id,
                   );
                   const snap = await window.mario.tree.getSnapshot();
-                  applyTreeSelection(snap, false);
+                  applyTreeSelection(snap, true);
                 },
               })
             }
@@ -937,9 +1064,16 @@ export function App() {
                   setActivePlace('page');
                 }}
                 onOpenSection={(nbId, secId) => {
+                  const resolved = resolveSectionSelection(
+                    tree,
+                    nbId,
+                    secId,
+                    recentSelection,
+                  );
                   setSelectedNotebookId(nbId);
                   setSelectedSectionId(secId);
-                  setActivePlace('section');
+                  setSelectedPageId(resolved.pageId);
+                  setActivePlace(resolved.pageId ? 'page' : 'section');
                 }}
                 onNewNotebook={() =>
                   setNbDialog({ mode: 'create', name: '', colorIndex: 0 })
@@ -1013,13 +1147,13 @@ export function App() {
                   onDeleteSection={async (nbId, secId) => {
                     await window.mario.tree.deleteSection(nbId, secId);
                     const snap = await window.mario.tree.getSnapshot();
-                    applyTreeSelection(snap, false);
+                    applyTreeSelection(snap, true);
                   }}
                   onCreatePage={handleCreatePage}
                   onDeletePage={async (nbId, secId, pgId) => {
                     await window.mario.tree.deletePage(nbId, secId, pgId);
                     const snap = await window.mario.tree.getSnapshot();
-                    applyTreeSelection(snap, false);
+                    applyTreeSelection(snap, true);
                   }}
                   onSetRawHtmlOverride={setRawHtmlOverride}
                   onOpenAiSettings={() => {

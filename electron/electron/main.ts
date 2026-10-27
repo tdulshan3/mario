@@ -12,9 +12,11 @@ import {
   Notebook,
   NotePage,
   PageContent,
+  RecentSelectionState,
   Section,
   SettingsState,
 } from '../src/shared/types';
+import { normalizeRecentSelection } from '../src/shared/recent-selection';
 import {
   AiArtifactStore,
   AssetCache,
@@ -253,8 +255,10 @@ function registerIpcHandlers(): void {
   ipcMain.handle('auth:restore', async () => {
     const user = await auth.restoreSession();
     if (user && !auth.isDemo()) {
-      void syncEngine.refreshFromServer();
-      void syncEngine.flushOutbox();
+      void (async () => {
+        await syncEngine.flushOutbox();
+        await syncEngine.refreshFromServer();
+      })();
     }
     return user;
   });
@@ -542,6 +546,11 @@ function registerIpcHandlers(): void {
     const saved = prefs.saveSettings(next);
     syncEngine.setOfflineMode(saved.offlineMode);
     return saved;
+  });
+  ipcMain.handle('settings:loadRecent', () => prefs.loadRecentSelection());
+  ipcMain.handle('settings:saveRecent', (_, recent: RecentSelectionState) => {
+    if (isDemo) return normalizeRecentSelection(recent);
+    return prefs.saveRecentSelection(recent);
   });
 
   // AI & Agent

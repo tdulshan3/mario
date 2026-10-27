@@ -182,6 +182,73 @@ export class SyncEngine {
     } catch {
       this.outboxOps = [];
     }
+
+    this.hydrateOverlaysFromOutbox();
+  }
+
+  private hydrateOverlaysFromOutbox(): void {
+    for (const op of this.outboxOps) {
+      const docId = String(op.args?.docId ?? '');
+      if (!docId) continue;
+      if (op.kind === 'deleteNotebook') {
+        this.pendingNotebooks.set(docId, { model: null });
+      } else if (op.kind === 'deleteSection') {
+        this.pendingSections.set(docId, { model: null });
+      } else if (op.kind === 'deletePage') {
+        this.pendingPages.set(docId, { model: null });
+      } else if (op.kind === 'set' || op.kind === 'update') {
+        const p = String(op.args?.path ?? '');
+        const data = (op.args?.data ?? {}) as Record<string, unknown>;
+        if (/^notebooks\/[^/]+$/.test(p)) {
+          this.pendingNotebooks.set(docId, {
+            model: {
+              id: docId,
+              name: String(data.name ?? 'Untitled'),
+              ownerId: String(data.ownerId ?? ''),
+              collaboratorUids: Array.isArray(data.collaboratorUids)
+                ? (data.collaboratorUids as string[])
+                : [],
+              colorIndex: Number(data.colorIndex ?? 2),
+              createdAt: String(data.createdAt ?? new Date().toISOString()),
+              updatedAt: String(data.updatedAt ?? new Date().toISOString()),
+            },
+          });
+        } else if (/^notebooks\/[^/]+\/sections\/[^/]+$/.test(p)) {
+          this.pendingSections.set(docId, {
+            model: {
+              id: docId,
+              notebookId: String(data.notebookId ?? p.split('/')[1] ?? ''),
+              name: String(data.name ?? 'Untitled'),
+              colorIndex: Number(data.colorIndex ?? 2),
+              order: Number(data.order ?? 0),
+            },
+          });
+        } else if (/^notebooks\/[^/]+\/pages\/[^/]+$/.test(p)) {
+          const nbId = String(data.notebookId ?? p.split('/')[1] ?? '');
+          const known = this.knownPage(nbId, docId);
+          this.pendingPages.set(docId, {
+            model: {
+              id: docId,
+              notebookId: nbId,
+              sectionId: String(data.sectionId ?? known?.sectionId ?? ''),
+              title: String(data.title ?? known?.title ?? 'Untitled page'),
+              driveFileId:
+                typeof data.driveFileId === 'string' && data.driveFileId
+                  ? data.driveFileId
+                  : (known?.driveFileId ?? null),
+              order: Number(data.order ?? known?.order ?? 0),
+              indentLevel: Number(data.indentLevel ?? known?.indentLevel ?? 0),
+              createdAt: String(
+                data.createdAt ?? known?.createdAt ?? new Date().toISOString(),
+              ),
+              updatedAt: String(
+                data.updatedAt ?? known?.updatedAt ?? new Date().toISOString(),
+              ),
+            },
+          });
+        }
+      }
+    }
   }
 
   private saveIndex(): void {

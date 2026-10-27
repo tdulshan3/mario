@@ -10,6 +10,7 @@ import {
   Notebook,
   NotePage,
   PageContent,
+  RecentSelectionState,
   Section,
   SettingsState,
   TreeSnapshot,
@@ -93,6 +94,8 @@ export interface MarioElectronApi {
   settings: {
     load: () => Promise<SettingsState>;
     save: (next: SettingsState) => Promise<SettingsState>;
+    loadRecent: () => Promise<RecentSelectionState>;
+    saveRecent: (recent: RecentSelectionState) => Promise<RecentSelectionState>;
   };
   ai: {
     getProviders: () => Promise<{
@@ -255,6 +258,8 @@ const api: MarioElectronApi = {
   settings: {
     load: () => ipcRenderer.invoke('settings:load'),
     save: (next) => ipcRenderer.invoke('settings:save', next),
+    loadRecent: () => ipcRenderer.invoke('settings:loadRecent'),
+    saveRecent: (recent) => ipcRenderer.invoke('settings:saveRecent', recent),
   },
   ai: {
     getProviders: () => ipcRenderer.invoke('ai:getProviders'),

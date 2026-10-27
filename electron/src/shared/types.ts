@@ -161,6 +161,22 @@ export type BlockAlign = 'left' | 'center' | 'right' | 'justify';
 export type AiTab = 'ask' | 'quiz' | 'write' | 'do';
 export type WebSearchMode = 'auto' | 'on' | 'off';
 
+export interface RecentPageEntry {
+  notebookId: string;
+  sectionId: string;
+  pageId: string;
+  openedAt: string;
+}
+
+export interface RecentSelectionState {
+  notebookId: string | null;
+  sectionId: string | null;
+  pageId: string | null;
+  byNotebook: Record<string, { sectionId: string | null; pageId: string | null }>;
+  bySection: Record<string, string>;
+  recentPages: RecentPageEntry[];
+}
+
 export interface SettingsState {
   themeMode: MarioThemeMode;
   fontScale: number;
@@ -171,6 +187,7 @@ export interface SettingsState {
   voiceLocale: string;
   offlineMode: boolean;
   askOnHighlight: boolean;
+  recentSelection?: RecentSelectionState;
 }
 
 export type LlmProviderKind =
