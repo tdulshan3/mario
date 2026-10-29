@@ -23,25 +23,36 @@ try {
     }
 } finally { $source.Dispose() }
 
-$output = [System.IO.File]::Create((Join-Path $projectRoot 'windows/runner/resources/app_icon.ico'))
-$writer = New-Object System.IO.BinaryWriter($output)
-try {
-    $writer.Write([uint16]0)
-    $writer.Write([uint16]1)
-    $writer.Write([uint16]$sizes.Count)
-    $offset = 6 + 16 * $sizes.Count
-    for ($i = 0; $i -lt $sizes.Count; $i++) {
-        $dimension = $sizes[$i] % 256
-        $writer.Write([byte]$dimension)
-        $writer.Write([byte]$dimension)
-        $writer.Write([byte]0)
-        $writer.Write([byte]0)
-        $writer.Write([uint16]1)
-        $writer.Write([uint16]32)
-        $writer.Write([uint32]$images[$i].Length)
-        $writer.Write([uint32]$offset)
-        $offset += $images[$i].Length
+$targets = @(
+    (Join-Path $projectRoot 'assets/logo/mario.ico'),
+    (Join-Path $projectRoot 'electron/public/assets/logo/mario.ico')
+)
+
+foreach ($targetPath in $targets) {
+    $parentDir = Split-Path $targetPath -Parent
+    if (!(Test-Path $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
     }
-    foreach ($bytes in $images) { $writer.Write([byte[]]$bytes) }
-} finally { $writer.Dispose() }
+    $output = [System.IO.File]::Create($targetPath)
+    $writer = New-Object System.IO.BinaryWriter($output)
+    try {
+        $writer.Write([uint16]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]$sizes.Count)
+        $offset = 6 + 16 * $sizes.Count
+        for ($i = 0; $i -lt $sizes.Count; $i++) {
+            $dimension = $sizes[$i] % 256
+            $writer.Write([byte]$dimension)
+            $writer.Write([byte]$dimension)
+            $writer.Write([byte]0)
+            $writer.Write([byte]0)
+            $writer.Write([uint16]1)
+            $writer.Write([uint16]32)
+            $writer.Write([uint32]$images[$i].Length)
+            $writer.Write([uint32]$offset)
+            $offset += $images[$i].Length
+        }
+        foreach ($bytes in $images) { $writer.Write([byte[]]$bytes) }
+    } finally { $writer.Dispose() }
+}
 Write-Output 'Generated Mario Windows icon (16 through 256 pixels).'

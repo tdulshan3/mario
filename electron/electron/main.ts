@@ -19,6 +19,7 @@ import {
 import { normalizeRecentSelection } from '../src/shared/recent-selection';
 import {
   AiArtifactStore,
+  APP_ID,
   AssetCache,
   atomicWriteFile,
   KeyringStore,
@@ -38,6 +39,9 @@ const isDemo =
 
 app.setName('mario');
 app.setDesktopName?.('mario.desktop');
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID);
+}
 
 // Services
 const prefs = new SharedPreferencesStore();
@@ -167,7 +171,41 @@ const syncEngine = new SyncEngine({
 const initialSettings = prefs.loadSettings();
 syncEngine.setOfflineMode(initialSettings.offlineMode);
 
+function loadNativeIcon(candidates: string[]): Electron.NativeImage | undefined {
+  for (const p of candidates) {
+    try {
+      if (!p || !fs.existsSync(p)) continue;
+      const buf = fs.readFileSync(p);
+      const img = nativeImage.createFromBuffer(buf);
+      if (!img.isEmpty()) return img;
+      const fromPath = nativeImage.createFromPath(p);
+      if (!fromPath.isEmpty()) return fromPath;
+    } catch {
+      // try next candidate
+    }
+  }
+  return undefined;
+}
+
 function createMainWindow(): void {
+  const pngCandidates = [
+    path.join(__dirname, '..', 'public', 'assets', 'logo', 'mario_mark.png'),
+    path.join(__dirname, '..', 'dist', 'assets', 'logo', 'mario_mark.png'),
+    path.join(__dirname, '..', '..', 'assets', 'logo', 'mario_mark.png'),
+  ];
+  const icoCandidates = [
+    path.join(path.dirname(process.execPath), 'mario.ico'),
+    process.resourcesPath ? path.join(process.resourcesPath, 'mario.ico') : '',
+    path.join(__dirname, '..', 'public', 'assets', 'logo', 'mario.ico'),
+    path.join(__dirname, '..', 'dist', 'assets', 'logo', 'mario.ico'),
+    path.join(__dirname, '..', '..', 'assets', 'logo', 'mario.ico'),
+  ].filter(Boolean);
+  const windowIcon = loadNativeIcon(
+    process.platform === 'win32'
+      ? [...icoCandidates, ...pngCandidates]
+      : [...pngCandidates, ...icoCandidates],
+  );
+  const trayIcon = loadNativeIcon([...pngCandidates, ...icoCandidates]);
   const iconCandidates = [
     path.join(__dirname, '..', 'public', 'assets', 'logo', 'mario_mark.png'),
     path.join(__dirname, '..', 'dist', 'assets', 'logo', 'mario_mark.png'),
@@ -181,7 +219,7 @@ function createMainWindow(): void {
     minWidth: 800,
     minHeight: 600,
     title: 'Mario',
-    icon: iconPath,
+    icon: windowIcon ?? iconPath,
     autoHideMenuBar: true,
     backgroundColor: '#1e1e1e',
     webPreferences: {
@@ -192,6 +230,14 @@ function createMainWindow(): void {
       spellcheck: initialSettings.spellCheck,
     },
   });
+
+  if (windowIcon && (process.platform === 'win32' || process.platform === 'linux')) {
+    try {
+      mainWindow.setIcon(windowIcon);
+    } catch {
+      // ignore if unsupported by platform window manager
+    }
+  }
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith('http://') || url.startsWith('https://')) {
@@ -218,9 +264,9 @@ function createMainWindow(): void {
     void mainWindow.loadFile(indexHtml);
   }
 
-  if (iconPath && !tray) {
+  if ((trayIcon || iconPath) && !tray) {
     try {
-      const img = nativeImage.createFromPath(iconPath).resize({ width: 18, height: 18 });
+      const img = (trayIcon ?? nativeImage.createFromPath(iconPath!)).resize({ width: 18, height: 18 });
       tray = new Tray(img);
       tray.setToolTip('Mario — your notes, your world');
       const contextMenu = Menu.buildFromTemplate([
